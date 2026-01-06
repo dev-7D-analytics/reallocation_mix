@@ -8,6 +8,25 @@ import numpy as np
 from pathlib import Path
 import re
 from datetime import datetime
+import yaml
+
+def load_config(config_path: str = "config.yaml") -> dict:
+    """
+    Loads configuration from YAML file.
+    
+    Args:
+        config_path: Path to config.yaml file
+        
+    Returns:
+        Dictionary with configuration settings
+    """
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        return config
+    except FileNotFoundError:
+        print(f"[ERRO] Arquivo de configuração não encontrado: {config_path}")
+        return {}
 
 def extrair_embalagem_descricao(descricao: str) -> str:
     """

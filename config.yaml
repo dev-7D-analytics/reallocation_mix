@@ -8,17 +8,17 @@
 paths:
   # Arquivos de entrada (todos na pasta inputs/)
   # estoque: "inputs/manti_estoque.parquet"  # DEPRECADO: usar producao por classe
-  producao: "inputs/producao_classe.csv"  # Producao por classe de produtos
-  classes: "inputs/base_skus_classes.xlsx"  # Classificacao de SKUs por classe
-  pedidos: "inputs/pedidos_clientes.csv"  # Pedidos de clientes (pode ser parcial)
+  producao: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/producao_classe.csv"  # Producao por classe de produtos
+  classes: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/base_skus_classes.xlsx"  # Classificacao de SKUs por classe
+  pedidos: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/pedidos_clientes.csv"  # Pedidos de clientes (pode ser parcial)
   # compatibilidade: "inputs/compatibilidade_sku_embalagem.csv"  # DEPRECADO: item ja vem com embalagem
-  precos: "inputs/precos_sku_embalagem.csv"
-  custos: "inputs/CUSTO ITEM.csv"
-  faturamento: "inputs/manti_fat_2024.parquet"  # Faturamento historico para calcular demanda
+  precos: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/precos_sku_embalagem.csv"
+  custos: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/CUSTO ITEM.csv"
+  faturamento: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/manti_fat_2024.parquet"  # Faturamento historico para calcular demanda
   # custo_embalagem: "inputs/custo_embalagem.csv"  # Opcional
   
   # Arquivos de saída
-  output_dir: "resultados"
+  output_dir: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/resultados"
   logs_dir: "logs"
 
 # ==============================================================================
@@ -95,7 +95,7 @@ modelo:
   atender_pedidos: false  # true = atende pedidos com prioridade, false = ignora pedidos completamente
   
   # Restrições de demanda histórica
-  considerar_demanda_historica: true  # true = limita alocacao baseada em demanda historica
+  considerar_demanda_historica: false  # true = limita alocacao baseada em demanda historica
   granularidade_demanda: M  # Granularidade da agregacao: M=Mensal, S=Semanal, D=Diaria
   tipo_calculo_demanda: percentil  # Tipo de calculo: "percentil" ou "maximo"
   percentil_demanda: 95  # Percentil da demanda historica (50=mediana, 75=percentil 75, 90=percentil 90) - usado apenas se tipo_calculo_demanda=percentil
