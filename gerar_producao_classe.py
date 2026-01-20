@@ -34,28 +34,28 @@ def main():
     config = carregar_config()
     
     # Caminhos
-    path_estoque = Path(config['paths']['estoque'])
+    path_producao_bruta = Path(config['paths']['producao_bruta'])
     path_classes = Path(config['paths']['classes'])
     output_dir = Path('inputs')
     output_dir.mkdir(exist_ok=True)
     
     # 1. Carregar estoque
     print("\n[1/3] Carregando estoque...")
-    df_estoque = pd.read_parquet(path_estoque)
+    df_prod = pd.read_parquet(path_producao_bruta)
     
     # Detectar colunas
-    col_item = 'ITEM' if 'ITEM' in df_estoque.columns else 'CODIGO ITEM'
+    col_item = 'ITEM' if 'ITEM' in df_prod.columns else 'CODIGO ITEM'
     col_data = 'DATA DA CONTAGEM'
     col_qtd = 'QUANTIDADE'
     
     # Converter data
-    df_estoque[col_data] = pd.to_datetime(df_estoque[col_data], errors='coerce')
+    df_prod[col_data] = pd.to_datetime(df_prod[col_data], errors='coerce')
     
     # Filtrar por data (assumir que tudo esta disponivel para venda)
     data_producao = pd.to_datetime(config['dados']['data_estoque'])  # Usar data_estoque como data_producao
     
-    df_filtrado = df_estoque[
-        (df_estoque[col_data] == data_producao)
+    df_filtrado = df_prod[
+        (df_prod[col_data] == data_producao)
     ].copy()
     
     # Agregar por item

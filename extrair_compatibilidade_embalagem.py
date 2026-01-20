@@ -8,7 +8,10 @@ import numpy as np
 from pathlib import Path
 import re
 from datetime import datetime
-import yaml
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 def load_config(config_path: str = "config.yaml") -> dict:
     """
@@ -20,6 +23,9 @@ def load_config(config_path: str = "config.yaml") -> dict:
     Returns:
         Dictionary with configuration settings
     """
+    if yaml is None:
+        print("[ERRO] Dependencia 'pyyaml' nao instalada. Retornando configuracao vazia.")
+        return {}
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
@@ -284,4 +290,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

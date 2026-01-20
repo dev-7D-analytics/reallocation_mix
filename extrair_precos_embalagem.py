@@ -5,25 +5,60 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
+import argparse
+import yaml
+
+from typing import Dict
 
 # Importar função de extração de embalagem
 sys.path.append(str(Path(__file__).parent))
 from extrair_compatibilidade_embalagem import extrair_embalagem_descricao
 
-def main():
+def carregar_config(config_path: str = 'config.yaml') -> Dict:
+    """Carrega configuracoes do YAML."""
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Extrai preços médios por (SKU, Embalagem) do faturamento."
+    )
+    parser.add_argument(
+        "--estab",
+        nargs="+",
+        help="Filtra registros pela coluna 'Estab'. Aceita múltiplos valores.",
+    )
+    return parser.parse_args(argv)
+
+def main(argv=None):
+    args = parse_args(argv)
+    config = carregar_config()
     print("="*80)
     print("EXTRAÇÃO DE PREÇOS POR (SKU, EMBALAGEM)")
     print("="*80)
     
     # Carregar faturamento
     print("\n[1/3] Carregando faturamento...")
-    path_fat = Path("../manti_fat_2024.parquet")
+    path_fat = Path(config['paths'].get('faturamento', '../manti_fat_2024.parquet'))
     if not path_fat.exists():
         print(f"[ERRO] Arquivo não encontrado: {path_fat}")
         return
     
     df_fat = pd.read_parquet(path_fat)
     print(f"  Registros: {len(df_fat):,}")
+
+    # Filtro opcional por estabelecimento
+    if args.estab:
+        if 'Estab' not in df_fat.columns:
+            print("[ERRO] Coluna 'Estab' não encontrada no faturamento.")
+            print(f"  Colunas disponíveis: {list(df_fat.columns)}")
+            return
+        df_fat = df_fat[df_fat['Estab'].astype(str).isin(args.estab)].copy()
+        print(f"  Filtro aplicado na coluna 'Estab': {args.estab}")
+        print(f"  Registros após filtro: {len(df_fat):,}")
+        if len(df_fat) == 0:
+            print("  [ALERTA] Nenhum registro encontrado após o filtro. Encerrando.")
+            return
     
     # Detectar coluna de descrição (tentar múltiplas opções)
     col_desc = None
@@ -111,6 +146,7 @@ def main():
     print(f"  Combinações únicas: {len(df_precos):,}")
     print(f"  SKUs únicos: {df_precos['item'].nunique():,}")
     print(f"  Embalagens únicas: {df_precos['embalagem'].nunique():,}")
+    print(f"  Granjas únicas: {df_validos['Estab'].nunique():,}")
     
     # Estatísticas
     print("\n" + "="*80)
@@ -123,4 +159,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

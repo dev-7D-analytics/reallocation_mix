@@ -195,9 +195,9 @@ class ModeloOtimizacaoComRealocacao:
             self.logger.warning("  Arquivo de precos nao encontrado!")
             self.dados['precos'] = pd.DataFrame(columns=['item_id', 'preco'])
             return
-        
-        df_precos = pd.read_csv(path)
-        
+
+        df_precos = pd.read_csv(path, sep=";", decimal=",")
+
         # Detectar coluna de preco
         if 'preco' not in df_precos.columns:
             if 'preco_ponderado' in df_precos.columns:
@@ -384,6 +384,19 @@ class ModeloOtimizacaoComRealocacao:
             
             if col_item is None or col_qtd is None or col_data is None:
                 raise ValueError("Colunas necessarias nao encontradas no faturamento")
+            
+            # Filtrar granjas se configurado
+            if self.config.get('negocio', {}).get('filtrar_granjas', []):
+                granjas_filtrar = self.config['negocio']['filtrar_granjas']
+                if 'Estab' in df_fat.columns:
+                    df_fat = df_fat[~df_fat['Estab'].astype(str).isin(granjas_filtrar)].copy()
+                    self.logger.info(f"  Filtrando granjas: {granjas_filtrar}")
+                    self.logger.info(f"  Registros apos filtro de granjas: {len(df_fat):,}")
+                else:
+                    self.logger.warning("  Coluna 'Estab' nao encontrada para filtro de granjas.")
+            
+            # Corrigir unidades da quantidade de items (de caixas de 360 ovos para unidades)            
+            df_fat[col_qtd] = df_fat[col_qtd] * 360
             
             # Converter data
             df_fat[col_data] = pd.to_datetime(df_fat[col_data], errors='coerce')
@@ -1066,6 +1079,9 @@ class ModeloOtimizacaoComRealocacao:
     def _extrair_resultado(self):
         """Extrai resultado da otimizacao."""
         df_base = self.dados['base_otimizacao']
+        df_demanda = self.dados.get('demanda_historica', pd.DataFrame(columns=['item', 'demanda_max']))
+        demanda_por_item = df_demanda.set_index('item')['demanda_max'].to_dict() if len(df_demanda) > 0 else {}
+        considerar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
         
         # Determinar tipo baseado no modo de operacao
         atender_pedidos = self.dados.get('atender_pedidos', True)
@@ -1089,6 +1105,14 @@ class ModeloOtimizacaoComRealocacao:
                 row_base = df_base[df_base['item_id'] == item_id]
                 if len(row_base) > 0:
                     row = row_base.iloc[0]
+                    demanda_max = demanda_por_item.get(row['item'])
+                    limite_classe = row['producao_disponivel_otimizacao_classe']
+                    restricao_quantidade = limite_classe
+                    restricao_tipo = 'PRODUCAO_CLASSE'
+                    if considerar_demanda and pd.notna(demanda_max):
+                        restricao_quantidade = min(limite_classe, float(demanda_max))
+                        if restricao_quantidade < limite_classe:
+                            restricao_tipo = 'DEMANDA_HISTORICA'
                     resultados.append({
                         'item_id': item_id,
                         'item': row['item'],
@@ -1096,6 +1120,8 @@ class ModeloOtimizacaoComRealocacao:
                         'classe': row['classe'],
                         'quantidade': qtd,
                         'tipo': tipo_alocacao,
+                        'tipo_restricao': restricao_tipo,
+                        'quantidade_restricao': restricao_quantidade,
                         'producao_total': row['producao_total'],  # Producao da classe
                         'producao_disponivel': row['producao_disponivel_otimizacao_classe'],  # Producao disponivel para otimizacao
                         'preco': row['preco'],
@@ -1118,12 +1144,18 @@ class ModeloOtimizacaoComRealocacao:
                         row_base = df_base[df_base['item'] == item]
                         if len(row_base) > 0:
                             row = row_base.iloc[0]
+                            producao_disponivel_classe = float(row['producao_disponivel_otimizacao_classe'])
+                            limite_pedido = row_pedido['quantidade_total_pedida']
+                            quantidade_restricao = min(limite_pedido, producao_disponivel_classe)
+                            tipo_restricao = 'PEDIDO' if limite_pedido <= producao_disponivel_classe else 'PRODUCAO_CLASSE'
                             resultados.append({
                                 'item': item,
                                 'embalagem': 'PEDIDO',  # Pedidos nao especificam embalagem
                                 'classe': row['classe'],
                                 'quantidade': qtd_atendida,
                                 'tipo': 'PEDIDO',
+                                'tipo_restricao': tipo_restricao,
+                                'quantidade_restricao': quantidade_restricao,
                                 'producao_total': row['producao_total'],  # Producao da classe
                                 'quantidade_pedida': row_pedido['quantidade_total_pedida'],
                                 'percentual_atendido': (qtd_atendida / row_pedido['quantidade_total_pedida'] * 100) if row_pedido['quantidade_total_pedida'] > 0 else 0,
@@ -1141,6 +1173,7 @@ class ModeloOtimizacaoComRealocacao:
         # (necessario para evitar erro no groupby('classe') em salvar_resultados)
         if len(self.resultado) == 0:
             self.resultado = pd.DataFrame(columns=['item_id', 'item', 'embalagem', 'classe', 'quantidade', 'tipo', 
+                                                   'tipo_restricao', 'quantidade_restricao',
                                                    'producao_total', 'producao_disponivel', 'preco', 
                                                    'custo_ytd', 'margem_unitaria', 'receita_total', 
                                                    'custo_total', 'margem_total'])
@@ -1455,4 +1488,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

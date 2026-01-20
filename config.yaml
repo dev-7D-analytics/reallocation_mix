@@ -8,7 +8,8 @@
 paths:
   # Arquivos de entrada (todos na pasta inputs/)
   # estoque: "inputs/manti_estoque.parquet"  # DEPRECADO: usar producao por classe
-  producao: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/producao_classe.csv"  # Producao por classe de produtos
+  producao_bruta: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/manti_producao_2025_51.parquet"  # Producao semanal bruta por SKU e embalagem
+  producao: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/manti_producao_2025_51.csv"  # Producao por classe de produtos
   classes: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/base_skus_classes.xlsx"  # Classificacao de SKUs por classe
   pedidos: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/pedidos_clientes.csv"  # Pedidos de clientes (pode ser parcial)
   # compatibilidade: "inputs/compatibilidade_sku_embalagem.csv"  # DEPRECADO: item ja vem com embalagem
@@ -68,6 +69,7 @@ negocio:
   # Margem mínima
   margem_minima_percentual: 0.0 # 0% = aceita qualquer margem positiva
   filtrar_skus_margem_negativa: true  # Remover SKUs com margem negativa
+  filtrar_granjas: ["100"] # Lista de granjas a filtrar (ex: ["100", "200"]), ou vazia para não filtrar
 
 # ==============================================================================
 # PARÂMETROS DO MODELO
@@ -95,8 +97,8 @@ modelo:
   atender_pedidos: false  # true = atende pedidos com prioridade, false = ignora pedidos completamente
   
   # Restrições de demanda histórica
-  considerar_demanda_historica: false  # true = limita alocacao baseada em demanda historica
-  granularidade_demanda: M  # Granularidade da agregacao: M=Mensal, S=Semanal, D=Diaria
+  considerar_demanda_historica: true  # true = limita alocacao baseada em demanda historica
+  granularidade_demanda: S  # Granularidade da agregacao: M=Mensal, S=Semanal, D=Diaria
   tipo_calculo_demanda: percentil  # Tipo de calculo: "percentil" ou "maximo"
   percentil_demanda: 95  # Percentil da demanda historica (50=mediana, 75=percentil 75, 90=percentil 90) - usado apenas se tipo_calculo_demanda=percentil
   fator_expansao_demanda: 5  # Multiplicador sobre o percentil (1.0=sem expansao, 1.5=50% acima, 2.0=dobro, 5.0=5x) - usado apenas se tipo_calculo_demanda=percentil
