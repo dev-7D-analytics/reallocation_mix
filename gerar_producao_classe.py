@@ -19,10 +19,25 @@ from pathlib import Path
 from datetime import datetime
 import yaml
 
+from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
+
 def carregar_config(config_path='config.yaml'):
     """Carrega configuracoes do YAML."""
     with open(config_path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
+
+def extract_week(df, date_column):
+    """Extract week number from a date column."""
+    return pd.to_datetime(df[date_column]).dt.isocalendar().week
+
+def extract_year(df, date_column):
+    """Extract year number from a date column."""
+    return pd.to_datetime(df[date_column]).dt.isocalendar().year
+
+def get_week_start_date(year_week):
+    """Get the Monday date of the given ISO year-week."""
+    year, week = year_week.split('-')
+    return pd.to_datetime(f"{year}-W{week}-1", format="%G-W%V-%u")
 
 def main():
     """Funcao principal."""
@@ -36,37 +51,44 @@ def main():
     # Caminhos
     path_producao_bruta = Path(config['paths']['producao_bruta'])
     path_classes = Path(config['paths']['classes'])
-    output_dir = Path('inputs')
-    output_dir.mkdir(exist_ok=True)
+    path_output = Path(config['paths']['producao']) 
     
-    # 1. Carregar estoque
-    print("\n[1/3] Carregando estoque...")
-    df_prod = pd.read_parquet(path_producao_bruta)
+    # 1. Carregar produção
+    print("\n[1/3] Carregando produção...")
+    df_prod = pd.read_excel(path_producao_bruta, sheet_name="CE0302", skiprows=1)
     
     # Detectar colunas
-    col_item = 'ITEM' if 'ITEM' in df_prod.columns else 'CODIGO ITEM'
-    col_data = 'DATA DA CONTAGEM'
-    col_qtd = 'QUANTIDADE'
+    col_item = 'Cod Item' if 'Cod Item' in df_prod.columns else 'CODIGO ITEM'
+    col_data = 'Data Trans'
+    col_qtd = 'QUANTIDADE CORRIGIDA'
     
     # Converter data
-    df_prod[col_data] = pd.to_datetime(df_prod[col_data], errors='coerce')
+    # df_prod[col_data] = pd.to_datetime(df_prod[col_data], errors='coerce')
+    df_prod['week'] = extract_week(df_prod, col_data)
+    df_prod['year'] = extract_year(df_prod, col_data)
+    df_prod['year_week'] = df_prod['year'].astype(str) + '-' + df_prod['week'].astype(str).str.zfill(2)
     
     # Filtrar por data (assumir que tudo esta disponivel para venda)
-    data_producao = pd.to_datetime(config['dados']['data_estoque'])  # Usar data_estoque como data_producao
-    
+    semana_ref = config['dados']['semana_ref']  # Usar semana escolhida pelo usuário para filtrar produção
+        
+    df_prod['embalagem'] = df_prod["Desc Item"].apply(extrair_embalagem_descricao)
+    df_prod['qtd_embalagem'] = df_prod['embalagem'].apply(calcular_qtd_embalagem)
+    df_prod['quantidade'] = df_prod[col_qtd] * df_prod['qtd_embalagem']
+    df_prod['monday_date'] = df_prod['year_week'].apply(get_week_start_date)
+
     df_filtrado = df_prod[
-        (df_prod[col_data] == data_producao)
-    ].copy()
-    
+        (df_prod['year_week'] == semana_ref)
+    ].copy().reset_index(drop=True)
+
     # Agregar por item
     df_estoque_agg = df_filtrado.groupby(col_item).agg({
-        col_qtd: 'sum'
+        'quantidade': 'sum'
     }).reset_index()
     df_estoque_agg.columns = ['item', 'quantidade']
     df_estoque_agg = df_estoque_agg[df_estoque_agg['quantidade'] > 0]
     
-    print(f"  SKUs com estoque: {len(df_estoque_agg)}")
-    print(f"  Estoque total: {df_estoque_agg['quantidade'].sum():,.0f} unidades")
+    print(f"  SKUs com produção: {len(df_estoque_agg)}")
+    print(f"  Produção total: {df_estoque_agg['quantidade'].sum():,.0f} unidades")
     
     # 2. Carregar classes
     print("\n[2/3] Carregando classificacao de SKUs...")
@@ -109,16 +131,15 @@ def main():
         print(f"    {row['Classe_Produto']}: {row['quantidade']:,.0f} unidades")
     
     # 4. Adicionar data de producao
-    df_producao['data_producao'] = data_producao.strftime('%Y-%m-%d')
+    df_producao['data_producao'] = df_filtrado['monday_date'].iloc[0]
     
     # Reordenar colunas
     df_producao = df_producao[['Classe_Produto', 'quantidade', 'data_producao']]
     
     # 5. Salvar
-    arquivo_saida = output_dir / 'producao_classe.csv'
-    df_producao.to_csv(arquivo_saida, index=False, encoding='utf-8')
+    df_producao.to_csv(path_output, index=False, encoding='utf-8')
     
-    print(f"\n[OK] Dataset de producao salvo em: {arquivo_saida}")
+    print(f"\n[OK] Dataset de producao salvo em: {path_output}")
     print(f"  Total de linhas: {len(df_producao)}")
     print(f"  Colunas: {', '.join(df_producao.columns)}")
     

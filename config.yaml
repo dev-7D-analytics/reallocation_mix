@@ -8,7 +8,7 @@
 paths:
   # Arquivos de entrada (todos na pasta inputs/)
   # estoque: "inputs/manti_estoque.parquet"  # DEPRECADO: usar producao por classe
-  producao_bruta: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/manti_producao_2025_51.parquet"  # Producao semanal bruta por SKU e embalagem
+  producao_bruta: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/PRODUÇÃO DIA.xlsx"  # Producao semanal bruta por SKU e embalagem
   producao: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/manti_producao_2025_51.csv"  # Producao por classe de produtos
   classes: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/base_skus_classes.xlsx"  # Classificacao de SKUs por classe
   pedidos: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/pedidos_clientes.csv"  # Pedidos de clientes (pode ser parcial)
@@ -48,8 +48,8 @@ solver:
 # PARÂMETROS DE PREPARAÇÃO DE DADOS
 # ==============================================================================
 dados:
-  # Data do estoque a considerar
-  data_estoque: "2025-08-19"  # Data com maior estoque (71.873 unidades)
+  # Semana referência para produção
+  semana_ref: "2025-51" 
   
   # Tipo de estoque
   tipo_estoque: "DISPONIVEL PARA VENDA"  

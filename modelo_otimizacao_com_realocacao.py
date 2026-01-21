@@ -195,7 +195,8 @@ class ModeloOtimizacaoComRealocacao:
             self.logger.warning("  Arquivo de precos nao encontrado!")
             self.dados['precos'] = pd.DataFrame(columns=['item_id', 'preco'])
             return
-
+        
+        # Mudar de acordo com o separador do input
         df_precos = pd.read_csv(path, sep=";", decimal=",")
 
         # Detectar coluna de preco
@@ -529,6 +530,7 @@ class ModeloOtimizacaoComRealocacao:
         
         #  Criar base a partir de custos (cada linha ja e um item_id unico)
         # O item_id ja inclui codigo_item + embalagem
+        # TODO: Avaliar se é melhor comecar a construção pela base de produção
         df_base = df_custos[['item_id', 'item', 'embalagem', 'custo_ytd']].copy()
         
         # Adicionar classe para cada item_id (usando o codigo do item)

@@ -1,8 +1,9 @@
 import argparse
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from extrair_compatibilidade_embalagem import (
@@ -15,6 +16,9 @@ INPUT_PATH = Path("/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/man
 SHEET_NAME = "CE0302"
 RESULTS_DIR = Path("resultados")
 DEFAULT_YEAR_WEEK = "2025-51"
+CONFIG_PATH = Path("config.yaml")
+DEFAULT_PRECOS_PATH = INPUT_PATH / "precos_sku_embalagem.csv"
+DEFAULT_CUSTOS_PATH = INPUT_PATH / "CUSTO ITEM.csv"
 
 
 def extract_week(df: pd.DataFrame, date_column: str) -> pd.Series:
@@ -39,6 +43,103 @@ def _resolver_coluna_classe(df_classes: pd.DataFrame) -> Optional[str]:
         if "classe" in col.lower() and "produto" in col.lower():
             return col
     return None
+
+
+def _carregar_config(config_path: Path = CONFIG_PATH) -> Dict:
+    """Load YAML config if available; fallback to empty dict when pyyaml is absent."""
+    try:
+        import yaml
+    except ImportError:
+        return {}
+    if not config_path.exists():
+        return {}
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _resolver_caminho(config: Dict, chave: str, default: Path) -> Path:
+    """Read path from config or fallback to default."""
+    return Path(config.get("paths", {}).get(chave, default))
+
+
+def _carregar_precos(config: Dict) -> pd.DataFrame:
+    """Carga de precos conforme modelo canônico."""
+    path = _resolver_caminho(config, "precos", DEFAULT_PRECOS_PATH)
+    if not path.exists():
+        return pd.DataFrame(columns=["item_id", "preco"])
+
+    df_precos = pd.read_csv(path, sep=";", decimal=",")
+
+    if "preco" not in df_precos.columns:
+        if "preco_ponderado" in df_precos.columns:
+            df_precos["preco"] = df_precos["preco_ponderado"]
+        elif "preco_medio" in df_precos.columns:
+            df_precos["preco"] = df_precos["preco_medio"]
+
+    if "item" in df_precos.columns and "embalagem" in df_precos.columns:
+        df_precos["item"] = pd.to_numeric(df_precos["item"], errors="coerce")
+        df_precos = df_precos[df_precos["item"].notna()].copy()
+        df_precos["item"] = df_precos["item"].astype(int)
+        df_precos["item_id"] = df_precos["item"].astype(str) + "_" + df_precos["embalagem"]
+    elif "item_id" not in df_precos.columns:
+        raise ValueError("Arquivo de precos deve conter 'item_id' ou ('item' e 'embalagem')")
+
+    df_precos = df_precos[["item_id", "preco"]].copy()
+    df_precos = df_precos[df_precos["preco"] > 0]
+    return df_precos.drop_duplicates(["item_id"])
+
+
+def _carregar_custos(config: Dict) -> pd.DataFrame:
+    """Carga de custos conforme modelo canônico."""
+    path = _resolver_caminho(config, "custos", DEFAULT_CUSTOS_PATH)
+    if not path.exists():
+        return pd.DataFrame(columns=["item_id", "item", "embalagem", "custo_ytd"])
+
+    df_custo = pd.read_csv(path)
+
+    col_item_desc = None
+    for col in df_custo.columns:
+        if "item" in col.lower() and "descri" in col.lower():
+            col_item_desc = col
+            break
+    if col_item_desc is None:
+        col_item_desc = df_custo.columns[0]
+
+    df_custo["item"] = pd.to_numeric(
+        df_custo[col_item_desc].astype(str).str.extract(r"^(\d+)")[0],
+        errors="coerce",
+    )
+    df_custo["embalagem"] = df_custo[col_item_desc].apply(extrair_embalagem_descricao)
+
+    def parse_currency(valor):
+        if pd.isna(valor):
+            return np.nan
+        limpo = str(valor).replace("R$", "").replace(".", "").replace(",", ".").strip()
+        try:
+            return float(limpo) if limpo else np.nan
+        except Exception:
+            return np.nan
+
+    col_custo = None
+    for col in df_custo.columns:
+        if "custo" in col.lower() and "ytd" in col.lower():
+            col_custo = col
+            break
+    if col_custo is None:
+        col_custo = df_custo.columns[-1]
+
+    df_custo["custo_ytd"] = df_custo[col_custo].apply(parse_currency)
+
+    df_custo = df_custo[
+        df_custo["item"].notna()
+        & df_custo["custo_ytd"].notna()
+        & df_custo["embalagem"].notna()
+    ].copy()
+    df_custo["item"] = df_custo["item"].astype(int)
+    df_custo["item_id"] = df_custo["item"].astype(str) + "_" + df_custo["embalagem"]
+
+    df_custo = df_custo[["item_id", "item", "embalagem", "custo_ytd"]].drop_duplicates(["item_id"])
+    return df_custo
 
 
 def carregar_producao(year_week: Optional[str]) -> Tuple[pd.DataFrame, str]:
@@ -91,7 +192,7 @@ def carregar_producao(year_week: Optional[str]) -> Tuple[pd.DataFrame, str]:
     return prod_agg, target_year_week
 
 
-def carregar_alocacao(arquivo_resultado: Optional[str]) -> Tuple[pd.DataFrame, Path]:
+def carregar_alocacao(arquivo_resultado: Optional[str], sep: str = ",", decimal: str = ".") -> Tuple[pd.DataFrame, Path]:
     """Load model allocation results aggregated by item_id."""
     if arquivo_resultado:
         csv_path = Path(arquivo_resultado)
@@ -102,6 +203,14 @@ def carregar_alocacao(arquivo_resultado: Optional[str]) -> Tuple[pd.DataFrame, P
         csv_path = candidatos[-1]
 
     df_aloc = pd.read_csv(csv_path)
+
+    required_cols = {"item_id", "item", "embalagem", "classe", "quantidade"}
+    if not required_cols.issubset(set(df_aloc.columns)):
+        raise ValueError(
+            f"Arquivo de alocacao incompatível: {csv_path}. "
+            f"Colunas necessárias: {sorted(required_cols)}. "
+            "Use um arquivo resultado_realocacao_completo_*.csv (detalhado por item_id)."
+        )
     df_aloc["item"] = pd.to_numeric(df_aloc["item"], errors="coerce")
     df_aloc = df_aloc[df_aloc["item"].notna()].copy()
     df_aloc["item"] = df_aloc["item"].astype(int)
@@ -110,7 +219,7 @@ def carregar_alocacao(arquivo_resultado: Optional[str]) -> Tuple[pd.DataFrame, P
     df_aloc["classe"] = df_aloc["classe"].fillna("OUTROS")
 
     aloc_agg = (
-        df_aloc.groupby(["item_id", "item", "embalagem", "classe", "margem_unitaria", "custo_ytd"], as_index=False)["quantidade"]
+        df_aloc.groupby(["item_id", "item", "embalagem", "classe",], as_index=False)["quantidade"]
         .sum()
         .rename(columns={"quantidade": "quantidade_alocada", "classe": "Classe_Produto"})
     )
@@ -173,9 +282,16 @@ def main():
     args = _parse_args()
     year_week = args.year_week or None
 
+    config = _carregar_config()
     producao, year_week = carregar_producao(year_week)
-    alocacao, caminho_resultado = carregar_alocacao(args.resultado)
+    alocacao, caminho_resultado = carregar_alocacao(args.resultado, sep=args.sep, decimal=args.decimal)
+    precos = _carregar_precos(config)
+    custos = _carregar_custos(config)
+
     comparacao = construir_comparacao(producao, alocacao, year_week)
+    comparacao = comparacao.merge(precos, on="item_id", how="left")
+    comparacao = comparacao.merge(custos[["item_id", "custo_ytd"]], on="item_id", how="left")
+    comparacao["margem_unitaria"] = comparacao["preco"] - comparacao["custo_ytd"]
 
     RESULTS_DIR.mkdir(exist_ok=True)
     output_path = RESULTS_DIR / f"comparacao_producao_alocacao_{year_week}.csv"
