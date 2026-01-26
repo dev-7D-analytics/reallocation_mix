@@ -8,18 +8,18 @@
 paths:
   # Arquivos de entrada (todos na pasta inputs/)
   # estoque: "inputs/manti_estoque.parquet"  # DEPRECADO: usar producao por classe
-  producao_bruta: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/PRODUÇÃO DIA.xlsx"  # Producao semanal bruta por SKU e embalagem
-  producao: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/manti_producao_2025_51.csv"  # Producao por classe de produtos
-  classes: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/base_skus_classes.xlsx"  # Classificacao de SKUs por classe
-  pedidos: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/pedidos_clientes.csv"  # Pedidos de clientes (pode ser parcial)
+  producao_bruta: "inputs/PRODUÇÃO DIA.xlsx"  # Producao semanal bruta por SKU e embalagem
+  producao: "inputs/producao_classe.csv"  # Producao por classe de produtos
+  classes: "inputs/base_skus_classes.xlsx"  # Classificacao de SKUs por classe
+  pedidos: "inputs/pedidos_clientes.csv"  # Pedidos de clientes (pode ser parcial)
   # compatibilidade: "inputs/compatibilidade_sku_embalagem.csv"  # DEPRECADO: item ja vem com embalagem
-  precos: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/precos_sku_embalagem.csv"
-  custos: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/CUSTO ITEM.csv"
-  faturamento: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs/manti_fat_2024.parquet"  # Faturamento historico para calcular demanda
+  precos: "inputs/precos_sku_embalagem.csv"
+  custos: "inputs/MANTI-PRIC_Custos_12012026.parquet"  # Parquet com filtros: Estab=100, MÊS=11, ano=2025
+  faturamento: "inputs/manti_fat_2024.parquet"  # Faturamento historico para calcular demanda
   # custo_embalagem: "inputs/custo_embalagem.csv"  # Opcional
   
   # Arquivos de saída
-  output_dir: "/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/resultados"
+  output_dir: "resultados"
   logs_dir: "logs"
 
 # ==============================================================================
@@ -49,7 +49,18 @@ solver:
 # ==============================================================================
 dados:
   # Semana referência para produção
-  semana_ref: "2025-51" 
+  semana_ref: "2025-51"
+  
+  # Período de custos e preços (devem ser do mesmo mês/ano)
+  mes_custo: 11   # Mês de referência para custos (1-12) - novembro 2025
+  ano_custo: 2025 # Ano de referência para custos
+  estab_custo: 100 # Estabelecimento para custos
+  meses_janela_custo: 6  # Janela de meses para custos (últimos N meses a partir de mes_custo/ano_custo)
+  
+  mes_preco: 11   # Mês de referência para preços (deve ser igual a mes_custo)
+  ano_preco: 2025 # Ano de referência para preços (deve ser igual a ano_custo)
+  estab_preco: 100 # Estabelecimento para preços
+  meses_janela_preco: 6  # Janela de meses para preços (últimos N meses a partir de mes_preco/ano_preco)
   
   # Tipo de estoque
   tipo_estoque: "DISPONIVEL PARA VENDA"  

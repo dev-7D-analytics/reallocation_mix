@@ -12,7 +12,7 @@ from extrair_compatibilidade_embalagem import (
 )
 
 
-INPUT_PATH = Path("/mnt/c/Users/MarceloHenriqueGagli/OneDrive - 7D Analytics/mantiqueira/inputs")
+INPUT_PATH = Path("inputs")
 SHEET_NAME = "CE0302"
 RESULTS_DIR = Path("resultados")
 DEFAULT_YEAR_WEEK = "2025-51"
@@ -68,7 +68,11 @@ def _carregar_precos(config: Dict) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame(columns=["item_id", "preco"])
 
-    df_precos = pd.read_csv(path, sep=";", decimal=",")
+    # Tentar ler com separador de virgula primeiro, depois ponto e virgula
+    try:
+        df_precos = pd.read_csv(path, sep=",", decimal=".")
+    except:
+        df_precos = pd.read_csv(path, sep=";", decimal=",")
 
     if "preco" not in df_precos.columns:
         if "preco_ponderado" in df_precos.columns:
@@ -90,61 +94,180 @@ def _carregar_precos(config: Dict) -> pd.DataFrame:
 
 
 def _carregar_custos(config: Dict) -> pd.DataFrame:
-    """Carga de custos conforme modelo canônico."""
+    """Carga de custos conforme modelo canônico - suporta CSV ou Parquet."""
     path = _resolver_caminho(config, "custos", DEFAULT_CUSTOS_PATH)
     if not path.exists():
         return pd.DataFrame(columns=["item_id", "item", "embalagem", "custo_ytd"])
 
-    df_custo = pd.read_csv(path)
-
-    col_item_desc = None
-    for col in df_custo.columns:
-        if "item" in col.lower() and "descri" in col.lower():
-            col_item_desc = col
-            break
-    if col_item_desc is None:
-        col_item_desc = df_custo.columns[0]
-
-    df_custo["item"] = pd.to_numeric(
-        df_custo[col_item_desc].astype(str).str.extract(r"^(\d+)")[0],
-        errors="coerce",
-    )
-    df_custo["embalagem"] = df_custo[col_item_desc].apply(extrair_embalagem_descricao)
-
-    def parse_currency(valor):
-        if pd.isna(valor):
-            return np.nan
-        limpo = str(valor).replace("R$", "").replace(".", "").replace(",", ".").strip()
+    # Detectar se é parquet ou CSV
+    is_parquet = path.suffix.lower() == '.parquet'
+    
+    if is_parquet:
+        # Ler apenas colunas necessárias
+        colunas_necessarias = ['Estab', 'item', 'MÊS', 'ano', 'Custo Médio', 'Quantidade', 'UF', 'Descrição do item']
+        df_custo = pd.read_parquet(path, columns=colunas_necessarias, engine='pyarrow')
+        
+        # Aplicar filtros do config (mesmo do modelo principal)
+        dados_config = config.get('dados', {})
+        mes_custo = dados_config.get('mes_custo', 11)  # Mês de referência
+        ano_custo = dados_config.get('ano_custo', 2025)  # Ano de referência
+        estab_custo = dados_config.get('estab_custo', 100)  # Default: 100
+        meses_janela = dados_config.get('meses_janela_custo', 1)  # Janela de meses (últimos N meses)
+        
+        # Calcular range de meses
+        if meses_janela > 1:
+            periodos = []
+            for i in range(meses_janela):
+                mes = mes_custo - i
+                ano = ano_custo
+                while mes <= 0:
+                    mes += 12
+                    ano -= 1
+                periodos.append((ano, mes))
+            
+            mask_estab = df_custo['Estab'] == estab_custo
+            mask_periodo = df_custo.apply(lambda row: (row['ano'], row['MÊS']) in periodos, axis=1)
+            df_custo = df_custo[mask_estab & mask_periodo].copy()
+        else:
+            df_custo = df_custo[
+                (df_custo['Estab'] == estab_custo) & 
+                (df_custo['MÊS'] == mes_custo) & 
+                (df_custo['ano'] == ano_custo)
+            ].copy()
+        
+        # Filtrar exportacao (UF != 'EX')
+        df_custo = df_custo.loc[df_custo['UF'] != 'EX'].copy()
+        
+        # Converter tipos para numérico
+        df_custo['Custo Médio'] = pd.to_numeric(df_custo['Custo Médio'], errors='coerce')
+        df_custo['Quantidade'] = pd.to_numeric(df_custo['Quantidade'], errors='coerce')
+        df_custo = df_custo[df_custo['Quantidade'] > 0].copy()
+        df_custo = df_custo[df_custo['Custo Médio'].notna()].copy()
+        
+        # Calcular custo por caixa: custos_cx360 = Custo Médio / Quantidade
+        df_custo['custos_cx360'] = df_custo['Custo Médio'] / df_custo['Quantidade']
+        
+        # Custo Médio já é o custo total da transação (para agregação ponderada)
+        df_custo['custo_total'] = df_custo['Custo Médio']
+        
+        # Criar coluna ano_mes
+        df_custo['ano_mes'] = df_custo['ano'].astype(str) + '-' + df_custo['MÊS'].astype(str).str.zfill(2)
+        
+        # Extrair embalagem e criar item_id
+        col_item_desc = 'Descrição do item'
+        df_custo['embalagem'] = df_custo[col_item_desc].apply(extrair_embalagem_descricao)
+        df_custo['item'] = pd.to_numeric(df_custo['item'], errors='coerce')
+        df_custo = df_custo[df_custo['item'].notna() & df_custo['embalagem'].notna()].copy()
+        df_custo['item_id'] = df_custo['item'].astype(str) + '_' + df_custo['embalagem']
+        
+        # Primeira agregação: por (item, embalagem, ano_mes) - somar custo total e quantidade
+        # (mesmo racional de preços - EXATAMENTE como no modelo_otimizacao_com_realocacao.py)
+        custos_por_ano_mes = df_custo.groupby(['item', 'embalagem', 'ano_mes']).agg({
+            'Quantidade': 'sum',
+            'custo_total': 'sum',
+            col_item_desc: 'first'
+        }).reset_index()
+        
+        # Calcular custo ponderado por ano_mes (ANTES de renomear)
+        custos_por_ano_mes['custo_ponderado_ano_mes'] = custos_por_ano_mes['custo_total'] / custos_por_ano_mes['Quantidade']
+        
+        # Renomear colunas (EXATAMENTE como no modelo_otimizacao_com_realocacao.py)
+        custos_por_ano_mes.columns = ['item', 'embalagem', 'ano_mes', 'volume_ano_mes', 'custo_total_ano_mes', 'descricao_item', 'custo_ponderado_ano_mes']
+        
+        # Segunda agregação: por (item, embalagem) - somar custos e volumes totais
+        # (EXATAMENTE como no modelo_otimizacao_com_realocacao.py)
+        df_custo_agg = custos_por_ano_mes.groupby(['item', 'embalagem']).agg({
+            'volume_ano_mes': 'sum',
+            'custo_total_ano_mes': 'sum',
+            'descricao_item': 'first',
+            'ano_mes': 'count'  # Número de meses com dados
+        }).reset_index()
+        
+        # Renomear colunas (EXATAMENTE como no modelo_otimizacao_com_realocacao.py)
+        df_custo_agg.columns = ['item', 'embalagem', 'volume_total', 'custo_total', 'descricao_item', 'num_meses']
+        
+        # Calcular custo final ponderado por volume total
+        df_custo_agg['custo_ytd'] = df_custo_agg['custo_total'] / df_custo_agg['volume_total']
+        df_custo_agg['item_id'] = df_custo_agg['item'].astype(str) + '_' + df_custo_agg['embalagem']
+        
+        df_custo = df_custo_agg[['item_id', 'item', 'embalagem', 'custo_ytd']].copy()
+        
+        # Filtrar valores negativos
+        df_custo = df_custo[df_custo['custo_ytd'] > 0].copy()
+        
+        # Retornar diretamente após processar parquet (não executar código de CSV)
+        return df_custo[["item_id", "item", "embalagem", "custo_ytd"]]
+        
+    else:
+        # Leitura de CSV (comportamento original)
         try:
-            return float(limpo) if limpo else np.nan
-        except Exception:
-            return np.nan
+            df_custo = pd.read_csv(path, encoding='utf-8')
+        except UnicodeDecodeError:
+            df_custo = pd.read_csv(path, encoding='latin-1')
 
-    col_custo = None
-    for col in df_custo.columns:
-        if "custo" in col.lower() and "ytd" in col.lower():
-            col_custo = col
-            break
-    if col_custo is None:
-        col_custo = df_custo.columns[-1]
+        col_item_desc = None
+        for col in df_custo.columns:
+            if "item" in col.lower() and "descri" in col.lower():
+                col_item_desc = col
+                break
+        if col_item_desc is None:
+            col_item_desc = df_custo.columns[0]
 
-    df_custo["custo_ytd"] = df_custo[col_custo].apply(parse_currency)
+        df_custo["item"] = pd.to_numeric(
+            df_custo[col_item_desc].astype(str).str.extract(r"^(\d+)")[0],
+            errors="coerce",
+        )
+        df_custo["embalagem"] = df_custo[col_item_desc].apply(extrair_embalagem_descricao)
 
-    df_custo = df_custo[
-        df_custo["item"].notna()
-        & df_custo["custo_ytd"].notna()
-        & df_custo["embalagem"].notna()
-    ].copy()
-    df_custo["item"] = df_custo["item"].astype(int)
-    df_custo["item_id"] = df_custo["item"].astype(str) + "_" + df_custo["embalagem"]
+        def parse_currency(valor):
+            if pd.isna(valor):
+                return np.nan
+            limpo = str(valor).replace("R$", "").replace(".", "").replace(",", ".").strip()
+            try:
+                return float(limpo) if limpo else np.nan
+            except Exception:
+                return np.nan
 
-    df_custo = df_custo[["item_id", "item", "embalagem", "custo_ytd"]].drop_duplicates(["item_id"])
-    return df_custo
+        col_custo = None
+        for col in df_custo.columns:
+            if "custo" in col.lower() and "ytd" in col.lower():
+                col_custo = col
+                break
+        if col_custo is None:
+            col_custo = df_custo.columns[-1]
+
+        df_custo["custo_ytd"] = df_custo[col_custo].apply(parse_currency)
+
+        # Extrair embalagem (mesma lógica para ambos)
+        if 'embalagem' not in df_custo.columns:
+            df_custo["embalagem"] = df_custo[col_item_desc].apply(extrair_embalagem_descricao)
+
+        # Filtrar registros válidos
+        df_custo = df_custo[
+            df_custo["item"].notna()
+            & df_custo["custo_ytd"].notna()
+            & df_custo["embalagem"].notna()
+        ].copy()
+        df_custo["item"] = df_custo["item"].astype(int)
+        df_custo["item_id"] = df_custo["item"].astype(str) + "_" + df_custo["embalagem"]
+
+        # Agregar duplicatas por item_id usando média
+        df_custo = df_custo.groupby('item_id').agg({
+            'item': 'first',
+            'embalagem': 'first',
+            'custo_ytd': 'mean'
+        }).reset_index()
+
+        return df_custo[["item_id", "item", "embalagem", "custo_ytd"]]
 
 
-def carregar_producao(year_week: Optional[str]) -> Tuple[pd.DataFrame, str]:
+def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -> Tuple[pd.DataFrame, str]:
     """Read production data and return aggregation by item_id."""
-    excel_path = INPUT_PATH / "PRODUÇÃO DIA.xlsx"
+    if config:
+        producao_bruta_path = _resolver_caminho(config, "producao_bruta", INPUT_PATH / "PRODUÇÃO DIA.xlsx")
+    else:
+        producao_bruta_path = INPUT_PATH / "PRODUÇÃO DIA.xlsx"
+    excel_path = Path(producao_bruta_path)
     df_prod = pd.read_excel(excel_path, sheet_name=SHEET_NAME, skiprows=1)
 
     df_prod["week"] = extract_week(df_prod, "Data Trans")
@@ -172,7 +295,11 @@ def carregar_producao(year_week: Optional[str]) -> Tuple[pd.DataFrame, str]:
     df_prod["data_producao"] = df_prod["year_week"].apply(get_week_start_date)
 
     # Anexar classe do SKU
-    df_classes = pd.read_excel(INPUT_PATH / "base_skus_classes.xlsx")
+    if config:
+        classes_path = _resolver_caminho(config, "classes", INPUT_PATH / "base_skus_classes.xlsx")
+    else:
+        classes_path = INPUT_PATH / "base_skus_classes.xlsx"
+    df_classes = pd.read_excel(Path(classes_path))
     col_classe = _resolver_coluna_classe(df_classes)
     if col_classe is None:
         raise ValueError("Coluna de classe nao encontrada em base_skus_classes.xlsx")
@@ -283,7 +410,7 @@ def main():
     year_week = args.year_week or None
 
     config = _carregar_config()
-    producao, year_week = carregar_producao(year_week)
+    producao, year_week = carregar_producao(year_week, config)
     alocacao, caminho_resultado = carregar_alocacao(args.resultado, sep=args.sep, decimal=args.decimal)
     precos = _carregar_precos(config)
     custos = _carregar_custos(config)
@@ -291,19 +418,57 @@ def main():
     comparacao = construir_comparacao(producao, alocacao, year_week)
     comparacao = comparacao.merge(precos, on="item_id", how="left")
     comparacao = comparacao.merge(custos[["item_id", "custo_ytd"]], on="item_id", how="left")
+    
+    # Calcular margem unitária (em R$/caixa)
     comparacao["margem_unitaria"] = comparacao["preco"] - comparacao["custo_ytd"]
+    
+    # Estatísticas de margem
+    print("\n[INFO] Estatísticas de margem na comparação:")
+    total_item_id = len(comparacao)
+    com_preco = comparacao["preco"].notna().sum()
+    com_custo = comparacao["custo_ytd"].notna().sum()
+    com_ambos = comparacao[comparacao["preco"].notna() & comparacao["custo_ytd"].notna()]
+    com_margem_positiva = (com_ambos["margem_unitaria"] > 0).sum() if len(com_ambos) > 0 else 0
+    com_margem_negativa = (com_ambos["margem_unitaria"] < 0).sum() if len(com_ambos) > 0 else 0
+    
+    print(f"  Total de item_id: {total_item_id:,}")
+    print(f"  Com preço: {com_preco:,} ({com_preco/total_item_id*100:.1f}%)")
+    print(f"  Com custo: {com_custo:,} ({com_custo/total_item_id*100:.1f}%)")
+    print(f"  Com ambos (preço + custo): {len(com_ambos):,} ({len(com_ambos)/total_item_id*100:.1f}%)")
+    if len(com_ambos) > 0:
+        print(f"  Com margem positiva: {com_margem_positiva:,} ({com_margem_positiva/len(com_ambos)*100:.1f}%)")
+        print(f"  Com margem negativa: {com_margem_negativa:,} ({com_margem_negativa/len(com_ambos)*100:.1f}%)")
+        print(f"  Margem média: R$ {com_ambos['margem_unitaria'].mean():.2f}")
+        print(f"  Margem mediana: R$ {com_ambos['margem_unitaria'].median():.2f}")
 
     RESULTS_DIR.mkdir(exist_ok=True)
-    output_path = RESULTS_DIR / f"comparacao_producao_alocacao_{year_week}.csv"
-    comparacao.to_csv(output_path, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
+    output_path_csv = RESULTS_DIR / f"comparacao_producao_alocacao_{year_week}.csv"
+    output_path_xlsx = RESULTS_DIR / f"comparacao_producao_alocacao_{year_week}.xlsx"
+    
+    # Salvar CSV
+    comparacao.to_csv(output_path_csv, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
+    
+    # Salvar Excel
+    try:
+        comparacao.to_excel(output_path_xlsx, index=False, engine='openpyxl')
+    except ImportError:
+        print("[AVISO] openpyxl nao instalado. Salve apenas CSV.")
+    except Exception as e:
+        print(f"[AVISO] Erro ao salvar Excel: {e}. Salve apenas CSV.")
 
     print("\n[OK] Comparacao concluida")
     print(f"  Semana: {year_week}")
     print(f"  Producao total: {producao['quantidade_produzida'].sum():,.0f} unidades")
     print(f"  Alocacao total: {alocacao['quantidade_alocada'].sum():,.0f} unidades")
-    print(f"  Arquivo de producao: {os.fspath(INPUT_PATH / 'PRODUÇÃO DIA.xlsx')} (aba {SHEET_NAME})")
+    if config:
+        producao_bruta_path = _resolver_caminho(config, "producao_bruta", INPUT_PATH / "PRODUÇÃO DIA.xlsx")
+    else:
+        producao_bruta_path = INPUT_PATH / "PRODUÇÃO DIA.xlsx"
+    print(f"  Arquivo de producao: {os.fspath(Path(producao_bruta_path))} (aba {SHEET_NAME})")
     print(f"  Resultado do modelo: {caminho_resultado}")
-    print(f"  Saida gerada em: {output_path}")
+    print(f"  Saida gerada em:")
+    print(f"    - CSV: {output_path_csv}")
+    print(f"    - Excel: {output_path_xlsx}")
 
 
 if __name__ == "__main__":

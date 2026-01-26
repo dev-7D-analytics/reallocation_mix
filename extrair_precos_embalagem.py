@@ -1,5 +1,6 @@
 """
-Extrai preços médios por (SKU, Embalagem) do faturamento histórico.
+Extrai preços médios por (SKU, Embalagem) do dataset de custos.
+Calcula preço como: Receita Liquida / Quantidade
 """
 import pandas as pd
 import numpy as np
@@ -12,7 +13,7 @@ from typing import Dict
 
 # Importar função de extração de embalagem
 sys.path.append(str(Path(__file__).parent))
-from extrair_compatibilidade_embalagem import extrair_embalagem_descricao
+from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
 
 def carregar_config(config_path: str = 'config.yaml') -> Dict:
     """Carrega configuracoes do YAML."""
@@ -21,12 +22,33 @@ def carregar_config(config_path: str = 'config.yaml') -> Dict:
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Extrai preços médios por (SKU, Embalagem) do faturamento."
+        description="Extrai preços médios por (SKU, Embalagem) do dataset de custos."
     )
     parser.add_argument(
         "--estab",
         nargs="+",
         help="Filtra registros pela coluna 'Estab'. Aceita múltiplos valores.",
+    )
+    parser.add_argument(
+        "--mes",
+        type=int,
+        help="Filtra registros pelo mês (1-12).",
+    )
+    parser.add_argument(
+        "--ano",
+        type=int,
+        help="Filtra registros pelo ano (ex: 2025).",
+    )
+    parser.add_argument(
+        "--arquivo",
+        type=str,
+        help="Caminho do arquivo de custos (sobrescreve config.yaml).",
+    )
+    parser.add_argument(
+        "--meses_janela",
+        type=int,
+        default=1,
+        help="Janela de meses a partir do mês/ano especificado (ex: 6 = últimos 6 meses).",
     )
     return parser.parse_args(argv)
 
@@ -37,116 +59,263 @@ def main(argv=None):
     print("EXTRAÇÃO DE PREÇOS POR (SKU, EMBALAGEM)")
     print("="*80)
     
-    # Carregar faturamento
-    print("\n[1/3] Carregando faturamento...")
-    path_fat = Path(config['paths'].get('faturamento', '../manti_fat_2024.parquet'))
-    if not path_fat.exists():
-        print(f"[ERRO] Arquivo não encontrado: {path_fat}")
+    # Carregar dataset de custos
+    print("\n[1/3] Carregando dataset de custos...")
+    
+    # Usar arquivo do argumento ou do config
+    if args.arquivo:
+        path_custo = Path(args.arquivo)
+    else:
+        path_custo = Path(config['paths'].get('custos', 'inputs/MANTI-PRIC_Custos_12012026.parquet'))
+    
+    if not path_custo.exists():
+        print(f"[ERRO] Arquivo não encontrado: {path_custo}")
         return
     
-    df_fat = pd.read_parquet(path_fat)
-    print(f"  Registros: {len(df_fat):,}")
+    print(f"  Arquivo: {path_custo}")
+    
+    # Ler apenas colunas necessárias para economizar memória
+    colunas_necessarias = ['Estab', 'item', 'MÊS', 'ano', 'Quantidade', 'Receita Liquida', 'Descrição do item', 'UF']
+    
+    # Ler parquet (mesma abordagem que funciona no notebook)
+    df_custo = pd.read_parquet(path_custo, columns=colunas_necessarias, engine='pyarrow')
+    
+    print(f"  Registros totais: {len(df_custo):,}")
+    
+    # Converter tipos para numérico (tratamento importante do código de verificação)
+    print("  Convertendo tipos para numérico...")
+    df_custo['Receita Liquida'] = pd.to_numeric(df_custo['Receita Liquida'], errors='coerce')
+    df_custo['Quantidade'] = pd.to_numeric(df_custo['Quantidade'], errors='coerce')
+    df_custo['item'] = pd.to_numeric(df_custo['item'], errors='coerce')
+    df_custo['MÊS'] = pd.to_numeric(df_custo['MÊS'], errors='coerce')
+    df_custo['ano'] = pd.to_numeric(df_custo['ano'], errors='coerce')
+    df_custo['Estab'] = pd.to_numeric(df_custo['Estab'], errors='coerce')
+    
+    # Remover registros com valores inválidos após conversão
+    antes_conversao = len(df_custo)
+    df_custo = df_custo[
+        (df_custo['item'].notna()) &
+        (df_custo['MÊS'].notna()) &
+        (df_custo['ano'].notna()) &
+        (df_custo['Estab'].notna())
+    ].copy()
+    removidos_invalidos = antes_conversao - len(df_custo)
+    if removidos_invalidos > 0:
+        print(f"  Removidos {removidos_invalidos:,} registros com valores inválidos após conversão")
+    
+    print(f"  Registros após conversão: {len(df_custo):,}")
+    
+    # FILTRO OBRIGATÓRIO: Remover exportação (UF != 'EX')
+    if 'UF' in df_custo.columns:
+        antes_filtro_uf = len(df_custo)
+        df_custo = df_custo[df_custo['UF'] != 'EX'].copy()
+        removidos_exportacao = antes_filtro_uf - len(df_custo)
+        if removidos_exportacao > 0:
+            print(f"  Filtro UF != 'EX': removidos {removidos_exportacao:,} registros de exportação")
+            print(f"  Registros após filtro UF: {len(df_custo):,}")
+    else:
+        print("  [AVISO] Coluna 'UF' não encontrada. Não foi possível filtrar exportação.")
 
-    # Filtro opcional por estabelecimento
+    # Aplicar filtros
+    filtros_aplicados = []
+    
+    # Filtro por estabelecimento
     if args.estab:
-        if 'Estab' not in df_fat.columns:
-            print("[ERRO] Coluna 'Estab' não encontrada no faturamento.")
-            print(f"  Colunas disponíveis: {list(df_fat.columns)}")
+        if 'Estab' not in df_custo.columns:
+            print("[ERRO] Coluna 'Estab' não encontrada no dataset de custos.")
+            print(f"  Colunas disponíveis: {list(df_custo.columns)}")
             return
-        df_fat = df_fat[df_fat['Estab'].astype(str).isin(args.estab)].copy()
-        print(f"  Filtro aplicado na coluna 'Estab': {args.estab}")
-        print(f"  Registros após filtro: {len(df_fat):,}")
-        if len(df_fat) == 0:
-            print("  [ALERTA] Nenhum registro encontrado após o filtro. Encerrando.")
+        df_custo = df_custo[df_custo['Estab'].astype(str).isin(args.estab)].copy()
+        filtros_aplicados.append(f"Estab={args.estab}")
+        print(f"  Filtro Estab: {args.estab} -> {len(df_custo):,} registros")
+    
+    # Filtro por mês/ano com janela de tempo
+    if args.mes and args.ano:
+        if 'MÊS' not in df_custo.columns or 'ano' not in df_custo.columns:
+            print("[ERRO] Colunas 'MÊS' ou 'ano' não encontradas no dataset de custos.")
+            print(f"  Colunas disponíveis: {list(df_custo.columns)}")
             return
+        
+        if args.meses_janela > 1:
+            # Criar lista de (ano, mês) para a janela
+            periodos = []
+            for i in range(args.meses_janela):
+                mes = args.mes - i
+                ano = args.ano
+                while mes <= 0:
+                    mes += 12
+                    ano -= 1
+                periodos.append((ano, mes))
+            
+            print(f"  Aplicando janela de {args.meses_janela} meses a partir de {args.ano}-{args.mes:02d}...")
+            print(f"  Períodos incluídos: {', '.join([f'{a}-{m:02d}' for a, m in periodos])}")
+            
+            # Filtrar por período
+            mask_periodo = df_custo.apply(lambda row: (row['ano'], row['MÊS']) in periodos, axis=1)
+            df_custo = df_custo[mask_periodo].copy()
+            filtros_aplicados.append(f"janela={args.meses_janela}meses")
+            print(f"  Registros após filtro de período: {len(df_custo):,}")
+        else:
+            # Comportamento original: apenas 1 mês
+            df_custo = df_custo[df_custo['MÊS'] == args.mes].copy()
+            filtros_aplicados.append(f"MÊS={args.mes}")
+            print(f"  Filtro Mês: {args.mes} -> {len(df_custo):,} registros")
+            
+            if args.ano:
+                df_custo = df_custo[df_custo['ano'] == args.ano].copy()
+                filtros_aplicados.append(f"ano={args.ano}")
+                print(f"  Filtro Ano: {args.ano} -> {len(df_custo):,} registros")
+    
+    if len(df_custo) == 0:
+        print("  [ALERTA] Nenhum registro encontrado após os filtros. Encerrando.")
+        return
+    
+    if filtros_aplicados:
+        print(f"  Filtros aplicados: {', '.join(filtros_aplicados)}")
+        print(f"  Registros após filtros: {len(df_custo):,}")
     
     # Detectar coluna de descrição (tentar múltiplas opções)
     col_desc = None
     # Prioridade 1: "ITEM -  DESCRIÇÃO"
-    for col in df_fat.columns:
+    for col in df_custo.columns:
         if col == 'ITEM -  DESCRIÇÃO' or col == 'ITEM - DESCRIÇÃO':
             col_desc = col
             break
     
     # Prioridade 2: qualquer coluna com "descri" e "item"
     if col_desc is None:
-        for col in df_fat.columns:
+        for col in df_custo.columns:
             if 'descri' in col.lower() and 'item' in col.lower():
                 col_desc = col
                 break
     
     # Prioridade 3: "Descrição do item"
     if col_desc is None:
-        for col in df_fat.columns:
+        for col in df_custo.columns:
             if col == 'Descrição do item':
                 col_desc = col
                 break
     
     if col_desc is None:
         print("[ERRO] Coluna de descrição não encontrada")
-        print(f"  Colunas disponíveis: {list(df_fat.columns)}")
+        print(f"  Colunas disponíveis: {list(df_custo.columns)}")
         return
     
     # Extrair embalagem
     print("\n[2/3] Extraindo embalagens e calculando preços...")
-    df_fat['embalagem'] = df_fat[col_desc].apply(extrair_embalagem_descricao)
+    df_custo['embalagem'] = df_custo[col_desc].apply(extrair_embalagem_descricao)
     
-    # Filtrar registros válidos
-    df_validos = df_fat[
-        (df_fat['embalagem'].notna()) &
-        (df_fat['item'].notna()) &
-        (df_fat['Quantidade'] > 0) &
-        (df_fat['Receita Liquida'] > 0)
+    # FILTROS OBRIGATÓRIOS: Remover devoluções/estornos
+    # 1. Quantidade > 0 (remove devoluções)
+    # 2. Receita Liquida > 0 (remove estornos/registros sem receita)
+    # 3. embalagem e item válidos
+    antes_filtros_validos = len(df_custo)
+    df_validos = df_custo[
+        (df_custo['embalagem'].notna()) &
+        (df_custo['item'].notna()) &
+        (df_custo['Quantidade'] > 0) &
+        (df_custo['Receita Liquida'] > 0)
     ].copy()
+    removidos_invalidos = antes_filtros_validos - len(df_validos)
+    if removidos_invalidos > 0:
+        print(f"  Filtros de validação: removidos {removidos_invalidos:,} registros inválidos (devoluções/estornos)")
+        print(f"  Registros válidos: {len(df_validos):,}")
     
-    # Calcular preço unitário
+    # Calcular ovos por caixa
+    df_validos['ovos_por_caixa'] = df_validos['embalagem'].apply(calcular_qtd_embalagem)
+    df_validos = df_validos[df_validos['ovos_por_caixa'].notna()].copy()
+    
+    # Calcular preço: Receita Liquida / Quantidade (método validado)
+    print("  Calculando preço = Receita Liquida / Quantidade...")
     df_validos['preco_unitario'] = df_validos['Receita Liquida'] / df_validos['Quantidade']
     
-    # Remover outliers (preços muito altos ou muito baixos)
+    # Remover outliers (preços muito altos ou muito baixos) - percentis 1-99
+    antes_filtro_outliers = len(df_validos)
     q1 = df_validos['preco_unitario'].quantile(0.01)
     q99 = df_validos['preco_unitario'].quantile(0.99)
     df_validos = df_validos[
         (df_validos['preco_unitario'] >= q1) &
         (df_validos['preco_unitario'] <= q99)
     ].copy()
+    removidos_outliers = antes_filtro_outliers - len(df_validos)
+    if removidos_outliers > 0:
+        print(f"  Filtro de outliers (percentis 1-99%): removidos {removidos_outliers:,} registros")
+        print(f"  Faixa de preços mantida: R$ {q1:.2f} - R$ {q99:.2f}")
     
-    print(f"  Registros válidos: {len(df_validos):,}")
-    print(f"  Faixa de preços: R$ {df_validos['preco_unitario'].min():.2f} - R$ {df_validos['preco_unitario'].max():.2f}")
+    print(f"  Registros válidos após todos os filtros: {len(df_validos):,}")
+    if len(df_validos) > 0:
+        print(f"  Faixa de preços final: R$ {df_validos['preco_unitario'].min():.2f} - R$ {df_validos['preco_unitario'].max():.2f}")
     
-    # Agregar por (item, embalagem)
+    # Agregar por (item, embalagem, ano_mes) primeiro (média ponderada por volume)
     print("\n[3/3] Agregando preços por (SKU, Embalagem)...")
-    df_precos = df_validos.groupby(['item', 'embalagem']).agg({
-        'preco_unitario': ['mean', 'median', 'std', 'count'],
+    
+    # Criar coluna ano_mes para agregação intermediária
+    df_validos['ano_mes'] = df_validos['ano'].astype(str) + '-' + df_validos['MÊS'].astype(str).str.zfill(2)
+    
+    # Primeira agregação: por (item, embalagem, ano_mes)
+    # Calcular receita e volume totais, depois preço ponderado = receita_total / volume_total
+    print("  Agregando por (item, embalagem, ano_mes)...")
+    df_precos_ano_mes = df_validos.groupby(['item', 'embalagem', 'ano_mes']).agg({
         'Quantidade': 'sum',
         'Receita Liquida': 'sum',
         col_desc: 'first'
     }).reset_index()
     
-    # Flatten column names
-    df_precos.columns = [
-        'item', 'embalagem', 'preco_medio', 'preco_mediano', 
-        'preco_std', 'num_transacoes', 'volume_total', 'receita_total', 'descricao_item'
-    ]
+    # Calcular preço ponderado por ano_mes
+    df_precos_ano_mes['preco_ponderado_ano_mes'] = df_precos_ano_mes['Receita Liquida'] / df_precos_ano_mes['Quantidade']
+    df_precos_ano_mes.columns = ['item', 'embalagem', 'ano_mes', 'volume_ano_mes', 'receita_ano_mes', 'descricao_item', 'preco_ponderado_ano_mes']
     
-    # Calcular preço ponderado por volume
+    # Segunda agregação: por (item, embalagem) usando média ponderada dos valores de ano_mes
+    print("  Agregando por (item, embalagem) usando média ponderada dos valores de ano_mes...")
+    
+    # Calcular receita e volume totais por (item, embalagem)
+    df_precos = df_precos_ano_mes.groupby(['item', 'embalagem']).agg({
+        'volume_ano_mes': 'sum',
+        'receita_ano_mes': 'sum',
+        'descricao_item': 'first',
+        'ano_mes': 'count'  # Número de meses com dados
+    }).reset_index()
+    df_precos.columns = ['item', 'embalagem', 'volume_total', 'receita_total', 'descricao_item', 'num_meses']
+    
+    # Calcular preço final ponderado por volume total
     df_precos['preco_ponderado'] = df_precos['receita_total'] / df_precos['volume_total']
-    
-    # Usar preço ponderado como preço principal
     df_precos['preco'] = df_precos['preco_ponderado']
+    
+    # Adicionar estatísticas adicionais para referência
+    df_precos['preco_medio'] = df_precos['preco_ponderado']  # Mesmo valor, mas mantém compatibilidade
+    df_precos['num_transacoes'] = df_precos['num_meses']  # Aproximação
     
     # Ordenar por volume
     df_precos = df_precos.sort_values('volume_total', ascending=False)
     
-    # Salvar
-    output_path = Path("inputs/precos_sku_embalagem.csv")
-    output_path.parent.mkdir(exist_ok=True)
-    df_precos.to_csv(output_path, index=False, encoding='utf-8')
+    # Preparar dados finais (apenas colunas necessárias para o modelo)
+    df_precos_final = df_precos[['item', 'embalagem', 'preco']].copy()
     
-    print(f"\n[OK] Dataset salvo: {output_path}")
-    print(f"  Combinações únicas: {len(df_precos):,}")
-    print(f"  SKUs únicos: {df_precos['item'].nunique():,}")
-    print(f"  Embalagens únicas: {df_precos['embalagem'].nunique():,}")
-    print(f"  Granjas únicas: {df_validos['Estab'].nunique():,}")
+    # Salvar em CSV e Excel
+    output_path_csv = Path("inputs/precos_sku_embalagem.csv")
+    output_path_excel = Path("inputs/precos_sku_embalagem.xlsx")
+    output_path_csv.parent.mkdir(exist_ok=True)
+    
+    # Salvar CSV (mantém compatibilidade)
+    df_precos_final.to_csv(output_path_csv, index=False, encoding='utf-8')
+    
+    # Salvar Excel
+    try:
+        df_precos_final.to_excel(output_path_excel, index=False, engine='openpyxl')
+        print(f"\n[OK] Dataset salvo:")
+        print(f"  CSV: {output_path_csv}")
+        print(f"  Excel: {output_path_excel}")
+    except ImportError:
+        print(f"\n[OK] Dataset salvo: {output_path_csv}")
+        print(f"  [AVISO] openpyxl não instalado. Excel não foi salvo.")
+    except Exception as e:
+        print(f"\n[OK] Dataset salvo: {output_path_csv}")
+        print(f"  [AVISO] Erro ao salvar Excel: {e}")
+    
+    print(f"  Combinações únicas: {len(df_precos_final):,}")
+    print(f"  SKUs únicos: {df_precos_final['item'].nunique():,}")
+    print(f"  Embalagens únicas: {df_precos_final['embalagem'].nunique():,}")
+    print(f"  Estabelecimentos únicos: {df_validos['Estab'].nunique():,}")
     
     # Estatísticas
     print("\n" + "="*80)

@@ -196,8 +196,11 @@ class ModeloOtimizacaoComRealocacao:
             self.dados['precos'] = pd.DataFrame(columns=['item_id', 'preco'])
             return
         
-        # Mudar de acordo com o separador do input
-        df_precos = pd.read_csv(path, sep=";", decimal=",")
+        # Tentar ler com separador de virgula primeiro, depois ponto e virgula
+        try:
+            df_precos = pd.read_csv(path, sep=",", decimal=".")
+        except:
+            df_precos = pd.read_csv(path, sep=";", decimal=",")
 
         # Detectar coluna de preco
         if 'preco' not in df_precos.columns:
@@ -226,7 +229,7 @@ class ModeloOtimizacaoComRealocacao:
         self.dados['precos'] = df_precos
     
     def _carregar_custos(self):
-        """Carrega custos - cada linha ja e (SKU + Embalagem) unico."""
+        """Carrega custos - suporta CSV ou Parquet com filtros."""
         self.logger.info("\n[5/7] Carregando custos...")
         
         # Importar funcao de extrair embalagem
@@ -274,43 +277,175 @@ class ModeloOtimizacaoComRealocacao:
             return None
         
         path = Path(self.config['paths']['custos'])
-        df_custo = pd.read_csv(path)
         
-        # Extrair codigo do item
-        col_item_desc = None
-        for col in df_custo.columns:
-            if 'item' in col.lower() and 'descri' in col.lower():
-                col_item_desc = col
-                break
+        # Detectar se e parquet ou CSV
+        is_parquet = path.suffix.lower() == '.parquet'
         
-        if col_item_desc is None:
-            col_item_desc = df_custo.columns[0]
+        if is_parquet:
+            # Ler apenas colunas necessarias para economizar memoria
+            colunas_necessarias = ['Estab', 'item', 'MÊS', 'ano', 'Custo Médio', 'Quantidade', 'UF', 'Descrição do item']
+            self.logger.info(f"  Lendo arquivo Parquet (apenas colunas necessarias)...")
+            
+            # Ler parquet com filtros aplicados durante a leitura (eficiente)
+            df_custo = pd.read_parquet(path, columns=colunas_necessarias, engine='pyarrow')
+            
+            # Aplicar filtros: Estab e janela de tempo do config
+            dados_config = self.config.get('dados', {})
+            mes_custo = dados_config.get('mes_custo', 11)  # Mês de referência
+            ano_custo = dados_config.get('ano_custo', 2025)  # Ano de referência
+            estab_custo = dados_config.get('estab_custo', 100)  # Default: 100
+            meses_janela = dados_config.get('meses_janela_custo', 1)  # Janela de meses (últimos N meses)
+            
+            # Calcular range de meses
+            if meses_janela > 1:
+                # Criar lista de (ano, mês) para a janela
+                periodos = []
+                for i in range(meses_janela):
+                    mes = mes_custo - i
+                    ano = ano_custo
+                    while mes <= 0:
+                        mes += 12
+                        ano -= 1
+                    periodos.append((ano, mes))
+                
+                self.logger.info(f"  Aplicando filtros: Estab={estab_custo}, janela de {meses_janela} meses a partir de {ano_custo}-{mes_custo:02d}...")
+                self.logger.info(f"  Períodos incluídos: {', '.join([f'{a}-{m:02d}' for a, m in periodos])}")
+                
+                # Filtrar por estabelecimento e período
+                mask_estab = df_custo['Estab'] == estab_custo
+                mask_periodo = df_custo.apply(lambda row: (row['ano'], row['MÊS']) in periodos, axis=1)
+                df_custo = df_custo[mask_estab & mask_periodo].copy()
+            else:
+                # Comportamento original: apenas 1 mês
+                self.logger.info(f"  Aplicando filtros: Estab={estab_custo}, MÊS={mes_custo}, ano={ano_custo}...")
+                df_custo = df_custo[
+                    (df_custo['Estab'] == estab_custo) & 
+                    (df_custo['MÊS'] == mes_custo) & 
+                    (df_custo['ano'] == ano_custo)
+                ].copy()
+            
+            self.logger.info(f"  Registros apos filtros de periodo: {len(df_custo):,}")
+            
+            # Filtrar exportacao (UF != 'EX')
+            antes_filtro_uf = len(df_custo)
+            df_custo = df_custo.loc[df_custo['UF'] != 'EX'].copy()
+            removidos_exportacao = antes_filtro_uf - len(df_custo)
+            if removidos_exportacao > 0:
+                self.logger.info(f"  Registros de exportacao (UF='EX') removidos: {removidos_exportacao:,}")
+            
+            # Converter tipos para numérico
+            df_custo['Custo Médio'] = pd.to_numeric(df_custo['Custo Médio'], errors='coerce')
+            df_custo['Quantidade'] = pd.to_numeric(df_custo['Quantidade'], errors='coerce')
+            
+            # Filtrar registros com quantidade > 0 e custo válido
+            df_custo = df_custo[df_custo['Quantidade'] > 0].copy()
+            df_custo = df_custo[df_custo['Custo Médio'].notna()].copy()
+            
+            # Calcular custo por caixa: custos_cx360 = Custo Médio / Quantidade
+            df_custo['custos_cx360'] = df_custo['Custo Médio'] / df_custo['Quantidade']
+            
+            # Custo Médio já é o custo total da transação (para agregação ponderada)
+            df_custo['custo_total'] = df_custo['Custo Médio']
+            
+            # Criar coluna ano_mes para agregacao
+            df_custo['ano_mes'] = df_custo['ano'].astype(str) + '-' + df_custo['MÊS'].astype(str).str.zfill(2)
+            
+            # Extrair embalagem e criar item_id antes de agregar
+            col_item_desc = 'Descrição do item'
+            df_custo['embalagem'] = df_custo[col_item_desc].apply(extrair_embalagem_descricao)
+            df_custo['item'] = pd.to_numeric(df_custo['item'], errors='coerce')
+            df_custo = df_custo[df_custo['item'].notna() & df_custo['embalagem'].notna()].copy()
+            df_custo['item_id'] = df_custo['item'].astype(str) + '_' + df_custo['embalagem']
+            
+            # Primeira agregação: por (item, embalagem, ano_mes) - somar custo total e quantidade
+            # (mesmo racional de preços)
+            self.logger.info(f"  Agregando por (item, embalagem, ano_mes)...")
+            custos_por_ano_mes = df_custo.groupby(['item', 'embalagem', 'ano_mes']).agg({
+                'Quantidade': 'sum',
+                'custo_total': 'sum',
+                col_item_desc: 'first'
+            }).reset_index()
+            
+            # Calcular custo ponderado por ano_mes
+            custos_por_ano_mes['custo_ponderado_ano_mes'] = custos_por_ano_mes['custo_total'] / custos_por_ano_mes['Quantidade']
+            custos_por_ano_mes.columns = ['item', 'embalagem', 'ano_mes', 'volume_ano_mes', 'custo_total_ano_mes', 'descricao_item', 'custo_ponderado_ano_mes']
+            
+            # Segunda agregação: por (item, embalagem) - somar custos e volumes totais
+            self.logger.info(f"  Agregando por (item, embalagem) usando média ponderada dos valores de ano_mes...")
+            df_custo_agg = custos_por_ano_mes.groupby(['item', 'embalagem']).agg({
+                'volume_ano_mes': 'sum',
+                'custo_total_ano_mes': 'sum',
+                'descricao_item': 'first',
+                'ano_mes': 'count'  # Número de meses com dados
+            }).reset_index()
+            df_custo_agg.columns = ['item', 'embalagem', 'volume_total', 'custo_total', 'descricao_item', 'num_meses']
+            
+            # Calcular custo final ponderado por volume total
+            df_custo_agg['custo_ytd'] = df_custo_agg['custo_total'] / df_custo_agg['volume_total']
+            df_custo_agg['item_id'] = df_custo_agg['item'].astype(str) + '_' + df_custo_agg['embalagem']
+            
+            antes_agregacao = len(df_custo)
+            df_custo = df_custo_agg[['item_id', 'item', 'embalagem', 'custo_ytd']]
+            removidos_duplicatas = antes_agregacao - len(df_custo)
+            if removidos_duplicatas > 0:
+                self.logger.info(f"  Registros duplicados agregados: {removidos_duplicatas:,} (usando média ponderada por volume)")
+                if meses_janela > 1:
+                    self.logger.info(f"  Agregação inclui dados de {meses_janela} meses (média ponderada por ano_mes, depois média ponderada por item_id)")
+            
+        else:
+            # Leitura de CSV (comportamento original)
+            df_custo = pd.read_csv(path)
+            
+            # Extrair codigo do item
+            col_item_desc = None
+            for col in df_custo.columns:
+                if 'item' in col.lower() and 'descri' in col.lower():
+                    col_item_desc = col
+                    break
+            
+            if col_item_desc is None:
+                col_item_desc = df_custo.columns[0]
+            
+            df_custo['item'] = pd.to_numeric(
+                df_custo[col_item_desc].str.extract(r'^(\d+)')[0],
+                errors='coerce'
+            )
+            
+            # Converter custo (formato CSV)
+            def parse_currency(valor):
+                if pd.isna(valor):
+                    return np.nan
+                limpo = str(valor).replace('R$', '').replace('.', '').replace(',', '.').strip()
+                try:
+                    return float(limpo) if limpo else np.nan
+                except:
+                    return np.nan
+            
+            col_custo = None
+            for col in df_custo.columns:
+                if 'custo' in col.lower() and 'ytd' in col.lower():
+                    col_custo = col
+                    break
+            
+            if col_custo:
+                df_custo['custo_ytd'] = df_custo[col_custo].apply(parse_currency)
+            else:
+                # Se nao encontrar custo_ytd, tentar "Custo Médio"
+                if 'Custo Médio' in df_custo.columns:
+                    df_custo['custo_ytd'] = df_custo['Custo Médio']
+                else:
+                    raise ValueError("Coluna de custo nao encontrada no arquivo CSV")
         
-        df_custo['item'] = pd.to_numeric(
-            df_custo[col_item_desc].str.extract(r'^(\d+)')[0],
-            errors='coerce'
-        )
+        # Para CSV, extrair embalagem da descricao (Parquet ja foi processado acima)
+        if not is_parquet:
+            df_custo['embalagem'] = df_custo[col_item_desc].apply(extrair_embalagem_descricao)
         
-        # Extrair embalagem da descricao (o custo ja inclui a embalagem)
-        df_custo['embalagem'] = df_custo[col_item_desc].apply(extrair_embalagem_descricao)
-        
-        # Converter custo
-        def parse_currency(valor):
-            if pd.isna(valor):
-                return np.nan
-            limpo = str(valor).replace('R$', '').replace('.', '').replace(',', '.').strip()
-            try:
-                return float(limpo) if limpo else np.nan
-            except:
-                return np.nan
-        
-        col_custo = None
-        for col in df_custo.columns:
-            if 'custo' in col.lower() and 'ytd' in col.lower():
-                col_custo = col
-                break
-        
-        df_custo['custo_ytd'] = df_custo[col_custo].apply(parse_currency)
+        # Filtrar valores negativos de custo
+        antes_filtro_negativo = len(df_custo)
+        df_custo = df_custo[df_custo['custo_ytd'] > 0].copy()
+        removidos_negativos = antes_filtro_negativo - len(df_custo)
+        if removidos_negativos > 0:
+            self.logger.info(f"  Registros com custo negativo removidos: {removidos_negativos:,}")
         
         # Filtrar apenas registros com item, embalagem e custo validos
         df_custo = df_custo[
@@ -320,12 +455,22 @@ class ModeloOtimizacaoComRealocacao:
         ]
         df_custo['item'] = df_custo['item'].astype(int)
         
-        #  Criar item_id unico (codigo_item + embalagem)
-        # Cada linha do CUSTO ITEM.csv ja e uma combinacao unica (SKU + Embalagem)
-        df_custo['item_id'] = df_custo['item'].astype(str) + '_' + df_custo['embalagem']
-        
-        # Remover duplicatas por item_id - manter o primeiro
-        df_custo = df_custo[['item_id', 'item', 'embalagem', 'custo_ytd']].drop_duplicates(['item_id'])
+        # Criar item_id unico (codigo_item + embalagem) - apenas para CSV (Parquet ja tem)
+        if not is_parquet:
+            df_custo['item_id'] = df_custo['item'].astype(str) + '_' + df_custo['embalagem']
+            
+            # Agregar duplicatas por item_id usando media do custo (CSV)
+            antes_agregacao = len(df_custo)
+            df_custo_agg = df_custo.groupby('item_id').agg({
+                'item': 'first',
+                'embalagem': 'first',
+                'custo_ytd': 'mean'
+            }).reset_index()
+            removidos_duplicatas = antes_agregacao - len(df_custo_agg)
+            if removidos_duplicatas > 0:
+                self.logger.info(f"  Registros duplicados agregados: {removidos_duplicatas:,} (usando media do custo)")
+            
+            df_custo = df_custo_agg
         
         self.logger.info(f"  Itens unicos (item_id) com custo: {len(df_custo)}")
         self.logger.info(f"  SKUs unicos (codigo) com custo: {df_custo['item'].nunique()}")
@@ -336,15 +481,38 @@ class ModeloOtimizacaoComRealocacao:
         self.logger.info(f"  Embalagens unicas: {embalagens_unicas}")
         
         # Mostrar exemplos de combinacoes sem embalagem extraida (para debug)
-        if df_custo['embalagem'].isna().any():
+        if 'embalagem' in df_custo.columns and df_custo['embalagem'].isna().any():
             sem_embalagem = df_custo[df_custo['embalagem'].isna()]
             self.logger.warning(f"  [AVISO] {len(sem_embalagem)} registros sem embalagem extraida (serao removidos)")
-            if len(sem_embalagem) > 0:
+            if len(sem_embalagem) > 0 and col_item_desc in df_custo.columns:
                 self.logger.warning(f"  Exemplos de descricoes sem embalagem:")
                 for desc in sem_embalagem[col_item_desc].head(3):
                     self.logger.warning(f"    - {desc}")
         
-        self.dados['custos'] = df_custo[['item_id', 'item', 'embalagem', 'custo_ytd']]
+        # Preparar dados finais para salvar
+        df_custo_final = df_custo[['item_id', 'item', 'embalagem', 'custo_ytd']].copy()
+        
+        # Salvar custos processados em Excel (similar ao arquivo de preços)
+        output_path_custos = Path("inputs/custos_sku_embalagem.xlsx")
+        output_path_custos.parent.mkdir(exist_ok=True)
+        
+        try:
+            df_custo_final.to_excel(output_path_custos, index=False, engine='openpyxl')
+            self.logger.info(f"  Custos processados salvos: {output_path_custos}")
+        except ImportError:
+            self.logger.warning(f"  [AVISO] openpyxl nao instalado. Nao foi possivel salvar Excel.")
+            # Salvar como CSV como fallback
+            output_path_custos_csv = Path("inputs/custos_sku_embalagem.csv")
+            df_custo_final.to_csv(output_path_custos_csv, index=False, encoding='utf-8')
+            self.logger.info(f"  Custos processados salvos como CSV: {output_path_custos_csv}")
+        except Exception as e:
+            self.logger.warning(f"  [AVISO] Erro ao salvar custos em Excel: {e}")
+            # Salvar como CSV como fallback
+            output_path_custos_csv = Path("inputs/custos_sku_embalagem.csv")
+            df_custo_final.to_csv(output_path_custos_csv, index=False, encoding='utf-8')
+            self.logger.info(f"  Custos processados salvos como CSV: {output_path_custos_csv}")
+        
+        self.dados['custos'] = df_custo_final
     
     def _carregar_demanda_historica(self):
         """Carrega demanda historica por SKU para restricoes de viabilidade."""
@@ -396,7 +564,10 @@ class ModeloOtimizacaoComRealocacao:
                 else:
                     self.logger.warning("  Coluna 'Estab' nao encontrada para filtro de granjas.")
             
-            # Corrigir unidades da quantidade de items (de caixas de 360 ovos para unidades)            
+            # Corrigir unidades da quantidade de items (de caixas de 360 ovos para unidades)
+            # TODO: CORRIGIR - Esta multiplicacao por 360 assume que todas as caixas tem 360 ovos,
+            # mas existem outros tipos de embalagem (ex: CX 12 BJ 30 UN = 360, CX 24 BJ 10 UN = 240).
+            # Deve usar a coluna 'CONV. P OVO' do faturamento ou calcular baseado na embalagem do item.
             df_fat[col_qtd] = df_fat[col_qtd] * 360
             
             # Converter data
@@ -552,7 +723,19 @@ class ModeloOtimizacaoComRealocacao:
             df_base['preco'] = df_base['preco'].fillna(preco_medio_geral)
             self.logger.warning(f"  {df_base['preco'].isna().sum()} item_id sem preco - usando preco medio")
         
-        # Calcular margem unitaria
+        # Calcular quantidade de ovos por caixa para cada item_id
+        # Necessario para converter quantidade (em ovos) para caixas nos calculos financeiros
+        from extrair_compatibilidade_embalagem import calcular_qtd_embalagem
+        df_base['qtd_ovos_por_caixa'] = df_base['embalagem'].apply(calcular_qtd_embalagem)
+        
+        # Validar que todos tem qtd_ovos_por_caixa calculada
+        if df_base['qtd_ovos_por_caixa'].isna().any():
+            sem_qtd = df_base[df_base['qtd_ovos_por_caixa'].isna()]
+            self.logger.warning(f"  [AVISO] {len(sem_qtd)} item_id sem quantidade de ovos por caixa calculada")
+            self.logger.warning("  Removendo esses item_id da otimizacao")
+            df_base = df_base[df_base['qtd_ovos_por_caixa'].notna()].copy()
+        
+        # Calcular margem unitaria (em R$/CAIXA)
         df_base['margem_unitaria'] = df_base['preco'] - df_base['custo_ytd']
         
         # Filtrar combinacoes validas (margem positiva e preco valido)
@@ -662,7 +845,17 @@ class ModeloOtimizacaoComRealocacao:
         })
         potencial_classe.columns = ['num_item_id', 'num_skus', 'producao_disponivel', 'margem_min', 'margem_max', 'margem_media']
         potencial_classe['diff_margem'] = potencial_classe['margem_max'] - potencial_classe['margem_min']
-        potencial_classe['potencial_ganho'] = potencial_classe['diff_margem'] * potencial_classe['producao_disponivel'] * 0.03
+        # Converter producao de ovos para caixas antes de calcular potencial
+        # diff_margem esta em R$/CAIXA, producao_disponivel esta em OVOS
+        # Calcular quantidade media de ovos por caixa por classe
+        for classe in potencial_classe.index:
+            item_ids_classe = df_base[df_base['classe'] == classe]
+            if len(item_ids_classe) > 0:
+                qtd_ovos_por_caixa_media = item_ids_classe['qtd_ovos_por_caixa'].mean()
+                producao_caixas = potencial_classe.loc[classe, 'producao_disponivel'] / qtd_ovos_por_caixa_media
+                potencial_classe.loc[classe, 'potencial_ganho'] = potencial_classe.loc[classe, 'diff_margem'] * producao_caixas * 0.03
+            else:
+                potencial_classe.loc[classe, 'potencial_ganho'] = 0
         potencial_classe = potencial_classe.sort_values('potencial_ganho', ascending=False)
         
         self.logger.info(f"\n  Classes com maior potencial de ganho:")
@@ -946,19 +1139,27 @@ class ModeloOtimizacaoComRealocacao:
             for _, row in df_pedidos_sku.iterrows():
                 item = row['item']
                 if item in self.variaveis_pedidos:
-                    if tipo_objetivo == 'maximizar_margem':
-                        # Buscar margem unitaria do item (usar primeira embalagem disponivel)
-                        margem_item = df_base[df_base['item'] == item]['margem_unitaria'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
-                        objetivo_pedidos += margem_item * self.variaveis_pedidos[item]
-                    else:  # minimizar_custos
-                        # Buscar custo unitario do item
-                        custo_item = df_base[df_base['item'] == item]['custo_ytd'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 0
-                        objetivo_pedidos += custo_item * self.variaveis_pedidos[item]
+                    item_ids_do_sku = df_base[df_base['item'] == item]
+                    if len(item_ids_do_sku) > 0:
+                        # Converter quantidade de ovos para caixas
+                        qtd_ovos_por_caixa_item = item_ids_do_sku['qtd_ovos_por_caixa'].iloc[0]
+                        qtd_caixas_pedido = self.variaveis_pedidos[item] / qtd_ovos_por_caixa_item
+                        
+                        if tipo_objetivo == 'maximizar_margem':
+                            # Buscar margem unitaria do item (usar primeira embalagem disponivel)
+                            margem_item = item_ids_do_sku['margem_unitaria'].iloc[0]
+                            objetivo_pedidos += margem_item * qtd_caixas_pedido
+                        else:  # minimizar_custos
+                            # Buscar custo unitario do item
+                            custo_item = item_ids_do_sku['custo_ytd'].iloc[0]
+                            objetivo_pedidos += custo_item * qtd_caixas_pedido
         
         #  Objetivo da otimizacao no excedente (usando item_id)
+        # IMPORTANTE: Converter quantidade de ovos para caixas antes de multiplicar pela margem
+        # margem_unitaria esta em R$/CAIXA, variaveis estao em OVOS
         if tipo_objetivo == 'maximizar_margem':
             objetivo_excedente = sum(
-                row['margem_unitaria'] * self.variaveis.get(row['item_id'], 0)
+                row['margem_unitaria'] * (self.variaveis.get(row['item_id'], 0) / row['qtd_ovos_por_caixa'])
                 for _, row in df_base.iterrows()
                 if row['item_id'] in self.variaveis
             )
@@ -966,17 +1167,19 @@ class ModeloOtimizacaoComRealocacao:
             # Para minimizar custos, adicionar um termo que desencoraja alocacoes zero
             # Usamos um peso muito pequeno (negativo) para "recompensar" alocacoes
             # Isso evita solucao trivial (zero) sem criar conflitos de restricoes
+            # IMPORTANTE: Converter quantidade de ovos para caixas antes de multiplicar pelo custo
+            # custo_ytd esta em R$/CAIXA, variaveis estao em OVOS
             custo_total = sum(
-                row['custo_ytd'] * self.variaveis.get(row['item_id'], 0)
+                row['custo_ytd'] * (self.variaveis.get(row['item_id'], 0) / row['qtd_ovos_por_caixa'])
                 for _, row in df_base.iterrows()
                 if row['item_id'] in self.variaveis
             )
             
             # Termo de "recompensa" por alocacao (peso muito pequeno para nao interferir na minimizacao de custos)
-            # Usamos um valor negativo pequeno multiplicado pela quantidade total alocada
+            # Usamos um valor negativo pequeno multiplicado pela quantidade total alocada (em caixas)
             # Isso faz com que o modelo prefira alocar algo em vez de zero
             quantidade_total = sum(
-                self.variaveis.get(row['item_id'], 0)
+                (self.variaveis.get(row['item_id'], 0) / row['qtd_ovos_por_caixa'])
                 for _, row in df_base.iterrows()
                 if row['item_id'] in self.variaveis
             )
@@ -1019,9 +1222,12 @@ class ModeloOtimizacaoComRealocacao:
                     
                     margem_item = item_ids_do_sku['margem_unitaria'].iloc[0] if len(item_ids_do_sku) > 0 else 0
                     custo_item = item_ids_do_sku['custo_ytd'].iloc[0] if len(item_ids_do_sku) > 0 else 0
+                    # Converter quantidade de ovos para caixas
+                    qtd_ovos_por_caixa_item = item_ids_do_sku['qtd_ovos_por_caixa'].iloc[0] if len(item_ids_do_sku) > 0 else 360
+                    qtd_caixas_atendivel = qtd_atendivel / qtd_ovos_por_caixa_item
                     
-                    margem_potencial_pedidos += margem_item * qtd_atendivel
-                    custo_potencial_pedidos += custo_item * qtd_atendivel
+                    margem_potencial_pedidos += margem_item * qtd_caixas_atendivel
+                    custo_potencial_pedidos += custo_item * qtd_caixas_atendivel
         
         #  Calcular metricas da otimizacao (usando producao disponivel)
         # A producao e por classe, entao usamos a producao disponivel para otimizacao
@@ -1038,8 +1244,11 @@ class ModeloOtimizacaoComRealocacao:
                 producao_classe = item_ids_classe['producao_disponivel_otimizacao_classe'].iloc[0]
                 margem_media_classe = item_ids_classe['margem_unitaria'].mean()
                 custo_medio_classe = item_ids_classe['custo_ytd'].mean()
-                margem_potencial_otimizacao += margem_media_classe * producao_classe
-                custo_potencial_otimizacao += custo_medio_classe * producao_classe
+                # Converter producao de ovos para caixas
+                qtd_ovos_por_caixa_media_classe = item_ids_classe['qtd_ovos_por_caixa'].mean()
+                qtd_caixas_producao_classe = producao_classe / qtd_ovos_por_caixa_media_classe
+                margem_potencial_otimizacao += margem_media_classe * qtd_caixas_producao_classe
+                custo_potencial_otimizacao += custo_medio_classe * qtd_caixas_producao_classe
         
         margem_potencial_total = margem_potencial_pedidos + margem_potencial_otimizacao
         custo_potencial_total = custo_potencial_pedidos + custo_potencial_otimizacao
@@ -1115,12 +1324,17 @@ class ModeloOtimizacaoComRealocacao:
                         restricao_quantidade = min(limite_classe, float(demanda_max))
                         if restricao_quantidade < limite_classe:
                             restricao_tipo = 'DEMANDA_HISTORICA'
+                    # Converter quantidade de ovos para caixas para calculos financeiros
+                    # qtd esta em OVOS, preco/custo/margem estao em R$/CAIXA
+                    qtd_caixas = qtd / row['qtd_ovos_por_caixa']
+                    
                     resultados.append({
                         'item_id': item_id,
                         'item': row['item'],
                         'embalagem': row['embalagem'],
                         'classe': row['classe'],
-                        'quantidade': qtd,
+                        'quantidade': qtd,  # Manter em ovos para referencia
+                        'quantidade_caixas': qtd_caixas,  # Adicionar coluna em caixas
                         'tipo': tipo_alocacao,
                         'tipo_restricao': restricao_tipo,
                         'quantidade_restricao': restricao_quantidade,
@@ -1129,9 +1343,9 @@ class ModeloOtimizacaoComRealocacao:
                         'preco': row['preco'],
                         'custo_ytd': row['custo_ytd'],
                         'margem_unitaria': row['margem_unitaria'],
-                        'receita_total': qtd * row['preco'],
-                        'custo_total': qtd * row['custo_ytd'],
-                        'margem_total': qtd * row['margem_unitaria']
+                        'receita_total': qtd_caixas * row['preco'],  # CAIXAS × R$/CAIXA
+                        'custo_total': qtd_caixas * row['custo_ytd'],  # CAIXAS × R$/CAIXA
+                        'margem_total': qtd_caixas * row['margem_unitaria']  # CAIXAS × R$/CAIXA
                     })
         
         # Resultados dos pedidos atendidos
@@ -1150,11 +1364,18 @@ class ModeloOtimizacaoComRealocacao:
                             limite_pedido = row_pedido['quantidade_total_pedida']
                             quantidade_restricao = min(limite_pedido, producao_disponivel_classe)
                             tipo_restricao = 'PEDIDO' if limite_pedido <= producao_disponivel_classe else 'PRODUCAO_CLASSE'
+                            # Converter quantidade de ovos para caixas para calculos financeiros
+                            # qtd_atendida esta em OVOS, preco/custo/margem estao em R$/CAIXA
+                            # Usar primeira embalagem disponivel do item para conversao
+                            qtd_ovos_por_caixa_pedido = row['qtd_ovos_por_caixa'] if 'qtd_ovos_por_caixa' in row else df_base[df_base['item'] == item]['qtd_ovos_por_caixa'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 360
+                            qtd_caixas_pedido = qtd_atendida / qtd_ovos_por_caixa_pedido
+                            
                             resultados.append({
                                 'item': item,
                                 'embalagem': 'PEDIDO',  # Pedidos nao especificam embalagem
                                 'classe': row['classe'],
-                                'quantidade': qtd_atendida,
+                                'quantidade': qtd_atendida,  # Manter em ovos
+                                'quantidade_caixas': qtd_caixas_pedido,  # Adicionar coluna em caixas
                                 'tipo': 'PEDIDO',
                                 'tipo_restricao': tipo_restricao,
                                 'quantidade_restricao': quantidade_restricao,
@@ -1164,9 +1385,9 @@ class ModeloOtimizacaoComRealocacao:
                                 'preco': row['preco'],
                                 'custo_ytd': row['custo_ytd'],
                                 'margem_unitaria': row['margem_unitaria'],
-                                'receita_total': qtd_atendida * row['preco'],
-                                'custo_total': qtd_atendida * row['custo_ytd'],
-                                'margem_total': qtd_atendida * row['margem_unitaria']
+                                'receita_total': qtd_caixas_pedido * row['preco'],  # CAIXAS × R$/CAIXA
+                                'custo_total': qtd_caixas_pedido * row['custo_ytd'],  # CAIXAS × R$/CAIXA
+                                'margem_total': qtd_caixas_pedido * row['margem_unitaria']  # CAIXAS × R$/CAIXA
                             })
         
         self.resultado = pd.DataFrame(resultados)
@@ -1174,7 +1395,7 @@ class ModeloOtimizacaoComRealocacao:
         # Garantir que coluna 'classe' existe mesmo se resultado estiver vazio
         # (necessario para evitar erro no groupby('classe') em salvar_resultados)
         if len(self.resultado) == 0:
-            self.resultado = pd.DataFrame(columns=['item_id', 'item', 'embalagem', 'classe', 'quantidade', 'tipo', 
+            self.resultado = pd.DataFrame(columns=['item_id', 'item', 'embalagem', 'classe', 'quantidade', 'quantidade_caixas', 'tipo', 
                                                    'tipo_restricao', 'quantidade_restricao',
                                                    'producao_total', 'producao_disponivel', 'preco', 
                                                    'custo_ytd', 'margem_unitaria', 'receita_total', 
@@ -1257,11 +1478,17 @@ class ModeloOtimizacaoComRealocacao:
             
             # Usar media das margens e custos dos item_id disponiveis como baseline
             # Baseline assume distribuicao uniforme (nao otimizada)
+            # IMPORTANTE: Converter producao de ovos para caixas antes de multiplicar
+            # qtd_producao esta em OVOS, margem_media/custo_medio estao em R$/CAIXA
             margem_media = item_ids_classe['margem_unitaria'].mean()
             custo_medio = item_ids_classe['custo_ytd'].mean()
             
-            margem_baseline += qtd_producao * margem_media
-            custo_baseline += qtd_producao * custo_medio
+            # Calcular quantidade media de ovos por caixa para a classe (media ponderada)
+            qtd_ovos_por_caixa_media = item_ids_classe['qtd_ovos_por_caixa'].mean()
+            qtd_caixas_producao = qtd_producao / qtd_ovos_por_caixa_media
+            
+            margem_baseline += qtd_caixas_producao * margem_media
+            custo_baseline += qtd_caixas_producao * custo_medio
         
         # Calcular ganhos/reducoes
         ganho_margem = margem_otimizada - margem_baseline
@@ -1353,14 +1580,23 @@ class ModeloOtimizacaoComRealocacao:
         
         resumo_classe = self.resultado.groupby('classe').agg(colunas_agregacao).reset_index()
         
-        # Renomear colunas
-        colunas_finais = ['classe', 'num_skus', 'quantidade_alocada', 'margem_total']
-        if 'producao_total' in resumo_classe.columns:
-            colunas_finais.insert(-1, 'producao_total')
-        if 'producao_disponivel' in resumo_classe.columns:
-            colunas_finais.insert(-1, 'producao_disponivel')
+        # Renomear colunas na ordem correta
+        # Ordem apos groupby: ['classe', 'item', 'quantidade', 'margem_total', 'producao_total', 'producao_disponivel']
+        renomear_colunas = {
+            'item': 'num_skus',
+            'quantidade': 'quantidade_alocada'
+        }
+        resumo_classe = resumo_classe.rename(columns=renomear_colunas)
         
-        resumo_classe.columns = colunas_finais
+        # Reordenar colunas na ordem desejada
+        colunas_ordenadas = ['classe', 'num_skus', 'quantidade_alocada']
+        if 'producao_total' in resumo_classe.columns:
+            colunas_ordenadas.append('producao_total')
+        if 'producao_disponivel' in resumo_classe.columns:
+            colunas_ordenadas.append('producao_disponivel')
+        colunas_ordenadas.append('margem_total')
+        
+        resumo_classe = resumo_classe[colunas_ordenadas]
         
         arquivo_resumo_csv = output_dir / f'resumo_por_classe_{modo_sufixo}_{timestamp}.csv'
         resumo_classe.to_csv(arquivo_resumo_csv, index=False, encoding='utf-8')
@@ -1406,7 +1642,12 @@ class ModeloOtimizacaoComRealocacao:
         df_pedidos_sku = self.dados.get('pedidos_por_sku', pd.DataFrame(columns=['item', 'quantidade_total_pedida']))
         
         total_producao = df_producao['producao_total'].sum()
-        total_pedido = df_pedidos_sku['quantidade_total_pedida'].sum() if len(df_pedidos_sku) > 0 else 0
+        atender_pedidos = self.dados.get('atender_pedidos', True)
+        # Se atender_pedidos=false, mostrar 0 nos pedidos (ou nao considerar pedidos)
+        if atender_pedidos and len(df_pedidos_sku) > 0:
+            total_pedido = df_pedidos_sku['quantidade_total_pedida'].sum()
+        else:
+            total_pedido = 0
         producao_excedente_por_classe = self.dados.get('producao_excedente_por_classe', pd.Series())
         total_excedente = producao_excedente_por_classe.sum() if len(producao_excedente_por_classe) > 0 else total_producao
         

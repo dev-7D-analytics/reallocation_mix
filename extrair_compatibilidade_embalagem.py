@@ -84,6 +84,24 @@ def extrair_embalagem_descricao(descricao: str) -> str:
         num_un = match.group(2)
         return f"CX {num_bj} BJ {num_un} UN"
     
+    # Padrão 4b: CX COM[número] BJ DE [número] UN (COM sem espaço)
+    # Ex: "CX COM12 BJ DE 30 UN"
+    padrao4b = r'CX\s+COM(\d+)\s+BJ\s+DE\s+(\d+)(?:\s+UN)?'
+    match = re.search(padrao4b, desc_upper)
+    if match:
+        num_bj = match.group(1)
+        num_un = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+    
+    # Padrão 4c: CX COM[número] BJ [número] UN (COM sem espaço, sem DE)
+    # Ex: "CX COM12 BJ 30 UN"
+    padrao4c = r'CX\s+COM(\d+)\s+BJ\s+(\d+)(?:\s+UN)?'
+    match = re.search(padrao4c, desc_upper)
+    if match:
+        num_bj = match.group(1)
+        num_un = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+    
     # Padrão 5: CX [número] BJ (sem UN, tentar encontrar UN depois)
     padrao5 = r'CX\s+(?:COM\s+)?(\d+)\s+BJ'
     match5 = re.search(padrao5, desc_upper)
@@ -98,6 +116,37 @@ def extrair_embalagem_descricao(descricao: str) -> str:
         else:
             # Se não encontrou UN, retornar apenas CX BJ (mas não será válido)
             return None
+    
+    # Padrão 6: [número] BJ [número] UN (sem CX no início)
+    # Ex: "20 BJ 30 UN" -> "CX 20 BJ 30 UN"
+    # Só aplicar se não encontrou nenhum padrão com CX antes
+    if 'CX' not in desc_upper:
+        padrao6 = r'(\d+)\s+BJ\s+(\d+)(?:\s+UN)?'
+        match = re.search(padrao6, desc_upper)
+        if match:
+            num_bj = match.group(1)
+            num_un = match.group(2)
+            return f"CX {num_bj} BJ {num_un} UN"
+    
+    # Padrão 6b: [número]BJ [número]UN (sem espaços, sem CX)
+    # Ex: "20BJ 30UN" -> "CX 20 BJ 30 UN"
+    if 'CX' not in desc_upper:
+        padrao6b = r'(\d+)BJ\s+(\d+)UN'
+        match = re.search(padrao6b, desc_upper)
+        if match:
+            num_bj = match.group(1)
+            num_un = match.group(2)
+            return f"CX {num_bj} BJ {num_un} UN"
+    
+    # Padrão 6c: [número] BJ DE [número] UN (sem CX)
+    # Ex: "20 BJ DE 30 UN" -> "CX 20 BJ 30 UN"
+    if 'CX' not in desc_upper:
+        padrao6c = r'(\d+)\s+BJ\s+DE\s+(\d+)(?:\s+UN)?'
+        match = re.search(padrao6c, desc_upper)
+        if match:
+            num_bj = match.group(1)
+            num_un = match.group(2)
+            return f"CX {num_bj} BJ {num_un} UN"
     
     # Se não encontrou padrão, retornar None
     return None
