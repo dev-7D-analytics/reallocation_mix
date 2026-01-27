@@ -1056,10 +1056,16 @@ class ModeloOtimizacaoComRealocacao:
         num_restricoes_item_id = 0
         num_restricoes_demanda = 0
         
-        #  Aplicar restricao de demanda historica por item_id
+        #  Aplicar restricao de demanda historica por SKU (soma de todas embalagens)
+        # CORRECAO [D]: Restricao deve ser por SKU (soma de todas embalagens), nao por item_id individual
         # Se nao houver demanda historica, o limite e a producao da classe (ja na restricao 2)
         if considerar_demanda and len(df_demanda) > 0:
-            # Mapear demanda por item (codigo SKU) para item_id
+            # Agrupar item_id por SKU (item) para aplicar restricao somada
+            # Criar dicionario: item -> lista de item_id desse SKU
+            skus_com_demanda = {}
+            demanda_por_sku = df_demanda.set_index('item')['demanda_max'].to_dict()
+            
+            # Agrupar item_id por SKU
             for _, row in df_base.iterrows():
                 item_id = row['item_id']
                 item = row['item']
@@ -1067,23 +1073,28 @@ class ModeloOtimizacaoComRealocacao:
                 if item_id not in self.variaveis:
                     continue
                 
-                # Buscar demanda historica do SKU (codigo)
-                demanda_sku = df_demanda[df_demanda['item'] == item]['demanda_max']
-                
-                if len(demanda_sku) > 0:
-                    limite_demanda = float(demanda_sku.iloc[0])
-                    # Aplicar restricao: alocacao do item_id nao pode exceder demanda historica
-                    self.solver.Add(self.variaveis[item_id] <= limite_demanda)
+                if item not in skus_com_demanda:
+                    skus_com_demanda[item] = []
+                skus_com_demanda[item].append(item_id)
+            
+            # Aplicar restricao somada por SKU
+            for item, item_ids_do_sku in skus_com_demanda.items():
+                if item in demanda_por_sku:
+                    limite_demanda = float(demanda_por_sku[item])
+                    # CORRECAO [D]: Soma de todas embalagens do SKU <= demanda_max
+                    # Criar expressao somando todas as variaveis de item_id desse SKU
+                    soma_embalagens = sum(self.variaveis[item_id] for item_id in item_ids_do_sku)
+                    self.solver.Add(soma_embalagens <= limite_demanda)
                     num_restricoes_demanda += 1
                     num_restricoes_item_id += 1
         
         num_restricoes += num_restricoes_item_id
         modo_desc = "excedente" if usar_apenas_excedente else "total"
         considerar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
-        demanda_desc = " (demanda historica)" if considerar_demanda else ""
+        demanda_desc = " (demanda historica por SKU)" if considerar_demanda else ""
         self.logger.info(f"  Restricoes de limite por item_id{demanda_desc}: {num_restricoes_item_id}")
         if considerar_demanda and num_restricoes_demanda > 0:
-            self.logger.info(f"    - Restricoes com demanda historica aplicada: {num_restricoes_demanda}")
+            self.logger.info(f"    - Restricoes com demanda historica aplicada (por SKU, soma embalagens): {num_restricoes_demanda}")
         
         # RESTRICAO 4: Forcar alocacao minima (especialmente importante para minimizar_custos)
         # Se o objetivo e minimizar custos, precisamos forcar alocacao para evitar solucao trivial (zero)
