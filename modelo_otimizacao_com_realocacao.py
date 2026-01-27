@@ -926,14 +926,14 @@ class ModeloOtimizacaoComRealocacao:
                 item = int(row['item'])
                 qtd_pedida = float(row['quantidade_total_pedida'])
                 
-                #  Calcular estoque disponivel do SKU (soma de todos os item_id do mesmo SKU)
-                # A producao e por classe, mas precisamos saber quanto do SKU esta disponivel
-                # Por enquanto, vamos usar a producao da classe como limite (sera ajustado nas restricoes)
+                #  Calcular limite do pedido usando producao_total da classe
+                # Usar producao_total (nao excedente) para evitar dependencia circular
+                # A restricao de classe garante que soma(pedidos + excedente) <= producao_total
                 item_ids_do_sku = df_base[df_base['item'] == item]
                 if len(item_ids_do_sku) > 0:
-                    # Usar producao da classe como limite superior (sera ajustado nas restricoes)
-                    producao_classe = float(item_ids_do_sku['producao_disponivel_otimizacao_classe'].iloc[0])
-                    limite_atendimento = min(qtd_pedida, producao_classe)
+                    # Usar producao_total da classe como limite superior (nao excedente)
+                    producao_total_classe = float(item_ids_do_sku['producao_total'].iloc[0])
+                    limite_atendimento = min(qtd_pedida, producao_total_classe)
                 else:
                     limite_atendimento = 0.0
                 
@@ -996,11 +996,12 @@ class ModeloOtimizacaoComRealocacao:
                 qtd_pedida = row['quantidade_total_pedida']
                 
                 if item in self.variaveis_pedidos:
-                    #  Atendimento nao pode exceder o pedido nem a producao disponivel da classe
+                    #  Atendimento nao pode exceder o pedido nem a producao_total da classe
+                    # Usar producao_total (nao excedente) para evitar dependencia circular
                     item_ids_do_sku = df_base[df_base['item'] == item]
                     if len(item_ids_do_sku) > 0:
-                        producao_classe = float(item_ids_do_sku['producao_disponivel_otimizacao_classe'].iloc[0])
-                        limite_atendimento = min(qtd_pedida, producao_classe)
+                        producao_total_classe = float(item_ids_do_sku['producao_total'].iloc[0])
+                        limite_atendimento = min(qtd_pedida, producao_total_classe)
                     else:
                         limite_atendimento = 0
                     
@@ -1402,10 +1403,11 @@ class ModeloOtimizacaoComRealocacao:
                         row_base = df_base[df_base['item'] == item]
                         if len(row_base) > 0:
                             row = row_base.iloc[0]
-                            producao_disponivel_classe = float(row['producao_disponivel_otimizacao_classe'])
+                            # Usar producao_total para consistencia (mesmo que na criacao da variavel)
+                            producao_total_classe = float(row['producao_total'])
                             limite_pedido = row_pedido['quantidade_total_pedida']
-                            quantidade_restricao = min(limite_pedido, producao_disponivel_classe)
-                            tipo_restricao = 'PEDIDO' if limite_pedido <= producao_disponivel_classe else 'PRODUCAO_CLASSE'
+                            quantidade_restricao = min(limite_pedido, producao_total_classe)
+                            tipo_restricao = 'PEDIDO' if limite_pedido <= producao_total_classe else 'PRODUCAO_CLASSE'
                             # Converter quantidade de ovos para caixas para calculos financeiros
                             # qtd_atendida esta em OVOS, preco/custo/margem estao em R$/CAIXA
                             # Usar primeira embalagem disponivel do item para conversao
