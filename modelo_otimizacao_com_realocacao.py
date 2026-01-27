@@ -986,6 +986,9 @@ class ModeloOtimizacaoComRealocacao:
         
         num_restricoes = 0
         
+        # Carregar df_classes para identificar TODOS os SKUs da classe (incluindo restritos)
+        df_classes = self.dados.get('classes', pd.DataFrame(columns=['item', 'classe']))
+        
         # RESTRICAO 1: Atendimento aos pedidos (apenas se atender_pedidos = True)
         atender_pedidos = self.dados.get('atender_pedidos', True)
         df_pedidos_sku = self.dados.get('pedidos_por_sku', pd.DataFrame(columns=['item', 'quantidade_total_pedida']))
@@ -1037,8 +1040,9 @@ class ModeloOtimizacaoComRealocacao:
             )
             
             # Soma de todos os PEDIDOS da classe (por SKU/item)
-            # Identificar quais SKUs pertencem a esta classe
-            items_da_classe = df_base[df_base['classe'] == classe]['item'].unique()
+            #  Usar df_classes em vez de df_base para identificar TODOS os SKUs da classe
+            # Isso garante que pedidos de SKUs restritos sejam incluidos na restricao
+            items_da_classe = df_classes[df_classes['classe'] == classe]['item'].unique()
             soma_pedidos_classe = sum(
                 self.variaveis_pedidos.get(item, 0)
                 for item in items_da_classe
