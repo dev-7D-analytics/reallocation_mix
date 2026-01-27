@@ -1150,17 +1150,39 @@ class ModeloOtimizacaoComRealocacao:
                 if item in self.variaveis_pedidos:
                     item_ids_do_sku = df_base[df_base['item'] == item]
                     if len(item_ids_do_sku) > 0:
-                        # Converter quantidade de ovos para caixas
-                        qtd_ovos_por_caixa_item = item_ids_do_sku['qtd_ovos_por_caixa'].iloc[0]
-                        qtd_caixas_pedido = self.variaveis_pedidos[item] / qtd_ovos_por_caixa_item
+                        # CORRECAO [E]: Usar embalagem que maximiza margem total para o pedido
+                        # Para pedidos em ovos, calcular qual embalagem da maior margem total
+                        # Usar quantidade pedida (valor numerico) para calcular melhor embalagem
+                        qtd_pedida_ovos = row['quantidade_total_pedida']
                         
                         if tipo_objetivo == 'maximizar_margem':
-                            # Buscar margem unitaria do item (usar primeira embalagem disponivel)
-                            margem_item = item_ids_do_sku['margem_unitaria'].iloc[0]
+                            # Calcular margem total para cada embalagem (assumindo pedido completo)
+                            # margem_total = (qtd_ovos / qtd_ovos_por_caixa) * margem_unitaria
+                            item_ids_do_sku_copy = item_ids_do_sku.copy()
+                            item_ids_do_sku_copy['margem_total_pedido'] = (
+                                qtd_pedida_ovos / item_ids_do_sku_copy['qtd_ovos_por_caixa']
+                            ) * item_ids_do_sku_copy['margem_unitaria']
+                            # Usar embalagem com maior margem total
+                            melhor_embalagem_idx = item_ids_do_sku_copy['margem_total_pedido'].idxmax()
+                            melhor_embalagem = item_ids_do_sku_copy.loc[melhor_embalagem_idx]
+                            qtd_ovos_por_caixa_item = melhor_embalagem['qtd_ovos_por_caixa']
+                            # Converter variavel do solver (em ovos) para caixas usando melhor embalagem
+                            qtd_caixas_pedido = self.variaveis_pedidos[item] / qtd_ovos_por_caixa_item
+                            margem_item = melhor_embalagem['margem_unitaria']
                             objetivo_pedidos += margem_item * qtd_caixas_pedido
                         else:  # minimizar_custos
-                            # Buscar custo unitario do item
-                            custo_item = item_ids_do_sku['custo_ytd'].iloc[0]
+                            # Para minimizar custos, usar embalagem com menor custo total
+                            item_ids_do_sku_copy = item_ids_do_sku.copy()
+                            item_ids_do_sku_copy['custo_total_pedido'] = (
+                                qtd_pedida_ovos / item_ids_do_sku_copy['qtd_ovos_por_caixa']
+                            ) * item_ids_do_sku_copy['custo_ytd']
+                            # Usar embalagem com menor custo total
+                            melhor_embalagem_idx = item_ids_do_sku_copy['custo_total_pedido'].idxmin()
+                            melhor_embalagem = item_ids_do_sku_copy.loc[melhor_embalagem_idx]
+                            qtd_ovos_por_caixa_item = melhor_embalagem['qtd_ovos_por_caixa']
+                            # Converter variavel do solver (em ovos) para caixas usando melhor embalagem
+                            qtd_caixas_pedido = self.variaveis_pedidos[item] / qtd_ovos_por_caixa_item
+                            custo_item = melhor_embalagem['custo_ytd']
                             objetivo_pedidos += custo_item * qtd_caixas_pedido
         
         #  Objetivo da otimizacao no excedente (usando item_id)
