@@ -1015,7 +1015,7 @@ class ModeloOtimizacaoComRealocacao:
             self.logger.info(f"  Restricoes de atendimento aos pedidos: 0 (pedidos ignorados)")
         
         # RESTRICAO 2: Volume total por CLASSE <= producao disponivel da classe
-        # CORRECAO [A]: Pedidos devem consumir producao da classe
+        #  Pedidos devem consumir producao da classe
         # Esta restricao garante que: soma(pedidos + excedente) <= producao_total
         # Esta e a restricao que permite realocacao entre item_id da mesma classe!
         usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
@@ -1048,7 +1048,7 @@ class ModeloOtimizacaoComRealocacao:
             # Producao total da classe (fixo, nao depende de pedidos)
             producao_total_classe = df_base[df_base['classe'] == classe]['producao_total'].iloc[0] if len(df_base[df_base['classe'] == classe]) > 0 else 0
             
-            # CORRECAO [A]: Restricao deve garantir que pedidos + excedente <= producao_total
+            #  Restricao deve garantir que pedidos + excedente <= producao_total
             # Esta restricao garante que a producao total da classe nunca e excedida
             if producao_total_classe > 0:
                 # Restricao completa: pedidos + excedente <= producao_total
@@ -1093,7 +1093,7 @@ class ModeloOtimizacaoComRealocacao:
                 skus_com_demanda[item].append(item_id)
             
             # Aplicar restricao somada por SKU
-            # CORRECAO [D]: Restricao deve incluir pedidos + excedente (soma de todas embalagens)
+            # Restricao deve incluir pedidos + excedente (soma de todas embalagens)
             for item, item_ids_do_sku in skus_com_demanda.items():
                 if item in demanda_por_sku:
                     limite_demanda = float(demanda_por_sku[item])
