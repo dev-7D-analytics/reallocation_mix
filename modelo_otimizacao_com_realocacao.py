@@ -1057,7 +1057,7 @@ class ModeloOtimizacaoComRealocacao:
         num_restricoes_demanda = 0
         
         #  Aplicar restricao de demanda historica por SKU (soma de todas embalagens)
-        # CORRECAO [D]: Restricao deve ser por SKU (soma de todas embalagens), nao por item_id individual
+        # Restricao deve ser por SKU (soma de todas embalagens), nao por item_id individual
         # Se nao houver demanda historica, o limite e a producao da classe (ja na restricao 2)
         if considerar_demanda and len(df_demanda) > 0:
             # Agrupar item_id por SKU (item) para aplicar restricao somada
@@ -1081,7 +1081,7 @@ class ModeloOtimizacaoComRealocacao:
             for item, item_ids_do_sku in skus_com_demanda.items():
                 if item in demanda_por_sku:
                     limite_demanda = float(demanda_por_sku[item])
-                    # CORRECAO [D]: Soma de todas embalagens do SKU <= demanda_max
+                    # Soma de todas embalagens do SKU <= demanda_max
                     # Criar expressao somando todas as variaveis de item_id desse SKU
                     soma_embalagens = sum(self.variaveis[item_id] for item_id in item_ids_do_sku)
                     self.solver.Add(soma_embalagens <= limite_demanda)
@@ -1161,7 +1161,7 @@ class ModeloOtimizacaoComRealocacao:
                 if item in self.variaveis_pedidos:
                     item_ids_do_sku = df_base[df_base['item'] == item]
                     if len(item_ids_do_sku) > 0:
-                        # CORRECAO [E]: Usar embalagem que maximiza margem total para o pedido
+                        # Usar embalagem que maximiza margem total para o pedido
                         # Para pedidos em ovos, calcular qual embalagem da maior margem total
                         # Usar quantidade pedida (valor numerico) para calcular melhor embalagem
                         qtd_pedida_ovos = row['quantidade_total_pedida']
