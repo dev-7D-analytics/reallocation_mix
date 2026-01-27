@@ -785,8 +785,15 @@ class ModeloOtimizacaoComRealocacao:
         # A producao e por classe, e precisa ser distribuida entre os item_id da classe
         
         # Calcular pedidos totais por classe (soma de todos os pedidos dos SKUs da classe)
+        # CORRECAO [C]: Calcular corretamente somando pedidos por SKU, depois agrupando por classe
+        # Evita duplicacao quando um SKU tem multiplas embalagens
         if len(df_pedidos_sku) > 0:
-            pedidos_por_classe = df_base.groupby('classe')['quantidade_total_pedida'].first().groupby(level=0).sum()
+            # Fazer merge de pedidos com classes para obter classe de cada SKU
+            pedidos_com_classe = df_pedidos_sku.merge(df_classes[['item', 'classe']], on='item', how='left')
+            # Filtrar apenas classes que tem producao
+            pedidos_com_classe = pedidos_com_classe[pedidos_com_classe['classe'].isin(df_producao['classe'])]
+            # Agrupar por classe e somar pedidos (cada SKU conta apenas uma vez)
+            pedidos_por_classe = pedidos_com_classe.groupby('classe')['quantidade_total_pedida'].sum()
         else:
             pedidos_por_classe = pd.Series(0, index=df_producao['classe'])
         
