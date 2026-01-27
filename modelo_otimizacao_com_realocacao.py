@@ -1015,6 +1015,8 @@ class ModeloOtimizacaoComRealocacao:
             self.logger.info(f"  Restricoes de atendimento aos pedidos: 0 (pedidos ignorados)")
         
         # RESTRICAO 2: Volume total por CLASSE <= producao disponivel da classe
+        # CORRECAO [A]: Pedidos devem consumir producao da classe
+        # Esta restricao garante que: soma(pedidos + excedente) <= producao_total
         # Esta e a restricao que permite realocacao entre item_id da mesma classe!
         usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
         classes = df_base['classe'].unique()
@@ -1027,18 +1029,30 @@ class ModeloOtimizacaoComRealocacao:
             if len(item_ids_classe) == 0:
                 continue
             
-            # Soma de todas as alocacoes da classe (por item_id)
-            soma_classe = sum(
+            # Soma de todas as alocacoes de EXCEDENTE da classe (por item_id)
+            soma_excedente_classe = sum(
                 self.variaveis.get(item_id, 0)
                 for item_id in item_ids_classe
                 if item_id in self.variaveis
             )
             
-            # Producao disponivel para otimizacao da classe
-            producao_disponivel_classe = df_base[df_base['classe'] == classe]['producao_disponivel_otimizacao_classe'].iloc[0] if len(df_base[df_base['classe'] == classe]) > 0 else 0
+            # Soma de todos os PEDIDOS da classe (por SKU/item)
+            # Identificar quais SKUs pertencem a esta classe
+            items_da_classe = df_base[df_base['classe'] == classe]['item'].unique()
+            soma_pedidos_classe = sum(
+                self.variaveis_pedidos.get(item, 0)
+                for item in items_da_classe
+                if item in self.variaveis_pedidos
+            )
             
-            if producao_disponivel_classe > 0:
-                self.solver.Add(soma_classe <= producao_disponivel_classe)
+            # Producao total da classe (fixo, nao depende de pedidos)
+            producao_total_classe = df_base[df_base['classe'] == classe]['producao_total'].iloc[0] if len(df_base[df_base['classe'] == classe]) > 0 else 0
+            
+            # CORRECAO [A]: Restricao deve garantir que pedidos + excedente <= producao_total
+            # Esta restricao garante que a producao total da classe nunca e excedida
+            if producao_total_classe > 0:
+                # Restricao completa: pedidos + excedente <= producao_total
+                self.solver.Add(soma_pedidos_classe + soma_excedente_classe <= producao_total_classe)
                 num_restricoes_classe += 1
         
         num_restricoes += num_restricoes_classe
@@ -1079,13 +1093,19 @@ class ModeloOtimizacaoComRealocacao:
                 skus_com_demanda[item].append(item_id)
             
             # Aplicar restricao somada por SKU
+            # CORRECAO [D]: Restricao deve incluir pedidos + excedente (soma de todas embalagens)
             for item, item_ids_do_sku in skus_com_demanda.items():
                 if item in demanda_por_sku:
                     limite_demanda = float(demanda_por_sku[item])
-                    # Soma de todas embalagens do SKU <= demanda_max
-                    # Criar expressao somando todas as variaveis de item_id desse SKU
-                    soma_embalagens = sum(self.variaveis[item_id] for item_id in item_ids_do_sku)
-                    self.solver.Add(soma_embalagens <= limite_demanda)
+                    # Soma de todas embalagens do SKU (excedente) <= demanda_max
+                    soma_embalagens_excedente = sum(self.variaveis[item_id] for item_id in item_ids_do_sku)
+                    
+                    # Incluir pedidos na restricao de demanda (se houver pedido para este SKU)
+                    pedido_do_sku = self.variaveis_pedidos.get(item, 0)
+                    
+                    # Restricao: excedente + pedidos <= demanda_max
+                    # Isso garante que a demanda historica seja respeitada mesmo com pedidos
+                    self.solver.Add(soma_embalagens_excedente + pedido_do_sku <= limite_demanda)
                     num_restricoes_demanda += 1
                     num_restricoes_item_id += 1
         
