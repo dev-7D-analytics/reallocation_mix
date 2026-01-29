@@ -494,10 +494,12 @@ def main():
     pedidos = _carregar_pedidos(config)
     skus_restritos = _carregar_skus_restritos(config)
     
-    # Tentar carregar demanda histórica e custo_medio_classe do resultado do modelo
+    # Tentar carregar demanda histórica, limite_demanda_historica, margem_por_ovo e custo_medio_classe do resultado do modelo
     # Usar o caminho já carregado em carregar_alocacao
     skus_com_demanda = set()
     custo_medio_classe_por_item_id = {}  # item_id -> True/False
+    limite_demanda_por_item = {}  # item -> limite_demanda_historica
+    margem_por_ovo_por_item = {}  # item -> margem_por_ovo (R$/ovo - métrica otimizada)
     try:
         df_aloc_completo = pd.read_csv(caminho_resultado)
         if 'tem_demanda_historica' in df_aloc_completo.columns and 'item' in df_aloc_completo.columns:
@@ -506,6 +508,16 @@ def main():
             df_aloc_completo = df_aloc_completo[df_aloc_completo['item'].notna()].copy()
             df_aloc_completo['item'] = df_aloc_completo['item'].astype(int)
             skus_com_demanda = set(df_aloc_completo[df_aloc_completo['tem_demanda_historica'] == True]['item'].unique())
+        
+        # Extrair limite_demanda_historica por item (SKU)
+        if 'limite_demanda_historica' in df_aloc_completo.columns and 'item' in df_aloc_completo.columns:
+            # Pegar o primeiro valor de limite_demanda_historica para cada SKU (deve ser o mesmo para todas as embalagens)
+            limite_demanda_por_item = df_aloc_completo.groupby('item')['limite_demanda_historica'].first().to_dict()
+        
+        # Extrair margem_por_ovo por item (SKU) - métrica otimizada pelo modelo
+        if 'margem_por_ovo' in df_aloc_completo.columns and 'item' in df_aloc_completo.columns:
+            # Pegar o primeiro valor de margem_por_ovo para cada SKU
+            margem_por_ovo_por_item = df_aloc_completo.groupby('item')['margem_por_ovo'].first().to_dict()
         
         # Extrair custo_medio_classe por item_id
         if 'custo_medio_classe' in df_aloc_completo.columns and 'item_id' in df_aloc_completo.columns:
@@ -780,7 +792,19 @@ def main():
     else:
         comparacao["tem_demanda_historica"] = False
     
-    # 5. custo_medio_classe: Custo foi calculado usando média da classe
+    # 4. limite_demanda_historica: Valor do limite de demanda histórica utilizado na restrição
+    if len(limite_demanda_por_item) > 0:
+        comparacao["limite_demanda_historica"] = comparacao["item"].map(limite_demanda_por_item)
+    else:
+        comparacao["limite_demanda_historica"] = None
+    
+    # 5. margem_por_ovo: Margem por ovo (R$/ovo) - métrica otimizada pelo modelo
+    if len(margem_por_ovo_por_item) > 0:
+        comparacao["margem_por_ovo"] = comparacao["item"].map(margem_por_ovo_por_item)
+    else:
+        comparacao["margem_por_ovo"] = None
+    
+    # 6. custo_medio_classe: Custo foi calculado usando média da classe
     if len(custo_medio_classe_por_item_id) > 0:
         comparacao["custo_medio_classe"] = comparacao["item_id"].map(custo_medio_classe_por_item_id).fillna(False)
     else:

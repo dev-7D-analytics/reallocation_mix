@@ -1781,11 +1781,13 @@ class ModeloOtimizacaoComRealocacao:
                         'tipo': tipo_alocacao,
                         'tipo_restricao': restricao_tipo,
                         'quantidade_restricao': restricao_quantidade,
+                        'limite_demanda_historica': demanda_max if demanda_max is not None else None,  # Limite calculado de demanda histórica
                         'producao_total': row['producao_total'],  # Producao da classe
                         'producao_disponivel': row['producao_disponivel_otimizacao_classe'],  # Producao disponivel para otimizacao
                         'preco': row['preco'],
                         'custo_ytd': row['custo_ytd'],
-                        'margem_unitaria': row['margem_unitaria'],
+                        'margem_unitaria': row['margem_unitaria'],  # R$/CAIXA
+                        'margem_por_ovo': row['margem_unitaria'] / row['qtd_ovos_por_caixa'],  # R$/OVO - métrica otimizada
                         'receita_total': qtd_caixas * row['preco'],  # CAIXAS × R$/CAIXA
                         'custo_total': qtd_caixas * row['custo_ytd'],  # CAIXAS × R$/CAIXA
                         'margem_total': qtd_caixas * row['margem_unitaria'],  # CAIXAS × R$/CAIXA
@@ -2000,6 +2002,7 @@ class ModeloOtimizacaoComRealocacao:
                             item_int = int(item) if pd.notna(item) else None
                             sku_restrito = False  # Base já filtrada por A∩B; coluna mantida por compatibilidade
                             tem_demanda_historica = item_int in skus_com_demanda_historica if item_int is not None else False
+                            demanda_max_pedido = demanda_por_item.get(item_int) if item_int is not None else None
                             
                             # Verificar se custo foi calculado usando média da classe
                             # Para pandas Series, usar acesso direto em vez de .get()
@@ -2018,12 +2021,14 @@ class ModeloOtimizacaoComRealocacao:
                                 'tipo': 'PEDIDO',
                                 'tipo_restricao': tipo_restricao,
                                 'quantidade_restricao': quantidade_restricao,
+                                'limite_demanda_historica': demanda_max_pedido if demanda_max_pedido is not None else None,  # Limite calculado de demanda histórica
                                 'producao_total': row['producao_total'],  # Producao da classe
                                 'quantidade_pedida': row_pedido['quantidade_total_pedida'],
                                 'percentual_atendido': (qtd_atendida / row_pedido['quantidade_total_pedida'] * 100) if row_pedido['quantidade_total_pedida'] > 0 else 0,
                                 'preco': row['preco'],
                                 'custo_ytd': row['custo_ytd'],
-                                'margem_unitaria': row['margem_unitaria'],
+                                'margem_unitaria': row['margem_unitaria'],  # R$/CAIXA
+                                'margem_por_ovo': row['margem_unitaria'] / row['qtd_ovos_por_caixa'],  # R$/OVO - métrica otimizada
                                 'receita_total': qtd_caixas_pedido * row['preco'],  # CAIXAS × R$/CAIXA
                                 'custo_total': qtd_caixas_pedido * row['custo_ytd'],  # CAIXAS × R$/CAIXA
                                 'margem_total': qtd_caixas_pedido * row['margem_unitaria'],  # CAIXAS × R$/CAIXA
@@ -2039,9 +2044,9 @@ class ModeloOtimizacaoComRealocacao:
         # (necessario para evitar erro no groupby('classe') em salvar_resultados)
         if len(self.resultado) == 0:
             self.resultado = pd.DataFrame(columns=['item_id', 'item', 'embalagem', 'classe', 'quantidade', 'quantidade_caixas', 'tipo', 
-                                                   'tipo_restricao', 'quantidade_restricao',
+                                                   'tipo_restricao', 'quantidade_restricao', 'limite_demanda_historica',
                                                    'producao_total', 'producao_disponivel', 'preco', 
-                                                   'custo_ytd', 'margem_unitaria', 'receita_total', 
+                                                   'custo_ytd', 'margem_unitaria', 'margem_por_ovo', 'receita_total', 
                                                    'custo_total', 'margem_total', 'tem_pedido', 
                                                    'sku_restrito', 'tem_demanda_historica', 'custo_medio_classe'])
         
