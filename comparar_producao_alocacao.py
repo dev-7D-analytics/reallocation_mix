@@ -799,10 +799,31 @@ def main():
         comparacao["limite_demanda_historica"] = None
     
     # 5. margem_por_ovo: Margem por ovo (R$/ovo) - métrica otimizada pelo modelo
+    # Primeiro: tentar usar valores do resultado do modelo (para SKUs alocados)
     if len(margem_por_ovo_por_item) > 0:
         comparacao["margem_por_ovo"] = comparacao["item"].map(margem_por_ovo_por_item)
     else:
         comparacao["margem_por_ovo"] = None
+    
+    # Segundo: calcular margem_por_ovo para SKUs que não têm (baseado na embalagem)
+    # Função para extrair ovos por caixa da embalagem (ex: "CX 12 BJ 20 UN" = 12*20 = 240)
+    def extrair_ovos_por_caixa(embalagem):
+        if pd.isna(embalagem):
+            return None
+        import re
+        # Padrão: "CX X BJ Y UN" onde X = bandejas, Y = ovos por bandeja
+        match = re.search(r'CX\s*(\d+)\s*BJ\s*(\d+)', str(embalagem), re.IGNORECASE)
+        if match:
+            bandejas = int(match.group(1))
+            ovos_por_bandeja = int(match.group(2))
+            return bandejas * ovos_por_bandeja
+        return None
+    
+    # Calcular para registros sem margem_por_ovo mas com margem_unitaria
+    sem_margem_ovo = comparacao['margem_por_ovo'].isna() & comparacao['margem_unitaria'].notna()
+    if sem_margem_ovo.sum() > 0:
+        ovos_por_caixa = comparacao.loc[sem_margem_ovo, 'embalagem'].apply(extrair_ovos_por_caixa)
+        comparacao.loc[sem_margem_ovo, 'margem_por_ovo'] = comparacao.loc[sem_margem_ovo, 'margem_unitaria'] / ovos_por_caixa
     
     # 6. custo_medio_classe: Custo foi calculado usando média da classe
     if len(custo_medio_classe_por_item_id) > 0:
