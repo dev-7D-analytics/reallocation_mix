@@ -15,7 +15,9 @@ paths:
   # compatibilidade: "inputs/compatibilidade_sku_embalagem.csv"  # DEPRECADO: item ja vem com embalagem
   precos: "inputs/precos_sku_embalagem.csv"
   custos: "inputs/MANTI-PRIC_Custos_12012026.parquet"  # Parquet com filtros: Estab=100, MÊS=11, ano=2025
-  faturamento: "inputs/manti_fat_2024.parquet"  # Faturamento historico para calcular demanda
+  faturamento: "inputs/manti_fat_2025_full.parquet"  # Faturamento historico para calcular demanda
+  # faturamento: "inputs/MANTI-PRIC_Custos_12012026.parquet"  # Faturamento historico para calcular demanda
+  skus_restritos: "inputs/skus_restritos.xlsx"  # SKUs permitidos para producao no estab (ESTAB=100, ATIVO); filtra PRODUÇÃO DIA (A∩B)
   # custo_embalagem: "inputs/custo_embalagem.csv"  # Opcional
   
   # Arquivos de saída
@@ -62,6 +64,10 @@ dados:
   estab_preco: 100 # Estabelecimento para preços
   meses_janela_preco: 6  # Janela de meses para preços (últimos N meses a partir de mes_preco/ano_preco)
   
+  # Estabelecimentos para otimização (lista de estabelecimentos a serem considerados)
+  # Usado para filtrar SKUs restritos e outras operações que dependem de estabelecimento
+  estabelecimentos: [100]  # Lista de estabelecimentos (ex: [100, 116, 1100])
+  
   # Tipo de estoque
   tipo_estoque: "DISPONIVEL PARA VENDA"  
   
@@ -80,7 +86,7 @@ negocio:
   # Margem mínima
   margem_minima_percentual: 0.0 # 0% = aceita qualquer margem positiva
   filtrar_skus_margem_negativa: true  # Remover SKUs com margem negativa
-  filtrar_granjas: ["100"] # Lista de granjas a filtrar (ex: ["100", "200"]), ou vazia para não filtrar
+  filtrar_granjas: ["100"] # Lista de estabelecimentos a MANTER no cálculo de demanda histórica (vazia = todos)
 
 # ==============================================================================
 # PARÂMETROS DO MODELO
@@ -110,7 +116,7 @@ modelo:
   # Restrições de demanda histórica
   considerar_demanda_historica: true  # true = limita alocacao baseada em demanda historica
   granularidade_demanda: S  # Granularidade da agregacao: M=Mensal, S=Semanal, D=Diaria
-  tipo_calculo_demanda: percentil  # Tipo de calculo: "percentil" ou "maximo"
+  tipo_calculo_demanda: maximo  # Tipo de calculo: "percentil" ou "maximo"
   percentil_demanda: 95  # Percentil da demanda historica (50=mediana, 75=percentil 75, 90=percentil 90) - usado apenas se tipo_calculo_demanda=percentil
   fator_expansao_demanda: 5  # Multiplicador sobre o percentil (1.0=sem expansao, 1.5=50% acima, 2.0=dobro, 5.0=5x) - usado apenas se tipo_calculo_demanda=percentil
   fator_percentual_maximo: 1.2  # Fator percentual sobre o maximo historico (1.0=igual ao maximo, 1.2=20% acima, 1.5=50% acima) - usado apenas se tipo_calculo_demanda=maximo

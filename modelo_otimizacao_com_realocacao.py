@@ -71,17 +71,17 @@ class ModeloOtimizacaoComRealocacao:
         self._carregar_producao()
         self._carregar_classes()
         self._carregar_pedidos()
-        # REMOVIDO: _carregar_compatibilidade() - nao e mais necessario (item ja vem com embalagem)
         self._carregar_precos()
         self._carregar_custos()
         self._carregar_demanda_historica()
+        self._carregar_skus_restritos()
         self._preparar_dados_otimizacao()
         
         self.logger.info("\n[OK] Dados carregados com sucesso!")
     
     def _carregar_producao(self):
         """Carrega producao por classe de produtos."""
-        self.logger.info("\n[1/7] Carregando producao por classe...")
+        self.logger.info("\n[1/8] Carregando producao por classe...")
         
         path = Path(self.config['paths'].get('producao', 'inputs/producao_classe.csv'))
         
@@ -111,7 +111,7 @@ class ModeloOtimizacaoComRealocacao:
     
     def _carregar_classes(self):
         """Carrega classificacao de SKUs por classe."""
-        self.logger.info("\n[2/7] Carregando classificacao de SKUs...")
+        self.logger.info("\n[2/8] Carregando classificacao de SKUs...")
         
         path = Path(self.config['paths'].get('classes', 'inputs/base_skus_classes.xlsx'))
         df_classes = pd.read_excel(path)
@@ -149,7 +149,7 @@ class ModeloOtimizacaoComRealocacao:
     
     def _carregar_pedidos(self):
         """Carrega pedidos de clientes."""
-        self.logger.info("\n[3/7] Carregando pedidos de clientes...")
+        self.logger.info("\n[3/8] Carregando pedidos de clientes...")
         
         path = Path(self.config['paths'].get('pedidos', 'inputs/pedidos_clientes.csv'))
         
@@ -187,7 +187,7 @@ class ModeloOtimizacaoComRealocacao:
     
     def _carregar_precos(self):
         """Carrega precos - deve ter mesmo formato que custos (item_id unico)."""
-        self.logger.info("\n[4/7] Carregando precos...")
+        self.logger.info("\n[4/8] Carregando precos...")
         
         path = Path(self.config['paths'].get('precos', 'inputs/precos_sku_embalagem.csv'))
         
@@ -230,7 +230,7 @@ class ModeloOtimizacaoComRealocacao:
     
     def _carregar_custos(self):
         """Carrega custos - suporta CSV ou Parquet com filtros."""
-        self.logger.info("\n[5/7] Carregando custos...")
+        self.logger.info("\n[5/8] Carregando custos...")
         
         # Importar funcao de extrair embalagem
         import re
@@ -519,11 +519,11 @@ class ModeloOtimizacaoComRealocacao:
         considerar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
         
         if not considerar_demanda:
-            self.logger.info("\n[6/7] Demanda historica: Desabilitada")
+            self.logger.info("\n[6/8] Demanda historica: Desabilitada")
             self.dados['demanda_historica'] = pd.DataFrame(columns=['item', 'demanda_max'])
             return
         
-        self.logger.info("\n[6/7] Carregando demanda historica...")
+        self.logger.info("\n[6/8] Carregando demanda historica...")
         
         # Tentar carregar faturamento historico
         path_fat = Path(self.config['paths'].get('faturamento', '../manti_fat_2024.parquet'))
@@ -554,15 +554,15 @@ class ModeloOtimizacaoComRealocacao:
             if col_item is None or col_qtd is None or col_data is None:
                 raise ValueError("Colunas necessarias nao encontradas no faturamento")
             
-            # Filtrar granjas se configurado
-            if self.config.get('negocio', {}).get('filtrar_granjas', []):
-                granjas_filtrar = self.config['negocio']['filtrar_granjas']
+            # Filtrar para MANTER apenas estabelecimentos configurados (se lista não vazia)
+            estabs_manter = self.config.get('negocio', {}).get('filtrar_granjas', [])
+            if estabs_manter:
                 if 'Estab' in df_fat.columns:
-                    df_fat = df_fat[~df_fat['Estab'].astype(str).isin(granjas_filtrar)].copy()
-                    self.logger.info(f"  Filtrando granjas: {granjas_filtrar}")
-                    self.logger.info(f"  Registros apos filtro de granjas: {len(df_fat):,}")
+                    df_fat = df_fat[df_fat['Estab'].astype(str).isin(estabs_manter)].copy()
+                    self.logger.info(f"  Mantendo apenas estabelecimentos: {estabs_manter}")
+                    self.logger.info(f"  Registros apos filtro: {len(df_fat):,}")
                 else:
-                    self.logger.warning("  Coluna 'Estab' nao encontrada para filtro de granjas.")
+                    self.logger.warning("  Coluna 'Estab' nao encontrada para filtro de estabelecimentos.")
             
             # Corrigir unidades da quantidade de items (de caixas de 360 ovos para unidades)
             # TODO: CORRIGIR - Esta multiplicacao por 360 assume que todas as caixas tem 360 ovos,
@@ -689,9 +689,59 @@ class ModeloOtimizacaoComRealocacao:
             self.logger.warning("  Continuando sem restricoes de demanda historica.")
             self.dados['demanda_historica'] = pd.DataFrame(columns=['item', 'demanda_max'])
     
+    def _carregar_skus_restritos(self):
+        """Carrega lista de SKUs permitidos para produção no estabelecimento (ESTAB, STATUS=ATIVO).
+        Usada para filtrar PRODUÇÃO DIA: só alocamos quem apareceu na produção E está nesta lista."""
+        self.logger.info("\n[7/8] Carregando SKUs permitidos para produção (estabelecimento)...")
+        
+        path_restritos_str = self.config['paths'].get('skus_restritos', 'inputs/skus_restritos.xlsx')
+        path_restritos = Path(path_restritos_str) if path_restritos_str else None
+        
+        if not path_restritos or not path_restritos.exists():
+            self.logger.warning("  Arquivo de SKUs permitidos nao encontrado. Filtro por lista nao aplicado.")
+            self.dados['skus_restritos'] = []
+            return
+        
+        try:
+            df_restritos = pd.read_excel(path_restritos)
+            
+            # Ler lista de estabelecimentos do config (pode ser lista ou valor unico)
+            estabelecimentos_config = self.config.get('dados', {}).get('estabelecimentos', [100])
+            # Garantir que seja uma lista
+            if not isinstance(estabelecimentos_config, list):
+                estabelecimentos_config = [estabelecimentos_config]
+            
+            # Converter para int para garantir compatibilidade
+            estabelecimentos = [int(estab) for estab in estabelecimentos_config]
+            
+            self.logger.info(f"  Estabelecimentos considerados: {estabelecimentos}")
+            
+            # Filtrar por STATUS='ATIVO' e ESTAB na lista de estabelecimentos
+            df_restritos_filtrado = df_restritos[
+                (df_restritos['STATUS'] == 'ATIVO') & 
+                (df_restritos['ESTAB'].isin(estabelecimentos))
+            ].copy()
+            
+            # Extrair lista de SKUs permitidos para produção no estabelecimento
+            skus_restritos = df_restritos_filtrado['item'].tolist()
+            
+            # Converter para int para garantir compatibilidade
+            skus_restritos = [int(item) for item in skus_restritos if pd.notna(item)]
+            
+            self.logger.info(f"  SKUs permitidos para produção (ESTAB {estabelecimentos}, ATIVO): {len(skus_restritos)}")
+            if len(skus_restritos) > 0:
+                self.logger.info(f"  Exemplos: {skus_restritos[:5]}")
+            
+            self.dados['skus_restritos'] = skus_restritos
+            
+        except Exception as e:
+            self.logger.warning(f"  Erro ao carregar SKUs permitidos: {e}")
+            self.logger.warning("  Continuando sem filtro por lista de permitidos.")
+            self.dados['skus_restritos'] = []
+    
     def _preparar_dados_otimizacao(self):
         """Prepara dados para otimizacao usando producao por classe."""
-        self.logger.info("\n[7/7] Preparando dados para otimizacao...")
+        self.logger.info("\n[8/8] Preparando dados para otimizacao...")
         
         df_producao = self.dados['producao']  # Producao por classe
         df_classes = self.dados['classes']  # Mapeamento item -> classe
@@ -704,11 +754,221 @@ class ModeloOtimizacaoComRealocacao:
         # TODO: Avaliar se é melhor comecar a construção pela base de produção
         df_base = df_custos[['item_id', 'item', 'embalagem', 'custo_ytd']].copy()
         
+        # =====================================================================
+        # FILTRO CRÍTICO: Apenas SKUs que estão na produção do estabelecimento 100
+        # =====================================================================
+        # Carregar produção bruta para obter lista de SKUs do estabelecimento 100
+        estabelecimentos_config = self.config.get('dados', {}).get('estabelecimentos', [100])
+        if not isinstance(estabelecimentos_config, list):
+            estabelecimentos_config = [estabelecimentos_config]
+        estabelecimentos = [int(estab) for estab in estabelecimentos_config]
+        
+        path_producao_bruta = Path(self.config['paths'].get('producao_bruta', 'inputs/PRODUÇÃO DIA.xlsx'))
+        skus_producao_estab = set()
+        
+        if path_producao_bruta.exists():
+            try:
+                df_prod_bruta = pd.read_excel(path_producao_bruta, sheet_name="CE0302", skiprows=1)
+                
+                # Filtrar por semana de referência
+                semana_ref = self.config.get('dados', {}).get('semana_ref', '2025-51')
+                df_prod_bruta['week'] = pd.to_datetime(df_prod_bruta['Data Trans']).dt.isocalendar().week
+                df_prod_bruta['year'] = pd.to_datetime(df_prod_bruta['Data Trans']).dt.isocalendar().year
+                df_prod_bruta['year_week'] = df_prod_bruta['year'].astype(str) + '-' + df_prod_bruta['week'].astype(str).str.zfill(2)
+                df_prod_bruta = df_prod_bruta[df_prod_bruta['year_week'] == semana_ref].copy()
+                
+                # Filtrar por estabelecimento (coluna 'Est' ou 'Estab')
+                col_estab = 'Est' if 'Est' in df_prod_bruta.columns else ('Estab' if 'Estab' in df_prod_bruta.columns else None)
+                if col_estab:
+                    df_prod_bruta = df_prod_bruta[df_prod_bruta[col_estab].isin(estabelecimentos)].copy()
+                    
+                    # Extrair SKUs únicos da produção do estabelecimento
+                    col_item = 'Cod Item' if 'Cod Item' in df_prod_bruta.columns else 'CODIGO ITEM'
+                    if col_item in df_prod_bruta.columns:
+                        df_prod_bruta[col_item] = pd.to_numeric(df_prod_bruta[col_item], errors='coerce')
+                        df_prod_bruta = df_prod_bruta[df_prod_bruta[col_item].notna()].copy()
+                        skus_producao_estab = set(df_prod_bruta[col_item].astype(int).unique())
+                        
+                        self.logger.info(f"  SKUs na produção do estabelecimento {estabelecimentos}: {len(skus_producao_estab)} SKUs")
+                        if len(skus_producao_estab) > 0:
+                            self.logger.info(f"    Exemplos: {sorted(list(skus_producao_estab))[:10]}...")
+                    else:
+                        self.logger.warning(f"  Coluna de item não encontrada na produção bruta. Pulando filtro por estabelecimento.")
+                else:
+                    self.logger.warning(f"  Coluna de estabelecimento não encontrada na produção bruta. Pulando filtro por estabelecimento.")
+            except Exception as e:
+                self.logger.warning(f"  Erro ao carregar produção bruta para filtrar por estabelecimento: {e}")
+                self.logger.warning("  Continuando sem filtro por estabelecimento (pode incluir SKUs de outros estabelecimentos)")
+        
+        # Filtrar PRODUÇÃO DIA pela lista de itens permitidos (A∩B: apareceu na semana E está na lista)
+        skus_permitidos = set(int(sku) for sku in self.dados.get('skus_restritos', []) if pd.notna(sku))
+        if len(skus_permitidos) > 0 and len(skus_producao_estab) > 0:
+            antes_interseccao = len(skus_producao_estab)
+            skus_producao_estab = skus_producao_estab & skus_permitidos
+            self.logger.info(f"  Filtrado pela lista de itens permitidos: {len(skus_producao_estab)} SKUs (interseção produção semana × permitidos)")
+            if len(skus_producao_estab) < antes_interseccao:
+                self.logger.info(f"    Removidos da base: {antes_interseccao - len(skus_producao_estab)} SKUs (não estão na lista de permitidos)")
+        
+        # Aplicar filtro: apenas SKUs que estão na produção do estabelecimento
+        if len(skus_producao_estab) > 0:
+            antes_filtro_estab = len(df_base)
+            df_base = df_base[df_base['item'].isin(skus_producao_estab)].copy()
+            removidos_estab = antes_filtro_estab - len(df_base)
+            if removidos_estab > 0:
+                self.logger.info(f"  SKUs removidos (não estão na produção do estabelecimento {estabelecimentos}): {removidos_estab} item_ids")
+        else:
+            self.logger.warning("  [AVISO] Não foi possível filtrar por estabelecimento. Todos os SKUs serão considerados.")
+        
+        # Adicionar flag indicando que custo veio de dados reais (não calculado)
+        df_base['custo_medio_classe'] = False
+        
         # Adicionar classe para cada item_id (usando o codigo do item)
         df_base = df_base.merge(df_classes, on='item', how='inner')
         
         # Filtrar apenas classes que tem producao
         df_base = df_base.merge(df_producao[['classe']], on='classe', how='inner')
+        
+        # Ler flags de configuracao ANTES de usar
+        usar_apenas_excedente = self.config.get('modelo', {}).get('usar_apenas_excedente', True)
+        atender_pedidos = self.config.get('modelo', {}).get('atender_pedidos', True)
+        
+       
+        # =====================================================================
+        # Pedidos são garantidos (fixos) e descontados da produção da classe
+        # SKUs com pedidos NÃO entram na otimização (removidos de df_base)
+        # =====================================================================
+        
+        # Calcular pedidos garantidos por SKU (capados pela produção da classe)
+        pedidos_garantidos_por_sku = {}  # item -> qtd_atendida (garantida)
+        pedidos_garantidos_df = []  # Lista para DataFrame
+        
+        if len(df_pedidos_sku) > 0 and atender_pedidos:
+            # Criar dicionário de produção por classe
+            producao_por_classe_dict = df_producao.set_index('classe')['producao_total'].to_dict()
+            
+            for _, row_pedido in df_pedidos_sku.iterrows():
+                item = int(row_pedido['item'])
+                qtd_pedida = float(row_pedido['quantidade_total_pedida'])
+                
+                # Buscar classe do SKU
+                classe_sku = df_classes[df_classes['item'] == item]['classe'].values
+                if len(classe_sku) > 0:
+                    classe = classe_sku[0]
+                    producao_total_classe = producao_por_classe_dict.get(classe, 0.0)
+                    
+                    # Pedido garantido = min(pedido, produção da classe)
+                    qtd_atendida = min(qtd_pedida, producao_total_classe)
+                    
+                    if qtd_atendida > 0:
+                        pedidos_garantidos_por_sku[item] = qtd_atendida
+                        pedidos_garantidos_df.append({
+                            'item': item,
+                            'classe': classe,
+                            'quantidade_pedida': qtd_pedida,
+                            'quantidade_atendida': qtd_atendida,
+                            'producao_total_classe': producao_total_classe
+                        })
+        
+        # Guardar pedidos garantidos em self.dados
+        self.dados['pedidos_garantidos_por_sku'] = pedidos_garantidos_por_sku
+        if len(pedidos_garantidos_df) > 0:
+            self.dados['pedidos_garantidos'] = pd.DataFrame(pedidos_garantidos_df)
+        else:
+            self.dados['pedidos_garantidos'] = pd.DataFrame(columns=['item', 'classe', 'quantidade_pedida', 'quantidade_atendida', 'producao_total_classe'])
+        
+        # Identificar SKUs que devem ser removidos de df_base: apenas os que têm pedido garantido
+        # (Produção do estabelecimento já foi filtrada por A∩B acima; não removemos "restritos")
+        skus_com_pedido = set(int(sku) for sku in pedidos_garantidos_por_sku.keys() if pd.notna(sku)) if atender_pedidos else set()
+        skus_a_remover = skus_com_pedido
+        
+        # Garantir que a coluna 'item' seja int para comparação consistente
+        if 'item' in df_base.columns:
+            df_base['item'] = pd.to_numeric(df_base['item'], errors='coerce').astype('Int64')
+        
+        if len(skus_a_remover) > 0:
+            antes_filtro = len(df_base)
+            df_base = df_base[~df_base['item'].isin(skus_a_remover)].copy()
+            removidos = antes_filtro - len(df_base)
+            if removidos > 0:
+                self.logger.info(f"  SKUs removidos do df_base (com pedido garantido): {removidos} item_ids")
+                self.logger.info(f"    Exemplos removidos: {sorted(list(skus_a_remover))[:10]}...")
+        
+        # =====================================================================
+        # INCLUIR SKUs SEM CUSTOS: usar custo médio da classe
+        # =====================================================================
+        # Identificar SKUs em classes com produção que não têm custos
+        # (após remover SKUs com pedido)
+        # IMPORTANTE: Apenas SKUs que pertencem ao estabelecimento configurado (skus_producao_estab)
+        skus_com_custos = set(df_base['item'].unique())
+        skus_com_producao = set(df_classes[df_classes['classe'].isin(df_producao['classe'])]['item'].unique())
+        
+        # FILTRO CRÍTICO: Apenas SKUs que estão na produção do estabelecimento
+        # Se não foi possível filtrar por estabelecimento (skus_producao_estab vazio),
+        # usar todos os SKUs com produção (comportamento antigo)
+        if len(skus_producao_estab) > 0:
+            skus_com_producao = skus_com_producao & skus_producao_estab
+            self.logger.info(f"  Filtrando SKUs sem custos: apenas {len(skus_com_producao)} SKUs do estabelecimento {estabelecimentos}")
+        
+        skus_sem_custos = (skus_com_producao - skus_com_custos) - skus_a_remover  # Excluir apenas com pedido
+        
+        if len(skus_sem_custos) > 0:
+            # Calcular custo médio por classe (apenas dos SKUs que têm custos)
+            custo_medio_por_classe = df_base.groupby('classe')['custo_ytd'].mean().to_dict()
+            
+            # Calcular custo médio geral de df_base e df_custos (para fallback)
+            custo_medio_geral_df_base = df_base['custo_ytd'].mean() if len(df_base) > 0 else 0.0
+            custo_medio_geral_df_custos = df_custos['custo_ytd'].mean() if len(df_custos) > 0 and 'custo_ytd' in df_custos.columns else 0.0
+            
+            # Para cada SKU sem custo, criar item_ids com todas as embalagens possíveis
+            # Primeiro, identificar embalagens disponíveis (de preços ou custos existentes)
+            embalagens_disponiveis = set(df_precos['embalagem'].unique()) if 'embalagem' in df_precos.columns else set(df_custos['embalagem'].unique())
+            
+            # Se não houver embalagens em preços, usar embalagens dos custos
+            if len(embalagens_disponiveis) == 0:
+                embalagens_disponiveis = set(df_custos['embalagem'].unique())
+            
+            # Se ainda não houver, usar embalagem padrão
+            if len(embalagens_disponiveis) == 0:
+                embalagens_disponiveis = {'CX12'}  # Embalagem padrão
+            
+            # Criar linhas para SKUs sem custos
+            linhas_sem_custo = []
+            for item in skus_sem_custos:
+                # Buscar classe do SKU
+                classe_sku = df_classes[df_classes['item'] == item]['classe'].values
+                if len(classe_sku) > 0:
+                    classe = classe_sku[0]
+                    custo_medio_classe = custo_medio_por_classe.get(classe, 0.0)
+                    
+                    # Se a classe não tem custo médio, usar custo médio geral
+                    if custo_medio_classe == 0.0:
+                        # Tentar primeiro custo médio geral de df_base, depois df_custos
+                        if custo_medio_geral_df_base > 0.0:
+                            custo_medio_classe = custo_medio_geral_df_base
+                        elif custo_medio_geral_df_custos > 0.0:
+                            custo_medio_classe = custo_medio_geral_df_custos
+                        else:
+                            # Se ainda for 0.0, usar um valor padrão razoável (custo médio histórico)
+                            custo_medio_classe = 132.82  # Valor padrão baseado em custos históricos
+                            self.logger.warning(f"  SKU {item} (classe {classe}) sem custo médio disponível - usando valor padrão R$ {custo_medio_classe:.2f}")
+                    
+                    # Criar item_id para cada embalagem disponível
+                    for embalagem in embalagens_disponiveis:
+                        item_id = f"{item}_{embalagem}"
+                        linhas_sem_custo.append({
+                            'item_id': item_id,
+                            'item': item,
+                            'embalagem': embalagem,
+                            'custo_ytd': custo_medio_classe,
+                            'custo_medio_classe': True,  # Flag indicando que custo foi calculado
+                            'classe': classe
+                        })
+            
+            if len(linhas_sem_custo) > 0:
+                df_sem_custos = pd.DataFrame(linhas_sem_custo)
+                # Adicionar ao df_base
+                df_base = pd.concat([df_base, df_sem_custos], ignore_index=True)
+                self.logger.info(f"  SKUs sem custos incluídos usando custo médio da classe: {len(skus_sem_custos)} SKUs")
         
         # Merge com precos por item_id
         df_base = df_base.merge(df_precos, on='item_id', how='left')
@@ -760,10 +1020,6 @@ class ModeloOtimizacaoComRealocacao:
         )
         df_base['quantidade_total_pedida'] = df_base['quantidade_total_pedida'].fillna(0)
         
-        # Ler flags de configuracao
-        usar_apenas_excedente = self.config.get('modelo', {}).get('usar_apenas_excedente', True)
-        atender_pedidos = self.config.get('modelo', {}).get('atender_pedidos', True)
-        
         # Validacao e ajuste de flags
         # Se atender_pedidos = True, SEMPRE usa excedente (nao pode "roubar" dos pedidos)
         # A flag usar_apenas_excedente so faz diferenca quando atender_pedidos = False
@@ -784,20 +1040,60 @@ class ModeloOtimizacaoComRealocacao:
         #  Calcular producao disponivel para otimizacao por classe
         # A producao e por classe, e precisa ser distribuida entre os item_id da classe
         
-        # Calcular pedidos totais por classe (soma de todos os pedidos dos SKUs da classe)
-        # Calcular corretamente somando pedidos por SKU, depois agrupando por classe
-        # Evita duplicacao quando um SKU tem multiplas embalagens
-        if len(df_pedidos_sku) > 0:
-            # Fazer merge de pedidos com classes para obter classe de cada SKU
-            pedidos_com_classe = df_pedidos_sku.merge(df_classes[['item', 'classe']], on='item', how='left')
-            # Filtrar apenas classes que tem producao
-            pedidos_com_classe = pedidos_com_classe[pedidos_com_classe['classe'].isin(df_producao['classe'])]
-            # Agrupar por classe e somar pedidos (cada SKU conta apenas uma vez)
-            pedidos_por_classe = pedidos_com_classe.groupby('classe')['quantidade_total_pedida'].sum()
-            # Garantir que todas as classes de producao estejam presentes (preencher com 0 se nao tiver pedidos)
-            pedidos_por_classe = pedidos_por_classe.reindex(df_producao['classe'], fill_value=0)
+        # Calcular pedidos GARANTIDOS por classe (usando pedidos_garantidos_por_sku)
+        # Usar quantidade_atendida (garantida)
+        pedidos_ignorados = []  # Rastrear pedidos ignorados
+        
+        if atender_pedidos and len(df_pedidos_sku) > 0:
+            # Identificar pedidos ignorados (pedidos que não foram garantidos)
+            for _, row_pedido in df_pedidos_sku.iterrows():
+                item = int(row_pedido['item'])
+                qtd_pedida = float(row_pedido['quantidade_total_pedida'])
+                
+                # Verificar se pedido foi garantido
+                if item not in pedidos_garantidos_por_sku:
+                    # Pedido não foi garantido - identificar motivo
+                    classe_sku = df_classes[df_classes['item'] == item]['classe'].values
+                    if len(classe_sku) == 0:
+                        motivo = 'SKU nao encontrado em classes'
+                    elif classe_sku[0] not in df_producao['classe'].values:
+                        motivo = f"Classe '{classe_sku[0]}' nao tem producao"
+                    else:
+                        # Classe existe mas pedido não foi garantido (provavelmente produção insuficiente)
+                        motivo = 'Producao insuficiente para atender pedido completo'
+                    
+                    pedidos_ignorados.append({
+                        'item': item,
+                        'quantidade_total_pedida': qtd_pedida,
+                        'motivo': motivo
+                    })
+                elif pedidos_garantidos_por_sku[item] < qtd_pedida:
+                    # Pedido foi parcialmente atendido
+                    pedidos_ignorados.append({
+                        'item': item,
+                        'quantidade_total_pedida': qtd_pedida,
+                        'quantidade_atendida': pedidos_garantidos_por_sku[item],
+                        'motivo': 'Pedido parcialmente atendido (producao insuficiente)'
+                    })
+            
+            # Calcular pedidos garantidos por classe
+            if len(self.dados['pedidos_garantidos']) > 0:
+                df_pedidos_garantidos = self.dados['pedidos_garantidos']
+                pedidos_por_classe = df_pedidos_garantidos.groupby('classe')['quantidade_atendida'].sum()
+                # Garantir que todas as classes de producao estejam presentes
+                pedidos_por_classe = pedidos_por_classe.reindex(df_producao['classe'], fill_value=0)
+            else:
+                pedidos_por_classe = pd.Series(0, index=df_producao['classe'])
+            
+            # Log resumo de pedidos ignorados
+            if len(pedidos_ignorados) > 0:
+                total_ignorado = sum(p.get('quantidade_total_pedida', 0) - p.get('quantidade_atendida', 0) for p in pedidos_ignorados)
+                self.logger.warning(f"\n  [ATENCAO] {len(pedidos_ignorados)} pedidos ignorados/parciais (total não atendido: {total_ignorado:,.0f} unidades)")
         else:
             pedidos_por_classe = pd.Series(0, index=df_producao['classe'])
+        
+        # Armazenar pedidos ignorados para uso nos outputs
+        self.dados['pedidos_ignorados'] = pedidos_ignorados
         
         # Calcular producao excedente por classe (apos atender pedidos)
         # IMPORTANTE: Pedidos sao por SKU, mas a producao e por classe
@@ -823,7 +1119,7 @@ class ModeloOtimizacaoComRealocacao:
         df_base['estoque_excedente_classe'] = df_base['producao_disponivel_otimizacao_classe']
         df_base['estoque_classe'] = df_base['producao_total']
         
-        # Para compatibilidade: criar estoque_excedente_sku (nao usado na nova logica, mas mantido para logs)
+        # Para compatibilidade: criar estoque_excedente_sku 
         df_base['estoque_excedente_sku'] = 0  # Será calculado dinamicamente se necessário
         
         self.logger.info(f"  Item_id validos: {len(df_base)}")
@@ -916,42 +1212,29 @@ class ModeloOtimizacaoComRealocacao:
         # 2. x[item, embalagem] = quantidade alocada no excedente (para otimizacao)
         self.logger.info("\n[1/4] Criando variaveis de decisao...")
         
-        # Variaveis de atendimento aos pedidos (apenas se atender_pedidos = True)
-        self.variaveis_pedidos = {}
+       
+        # =====================================================================
+        # Pedidos foram calculados em _preparar_dados_otimizacao e são parâmetros
+        # =====================================================================
         atender_pedidos = self.dados.get('atender_pedidos', True)
-        df_pedidos_sku = self.dados.get('pedidos_por_sku', pd.DataFrame(columns=['item', 'quantidade_total_pedida']))
+        pedidos_garantidos_por_sku = self.dados.get('pedidos_garantidos_por_sku', {})
         
-        if atender_pedidos and len(df_pedidos_sku) > 0:
-            for _, row in df_pedidos_sku.iterrows():
-                item = int(row['item'])
-                qtd_pedida = float(row['quantidade_total_pedida'])
-                
-                #  Calcular limite do pedido usando producao_total da classe
-                # Usar producao_total (nao excedente) para evitar dependencia circular
-                # A restricao de classe garante que soma(pedidos + excedente) <= producao_total
-                item_ids_do_sku = df_base[df_base['item'] == item]
-                if len(item_ids_do_sku) > 0:
-                    # Usar producao_total da classe como limite superior (nao excedente)
-                    producao_total_classe = float(item_ids_do_sku['producao_total'].iloc[0])
-                    limite_atendimento = min(qtd_pedida, producao_total_classe)
-                else:
-                    limite_atendimento = 0.0
-                
-                if limite_atendimento > 0:
-                    self.variaveis_pedidos[item] = self.solver.NumVar(
-                        0.0,
-                        float(limite_atendimento),
-                        f"y_pedido_{item}"
-                    )
+        # Manter compatibilidade: self.variaveis_pedidos agora armazena valores fixos 
+        # Isso permite que _extrair_resultado continue funcionando
+        self.variaveis_pedidos = pedidos_garantidos_por_sku.copy()
         
         if atender_pedidos:
-            self.logger.info(f"  Variaveis de atendimento aos pedidos: {len(self.variaveis_pedidos)}")
+            self.logger.info(f"  Pedidos garantidos (valores fixos): {len(pedidos_garantidos_por_sku)} SKUs")
+            if len(pedidos_garantidos_por_sku) > 0:
+                total_garantido = sum(pedidos_garantidos_por_sku.values())
+                self.logger.info(f"    Total garantido: {total_garantido:,.0f} unidades")
         else:
-            self.logger.info(f"  Variaveis de atendimento aos pedidos: 0 (pedidos ignorados)")
+            self.logger.info(f"  Pedidos garantidos: 0 (pedidos ignorados)")
         
         #  Variaveis de alocacao por item_id (ja inclui SKU + embalagem)
         # Limite superior depende da flag usar_apenas_excedente
         usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
+        
         self.variaveis = {}
         
         for idx, row in df_base.iterrows():
@@ -989,31 +1272,17 @@ class ModeloOtimizacaoComRealocacao:
         # Carregar df_classes para identificar TODOS os SKUs da classe (incluindo restritos)
         df_classes = self.dados.get('classes', pd.DataFrame(columns=['item', 'classe']))
         
-        # RESTRICAO 1: Atendimento aos pedidos (apenas se atender_pedidos = True)
+        # =====================================================================
+        # RESTRICAO 1: Pedidos são GARANTIDOS (valores fixos)
+        # =====================================================================
+        # Pedidos foram calculados em _preparar_dados_otimizacao e são parâmetros
+        # =====================================================================
         atender_pedidos = self.dados.get('atender_pedidos', True)
-        df_pedidos_sku = self.dados.get('pedidos_por_sku', pd.DataFrame(columns=['item', 'quantidade_total_pedida']))
-        
-        if atender_pedidos and len(df_pedidos_sku) > 0:
-            for _, row in df_pedidos_sku.iterrows():
-                item = row['item']
-                qtd_pedida = row['quantidade_total_pedida']
-                
-                if item in self.variaveis_pedidos:
-                    #  Atendimento nao pode exceder o pedido nem a producao_total da classe
-                    # Usar producao_total (nao excedente) para evitar dependencia circular
-                    item_ids_do_sku = df_base[df_base['item'] == item]
-                    if len(item_ids_do_sku) > 0:
-                        producao_total_classe = float(item_ids_do_sku['producao_total'].iloc[0])
-                        limite_atendimento = min(qtd_pedida, producao_total_classe)
-                    else:
-                        limite_atendimento = 0
-                    
-                    # A restricao ja esta no limite da variavel, mas vamos adicionar explicitamente
-                    self.solver.Add(self.variaveis_pedidos[item] <= limite_atendimento)
-                    num_restricoes += 1
         
         if atender_pedidos:
-            self.logger.info(f"  Restricoes de atendimento aos pedidos: {num_restricoes}")
+            pedidos_garantidos_por_sku = self.dados.get('pedidos_garantidos_por_sku', {})
+            self.logger.info(f"  Restricoes de atendimento aos pedidos: 0 (pedidos são valores fixos garantidos)")
+            self.logger.info(f"    Pedidos garantidos: {len(pedidos_garantidos_por_sku)} SKUs")
         else:
             self.logger.info(f"  Restricoes de atendimento aos pedidos: 0 (pedidos ignorados)")
         
@@ -1022,41 +1291,58 @@ class ModeloOtimizacaoComRealocacao:
         # Esta restricao garante que: soma(pedidos + excedente) <= producao_total
         # Esta e a restricao que permite realocacao entre item_id da mesma classe!
         usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
-        classes = df_base['classe'].unique()
+        
+        # CORRECAO: Usar df_producao para pegar TODAS as classes com producao
+        # Isso garante que classes que so tem SKUs restritos tambem tenham restricao criada
+        df_producao = self.dados.get('producao', pd.DataFrame(columns=['classe', 'producao_total']))
+        producao_por_classe = df_producao.set_index('classe')['producao_total'].to_dict() if len(df_producao) > 0 else {}
+        classes = df_producao['classe'].unique() if len(df_producao) > 0 else []
         
         num_restricoes_classe = 0
         for classe in classes:
-            #  Todas as variaveis de item_id desta classe
+            #  Todas as variaveis de item_id desta classe (pode ser vazio se classe so tem SKUs restritos)
             item_ids_classe = df_base[df_base['classe'] == classe]['item_id'].unique()
             
-            if len(item_ids_classe) == 0:
-                continue
-            
             # Soma de todas as alocacoes de EXCEDENTE da classe (por item_id)
-            soma_excedente_classe = sum(
-                self.variaveis.get(item_id, 0)
-                for item_id in item_ids_classe
-                if item_id in self.variaveis
-            )
+            # Se classe so tem SKUs restritos, item_ids_classe sera vazio e soma_excedente = 0
+            if len(item_ids_classe) > 0:
+                soma_excedente_classe = sum(
+                    self.variaveis.get(item_id, 0)
+                    for item_id in item_ids_classe
+                    if item_id in self.variaveis
+                )
+            else:
+                soma_excedente_classe = 0  # Classe so tem SKUs restritos, nao ha excedente
             
-            # Soma de todos os PEDIDOS da classe (por SKU/item)
-            #  Usar df_classes em vez de df_base para identificar TODOS os SKUs da classe
-            # Isso garante que pedidos de SKUs restritos sejam incluidos na restricao
+            # Soma de todos os PEDIDOS GARANTIDOS da classe (valores fixos)
+            # IMPORTANTE: Pedidos são valores fixos calculados em _preparar_dados_otimizacao
+            # Usar df_classes para identificar TODOS os SKUs da classe (incluindo restritos)
             items_da_classe = df_classes[df_classes['classe'] == classe]['item'].unique()
+            pedidos_garantidos_por_sku = self.dados.get('pedidos_garantidos_por_sku', {})
             soma_pedidos_classe = sum(
-                self.variaveis_pedidos.get(item, 0)
+                pedidos_garantidos_por_sku.get(item, 0.0)
                 for item in items_da_classe
-                if item in self.variaveis_pedidos
             )
             
             # Producao total da classe (fixo, nao depende de pedidos)
-            producao_total_classe = df_base[df_base['classe'] == classe]['producao_total'].iloc[0] if len(df_base[df_base['classe'] == classe]) > 0 else 0
+            # Usar df_producao diretamente para garantir que funciona mesmo se classe so tiver SKUs restritos
+            producao_total_classe = producao_por_classe.get(classe, 0.0)
             
-            #  Restricao deve garantir que pedidos + excedente <= producao_total
-            # Esta restricao garante que a producao total da classe nunca e excedida
-            if producao_total_classe > 0:
-                # Restricao completa: pedidos + excedente <= producao_total
-                self.solver.Add(soma_pedidos_classe + soma_excedente_classe <= producao_total_classe)
+            # Verificar se ha variaveis para restringir (pedidos ou excedente)
+            # IMPORTANTE: soma_pedidos_classe agora é um valor numérico fixo 
+            # soma_excedente_classe ainda é uma expressão do solver
+            tem_pedidos = soma_pedidos_classe > 0  # Valor fixo > 0
+            tem_excedente = len(item_ids_classe) > 0 and any(item_id in self.variaveis for item_id in item_ids_classe)
+            
+            #  Restricao deve garantir que excedente <= producao_total - pedidos_garantidos
+            # Pedidos já foram descontados da produção disponível em _preparar_dados_otimizacao
+            # Mas vamos garantir explicitamente: excedente <= producao_total - pedidos_garantidos
+            # Criar restricao se houver producao E (pedidos OU excedente) para evitar restricoes vazias
+            if producao_total_classe > 0 and (tem_pedidos or tem_excedente):
+                # Restricao: excedente <= producao_total - pedidos_garantidos
+                # Como pedidos são fixos, podemos calcular producao_disponivel diretamente
+                producao_disponivel_classe = producao_total_classe - soma_pedidos_classe
+                self.solver.Add(soma_excedente_classe <= producao_disponivel_classe)
                 num_restricoes_classe += 1
         
         num_restricoes += num_restricoes_classe
@@ -1077,7 +1363,12 @@ class ModeloOtimizacaoComRealocacao:
         
         #  Aplicar restricao de demanda historica por SKU (soma de todas embalagens)
         # Restricao deve ser por SKU (soma de todas embalagens), nao por item_id individual
-        # Se nao houver demanda historica, o limite e a producao da classe (ja na restricao 2)
+        #
+        # COMPORTAMENTO: SKU SEM historico de demanda
+        # - Nao recebe restricao de demanda (excedente + pedidos <= demanda_max).
+        # - O unico limite e a producao da classe (restricao 2).
+        # - O modelo PODE alocar volume nele; o solver decide pela margem/objetivo.
+        # - Nao e limite zero: quem tem limite zero nao entra em df_base (ex.: restritos).
         if considerar_demanda and len(df_demanda) > 0:
             # Agrupar item_id por SKU (item) para aplicar restricao somada
             # Criar dicionario: item -> lista de item_id desse SKU
@@ -1096,8 +1387,8 @@ class ModeloOtimizacaoComRealocacao:
                     skus_com_demanda[item] = []
                 skus_com_demanda[item].append(item_id)
             
-            # Aplicar restricao somada por SKU
-            # Restricao deve incluir pedidos + excedente (soma de todas embalagens)
+            # Aplicar restricao somada por SKU (apenas para SKUs que TEM demanda historica)
+            # SKUs sem entrada em demanda_por_sku nao recebem esta restricao -> limite = producao da classe
             for item, item_ids_do_sku in skus_com_demanda.items():
                 if item in demanda_por_sku:
                     limite_demanda = float(demanda_por_sku[item])
@@ -1179,16 +1470,25 @@ class ModeloOtimizacaoComRealocacao:
         objetivo_pedidos = 0.0
         atender_pedidos = self.dados.get('atender_pedidos', True)
         df_pedidos_sku = self.dados.get('pedidos_por_sku', pd.DataFrame(columns=['item', 'quantidade_total_pedida']))
+        pedidos_garantidos_por_sku = self.dados.get('pedidos_garantidos_por_sku', {})
         
         if atender_pedidos and len(df_pedidos_sku) > 0:
+            # Carregar dados necessarios para SKUs restritos
+            df_classes = self.dados.get('classes', pd.DataFrame(columns=['item', 'classe']))
+            df_precos = self.dados.get('precos', pd.DataFrame(columns=['item_id', 'preco']))
+            df_custos = self.dados.get('custos', pd.DataFrame(columns=['item_id', 'custo_ytd']))
+            
             for _, row in df_pedidos_sku.iterrows():
                 item = row['item']
-                if item in self.variaveis_pedidos:
+                
+                # Usar quantidade GARANTIDA (fixa)
+                if item in pedidos_garantidos_por_sku:
+                    qtd_atendida_ovos = pedidos_garantidos_por_sku[item]  # Valor fixo
                     item_ids_do_sku = df_base[df_base['item'] == item]
                     if len(item_ids_do_sku) > 0:
-                        # Usar embalagem que maximiza margem total para o pedido
+                        # SKU normal: usar embalagem que maximiza margem total para o pedido
                         # Para pedidos em ovos, calcular qual embalagem da maior margem total
-                        # Usar quantidade pedida (valor numerico) para calcular melhor embalagem
+                        # Usar quantidade garantida (valor numerico) para calcular melhor embalagem
                         qtd_pedida_ovos = row['quantidade_total_pedida']
                         
                         if tipo_objetivo == 'maximizar_margem':
@@ -1202,8 +1502,8 @@ class ModeloOtimizacaoComRealocacao:
                             melhor_embalagem_idx = item_ids_do_sku_copy['margem_total_pedido'].idxmax()
                             melhor_embalagem = item_ids_do_sku_copy.loc[melhor_embalagem_idx]
                             qtd_ovos_por_caixa_item = melhor_embalagem['qtd_ovos_por_caixa']
-                            # Converter variavel do solver (em ovos) para caixas usando melhor embalagem
-                            qtd_caixas_pedido = self.variaveis_pedidos[item] / qtd_ovos_por_caixa_item
+                            # Converter quantidade garantida (em ovos) para caixas usando melhor embalagem
+                            qtd_caixas_pedido = qtd_atendida_ovos / qtd_ovos_por_caixa_item
                             margem_item = melhor_embalagem['margem_unitaria']
                             objetivo_pedidos += margem_item * qtd_caixas_pedido
                         else:  # minimizar_custos
@@ -1216,10 +1516,35 @@ class ModeloOtimizacaoComRealocacao:
                             melhor_embalagem_idx = item_ids_do_sku_copy['custo_total_pedido'].idxmin()
                             melhor_embalagem = item_ids_do_sku_copy.loc[melhor_embalagem_idx]
                             qtd_ovos_por_caixa_item = melhor_embalagem['qtd_ovos_por_caixa']
-                            # Converter variavel do solver (em ovos) para caixas usando melhor embalagem
-                            qtd_caixas_pedido = self.variaveis_pedidos[item] / qtd_ovos_por_caixa_item
+                            # Converter quantidade garantida (em ovos) para caixas usando melhor embalagem
+                            qtd_caixas_pedido = qtd_atendida_ovos / qtd_ovos_por_caixa_item
                             custo_item = melhor_embalagem['custo_ytd']
                             objetivo_pedidos += custo_item * qtd_caixas_pedido
+                    else:
+                        # SKU restrito ou com pedido (não está em df_base): buscar classe e usar preco/custo medio da classe
+                        classe_sku = df_classes[df_classes['item'] == item]['classe'].values
+                        if len(classe_sku) > 0:
+                            classe = classe_sku[0]
+                            # Buscar item_ids da classe que tem preco e custo (mesmo que SKU não esteja em df_base)
+                            item_ids_da_classe = df_base[df_base['classe'] == classe]
+                            if len(item_ids_da_classe) > 0:
+                                # Usar media de preco/custo/margem da classe
+                                preco_medio = item_ids_da_classe['preco'].mean()
+                                custo_medio = item_ids_da_classe['custo_ytd'].mean()
+                                margem_media = item_ids_da_classe['margem_unitaria'].mean()
+                                qtd_ovos_por_caixa_media = item_ids_da_classe['qtd_ovos_por_caixa'].mean()
+                                
+                                # Converter quantidade garantida (em ovos) para caixas
+                                qtd_caixas_pedido = qtd_atendida_ovos / qtd_ovos_por_caixa_media
+                                
+                                if tipo_objetivo == 'maximizar_margem':
+                                    objetivo_pedidos += margem_media * qtd_caixas_pedido
+                                else:  # minimizar_custos
+                                    objetivo_pedidos += custo_medio * qtd_caixas_pedido
+                            else:
+                                # Classe sem item_ids no df_base (muito raro, mas tratar)
+                                # Usar valores padrao ou ignorar
+                                self.logger.warning(f"  [AVISO] SKU {item} na classe {classe} sem item_ids no df_base. Ignorando no objetivo.")
         
         #  Objetivo da otimizacao no excedente (usando item_id)
         # IMPORTANTE: Converter quantidade de ovos para caixas antes de multiplicar pela margem
@@ -1279,11 +1604,17 @@ class ModeloOtimizacaoComRealocacao:
         margem_potencial_pedidos = 0.0
         custo_potencial_pedidos = 0.0
         if atender_pedidos and len(df_pedidos_sku) > 0:
+            # Carregar dados necessarios para SKUs restritos
+            df_classes = self.dados.get('classes', pd.DataFrame(columns=['item', 'classe']))
+            df_producao = self.dados.get('producao', pd.DataFrame(columns=['classe', 'producao_total']))
+            producao_por_classe = df_producao.set_index('classe')['producao_total'].to_dict() if len(df_producao) > 0 else {}
+            
             for _, row in df_pedidos_sku.iterrows():
                 item = row['item']
                 qtd_pedida = row['quantidade_total_pedida']
                 item_ids_do_sku = df_base[df_base['item'] == item]
                 if len(item_ids_do_sku) > 0:
+                    # SKU normal: usar dados do df_base
                     producao_classe = float(item_ids_do_sku['producao_disponivel_otimizacao_classe'].iloc[0])
                     qtd_atendivel = min(qtd_pedida, producao_classe)
                     
@@ -1295,6 +1626,25 @@ class ModeloOtimizacaoComRealocacao:
                     
                     margem_potencial_pedidos += margem_item * qtd_caixas_atendivel
                     custo_potencial_pedidos += custo_item * qtd_caixas_atendivel
+                else:
+                    # SKU restrito: buscar classe e usar preco/custo medio da classe
+                    classe_sku = df_classes[df_classes['item'] == item]['classe'].values
+                    if len(classe_sku) > 0:
+                        classe = classe_sku[0]
+                        producao_total_classe = producao_por_classe.get(classe, 0.0)
+                        qtd_atendivel = min(qtd_pedida, producao_total_classe)
+                        
+                        # Buscar item_ids da classe que tem preco e custo
+                        item_ids_da_classe = df_base[df_base['classe'] == classe]
+                        if len(item_ids_da_classe) > 0:
+                            # Usar media de preco/custo/margem da classe
+                            margem_media = item_ids_da_classe['margem_unitaria'].mean()
+                            custo_medio = item_ids_da_classe['custo_ytd'].mean()
+                            qtd_ovos_por_caixa_media = item_ids_da_classe['qtd_ovos_por_caixa'].mean()
+                            qtd_caixas_atendivel = qtd_atendivel / qtd_ovos_por_caixa_media
+                            
+                            margem_potencial_pedidos += margem_media * qtd_caixas_atendivel
+                            custo_potencial_pedidos += custo_medio * qtd_caixas_atendivel
         
         #  Calcular metricas da otimizacao (usando producao disponivel)
         # A producao e por classe, entao usamos a producao disponivel para otimizacao
@@ -1361,6 +1711,18 @@ class ModeloOtimizacaoComRealocacao:
         demanda_por_item = df_demanda.set_index('item')['demanda_max'].to_dict() if len(df_demanda) > 0 else {}
         considerar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
         
+        # Carregar informacoes para mapeamento nos outputs
+        df_pedidos_sku = self.dados.get('pedidos_por_sku', pd.DataFrame(columns=['item', 'quantidade_total_pedida']))
+        skus_com_pedido = set(df_pedidos_sku['item'].tolist()) if len(df_pedidos_sku) > 0 else set()
+        
+        # IMPORTANTE: Usar apenas SKUs restritos filtrados por estabelecimento para mapeamento
+        # Não carregar TODOS os SKUs restritos, pois isso incluiria SKUs de outros estabelecimentos
+        # que não deveriam estar sendo alocados de qualquer forma
+        skus_restritos_filtrados = self.dados.get('skus_restritos', [])
+        skus_restritos = set(int(sku) for sku in skus_restritos_filtrados if pd.notna(sku))
+        
+        skus_com_demanda_historica = set(demanda_por_item.keys()) if len(demanda_por_item) > 0 else set()
+        
         # Determinar tipo baseado no modo de operacao
         atender_pedidos = self.dados.get('atender_pedidos', True)
         usar_apenas_excedente = self.dados.get('usar_apenas_excedente', True)
@@ -1383,7 +1745,8 @@ class ModeloOtimizacaoComRealocacao:
                 row_base = df_base[df_base['item_id'] == item_id]
                 if len(row_base) > 0:
                     row = row_base.iloc[0]
-                    demanda_max = demanda_por_item.get(row['item'])
+                    item_int = int(row['item']) if pd.notna(row['item']) else None
+                    demanda_max = demanda_por_item.get(item_int) if item_int is not None else None
                     limite_classe = row['producao_disponivel_otimizacao_classe']
                     restricao_quantidade = limite_classe
                     restricao_tipo = 'PRODUCAO_CLASSE'
@@ -1395,9 +1758,22 @@ class ModeloOtimizacaoComRealocacao:
                     # qtd esta em OVOS, preco/custo/margem estao em R$/CAIXA
                     qtd_caixas = qtd / row['qtd_ovos_por_caixa']
                     
+                    # Mapear informacoes do SKU
+                    item = row['item']
+                    tem_pedido = item in skus_com_pedido
+                    sku_restrito = False  # Base já filtrada por A∩B; coluna mantida por compatibilidade
+                    tem_demanda_historica = item in skus_com_demanda_historica
+                    
+                    # Verificar se custo foi calculado usando média da classe
+                    # Para pandas Series, usar acesso direto em vez de .get()
+                    if 'custo_medio_classe' in row.index:
+                        custo_medio_classe = bool(row['custo_medio_classe'])
+                    else:
+                        custo_medio_classe = False
+                    
                     resultados.append({
                         'item_id': item_id,
-                        'item': row['item'],
+                        'item': item,
                         'embalagem': row['embalagem'],
                         'classe': row['classe'],
                         'quantidade': qtd,  # Manter em ovos para referencia
@@ -1412,35 +1788,230 @@ class ModeloOtimizacaoComRealocacao:
                         'margem_unitaria': row['margem_unitaria'],
                         'receita_total': qtd_caixas * row['preco'],  # CAIXAS × R$/CAIXA
                         'custo_total': qtd_caixas * row['custo_ytd'],  # CAIXAS × R$/CAIXA
-                        'margem_total': qtd_caixas * row['margem_unitaria']  # CAIXAS × R$/CAIXA
+                        'margem_total': qtd_caixas * row['margem_unitaria'],  # CAIXAS × R$/CAIXA
+                        'tem_pedido': tem_pedido,  # SKU tem pedido
+                        'sku_restrito': sku_restrito,  # SKU esta na lista de restritos
+                        'tem_demanda_historica': tem_demanda_historica,  # SKU tem historico de demanda
+                        'custo_medio_classe': custo_medio_classe  # Custo foi calculado usando média da classe
                     })
         
-        # Resultados dos pedidos atendidos
-        df_pedidos_sku = self.dados.get('pedidos_por_sku', pd.DataFrame(columns=['item', 'quantidade_total_pedida']))
+        # Resultados dos pedidos atendidos (GARANTIDOS - valores fixos)
+        # Nota: skus_com_pedido já foi definido acima com tipos int
+        pedidos_garantidos_por_sku = self.dados.get('pedidos_garantidos_por_sku', {})
+        
         if len(df_pedidos_sku) > 0:
             for _, row_pedido in df_pedidos_sku.iterrows():
                 item = row_pedido['item']
-                if item in self.variaveis_pedidos:
-                    qtd_atendida = self.variaveis_pedidos[item].solution_value()
+                # Usar quantidade garantida (valor fixo)
+                if item in pedidos_garantidos_por_sku:
+                    qtd_atendida = pedidos_garantidos_por_sku[item]  # Valor fixo garantido
                     if qtd_atendida > 0.01:
                         # Buscar dados do item
                         row_base = df_base[df_base['item'] == item]
                         if len(row_base) > 0:
+                            # SKU normal: usar dados do df_base
                             row = row_base.iloc[0]
-                            # Usar producao_total para consistencia (mesmo que na criacao da variavel)
                             producao_total_classe = float(row['producao_total'])
                             limite_pedido = row_pedido['quantidade_total_pedida']
                             quantidade_restricao = min(limite_pedido, producao_total_classe)
                             tipo_restricao = 'PEDIDO' if limite_pedido <= producao_total_classe else 'PRODUCAO_CLASSE'
+                            classe = row['classe']
+                            # Garantir que custo_medio_classe está presente (pode não estar se SKU tem custo real)
+                            if 'custo_medio_classe' not in row:
+                                row['custo_medio_classe'] = False
+                        else:
+                            # SKU restrito: buscar classe via df_classes e producao via df_producao
+                            df_classes = self.dados.get('classes', pd.DataFrame(columns=['item', 'classe']))
+                            df_producao = self.dados.get('producao', pd.DataFrame(columns=['classe', 'producao_total']))
+                            producao_por_classe = df_producao.set_index('classe')['producao_total'].to_dict() if len(df_producao) > 0 else {}
+                            
+                            classe_sku = df_classes[df_classes['item'] == item]['classe'].values
+                            if len(classe_sku) > 0:
+                                classe = classe_sku[0]
+                                producao_total_classe = producao_por_classe.get(classe, 0.0)
+                                limite_pedido = row_pedido['quantidade_total_pedida']
+                                quantidade_restricao = min(limite_pedido, producao_total_classe)
+                                tipo_restricao = 'PEDIDO' if limite_pedido <= producao_total_classe else 'PRODUCAO_CLASSE'
+                                
+                                # Buscar preco/custo/margem medio da classe para valores financeiros corretos
+                                # O codigo abaixo espera um objeto 'row' com colunas especificas.
+                                # Se SKU e restrito, nao esta em df_base, entao criamos um 'row fake'
+                                # com valores medios da classe para calcular receita/custo/margem corretamente.
+                                item_ids_da_classe = df_base[df_base['classe'] == classe]
+                                if len(item_ids_da_classe) > 0:
+                                    # Usar media de preco/custo/margem da classe
+                                    preco_medio = item_ids_da_classe['preco'].mean()
+                                    custo_medio = item_ids_da_classe['custo_ytd'].mean()
+                                    margem_media = item_ids_da_classe['margem_unitaria'].mean()
+                                    qtd_ovos_por_caixa_media = item_ids_da_classe['qtd_ovos_por_caixa'].mean()
+                                else:
+                                    # Classe sem item_ids no df_base (muito raro)
+                                    # Tentar usar valores médios de df_custos ou df_precos
+                                    df_custos_orig = self.dados.get('custos', pd.DataFrame(columns=['item', 'custo_ytd']))
+                                    df_precos_orig = self.dados.get('precos', pd.DataFrame(columns=['item_id', 'preco', 'qtd_ovos_por_caixa']))
+                                    df_classes_orig = self.dados.get('classes', pd.DataFrame(columns=['item', 'classe']))
+                                    
+                                    # Buscar SKUs da classe em df_classes e depois custos desses SKUs
+                                    if len(df_classes_orig) > 0:
+                                        skus_da_classe = set(df_classes_orig[df_classes_orig['classe'] == classe]['item'].unique())
+                                        if len(skus_da_classe) > 0 and len(df_custos_orig) > 0:
+                                            custos_da_classe = df_custos_orig[df_custos_orig['item'].isin(skus_da_classe)]
+                                            if len(custos_da_classe) > 0:
+                                                custo_medio = custos_da_classe['custo_ytd'].mean()
+                                            else:
+                                                custo_medio = df_custos_orig['custo_ytd'].mean() if 'custo_ytd' in df_custos_orig.columns else 132.82
+                                        else:
+                                            custo_medio = df_custos_orig['custo_ytd'].mean() if len(df_custos_orig) > 0 and 'custo_ytd' in df_custos_orig.columns else 132.82
+                                    else:
+                                        custo_medio = df_custos_orig['custo_ytd'].mean() if len(df_custos_orig) > 0 and 'custo_ytd' in df_custos_orig.columns else 132.82
+                                    
+                                    # Buscar preços da classe
+                                    if len(df_precos_orig) > 0 and len(df_classes_orig) > 0:
+                                        # Buscar item_ids de SKUs da classe
+                                        skus_da_classe = set(df_classes_orig[df_classes_orig['classe'] == classe]['item'].unique())
+                                        if len(skus_da_classe) > 0:
+                                            # Extrair item de item_id (formato: "item_embalagem")
+                                            df_precos_orig['item'] = df_precos_orig['item_id'].str.split('_').str[0].astype(int)
+                                            precos_da_classe = df_precos_orig[df_precos_orig['item'].isin(skus_da_classe)]
+                                            if len(precos_da_classe) > 0:
+                                                preco_medio = precos_da_classe['preco'].mean()
+                                                qtd_ovos_por_caixa_media = precos_da_classe['qtd_ovos_por_caixa'].mean() if 'qtd_ovos_por_caixa' in precos_da_classe.columns else 360
+                                            else:
+                                                preco_medio = df_precos_orig['preco'].mean() if 'preco' in df_precos_orig.columns else 178.69
+                                                qtd_ovos_por_caixa_media = df_precos_orig['qtd_ovos_por_caixa'].mean() if 'qtd_ovos_por_caixa' in df_precos_orig.columns else 360
+                                        else:
+                                            preco_medio = df_precos_orig['preco'].mean() if 'preco' in df_precos_orig.columns else 178.69
+                                            qtd_ovos_por_caixa_media = df_precos_orig['qtd_ovos_por_caixa'].mean() if 'qtd_ovos_por_caixa' in df_precos_orig.columns else 360
+                                    else:
+                                        preco_medio = 178.69
+                                        qtd_ovos_por_caixa_media = 360
+                                    
+                                    margem_media = preco_medio - custo_medio
+                                    
+                                    self.logger.warning(f"  Classe {classe} sem item_ids no df_base - usando valores médios: custo={custo_medio:.2f}, preço={preco_medio:.2f}")
+                                
+                                # Criar row fake para compatibilidade com valores da classe
+                                # O codigo abaixo espera um objeto 'row' com colunas especificas.
+                                # Se SKU e restrito ou com pedido, nao esta em df_base, entao criamos um 'row fake'
+                                # com as colunas necessarias para evitar erros.
+                                # Verificar se custo foi calculado usando média da classe
+                                # Verificar se SKU tem custos reais (pode ter sido removido de df_base por ter pedido)
+                                df_custos = self.dados.get('custos', pd.DataFrame(columns=['item']))
+                                skus_com_custos_reais = set(df_custos['item'].unique()) if len(df_custos) > 0 else set()
+                                tem_custo_real = item in skus_com_custos_reais
+                                
+                                # Se tem custo real, usar custo real; senão, usar média da classe
+                                if tem_custo_real:
+                                    # Buscar custo real do SKU (pode ter múltiplas embalagens, usar primeira)
+                                    custos_sku = df_custos[df_custos['item'] == item]
+                                    if len(custos_sku) > 0:
+                                        custo_real = custos_sku.iloc[0]['custo_ytd']
+                                        # Buscar preço real também se disponível
+                                        df_precos = self.dados.get('precos', pd.DataFrame(columns=['item_id', 'preco']))
+                                        precos_sku = df_precos[df_precos['item_id'].isin(custos_sku['item_id'].values)]
+                                        if len(precos_sku) > 0:
+                                            preco_real = precos_sku.iloc[0]['preco']
+                                            margem_real = preco_real - custo_real
+                                        else:
+                                            preco_real = preco_medio
+                                            margem_real = preco_real - custo_real
+                                    else:
+                                        custo_real = custo_medio
+                                        preco_real = preco_medio
+                                        margem_real = margem_media
+                                    
+                                    custo_medio_classe_flag = False  # Tem custo real
+                                    custo_usar = custo_real
+                                    preco_usar = preco_real
+                                    margem_usar = margem_real
+                                else:
+                                    # Não tem custo real, usar média da classe
+                                    custo_medio_classe_flag = True  # Custo foi calculado usando média
+                                    custo_usar = custo_medio
+                                    preco_usar = preco_medio
+                                    margem_usar = margem_media
+                                
+                                row = pd.Series({
+                                    'classe': classe,
+                                    'producao_total': producao_total_classe,
+                                    'preco': preco_usar,
+                                    'custo_ytd': custo_usar,
+                                    'margem_unitaria': margem_usar,
+                                    'qtd_ovos_por_caixa': qtd_ovos_por_caixa_media,
+                                    'custo_medio_classe': custo_medio_classe_flag  # Flag indicando se custo foi calculado
+                                })
+                            else:
+                                continue  # SKU nao encontrado, pular
                             # Converter quantidade de ovos para caixas para calculos financeiros
                             # qtd_atendida esta em OVOS, preco/custo/margem estao em R$/CAIXA
                             # Usar primeira embalagem disponivel do item para conversao
                             qtd_ovos_por_caixa_pedido = row['qtd_ovos_por_caixa'] if 'qtd_ovos_por_caixa' in row else df_base[df_base['item'] == item]['qtd_ovos_por_caixa'].iloc[0] if len(df_base[df_base['item'] == item]) > 0 else 360
                             qtd_caixas_pedido = qtd_atendida / qtd_ovos_por_caixa_pedido
                             
+                            # Criar item_id para pedidos
+                            # Tentar usar primeira embalagem disponivel do SKU em df_base
+                            # Se SKU restrito nao esta em df_base, usar embalagem mais comum da classe
+                            item_id_pedido = None
+                            embalagem_pedido = None
+                            
+                            # Tentar encontrar embalagem do SKU em df_base
+                            item_ids_do_sku = df_base[df_base['item'] == item]
+                            if len(item_ids_do_sku) > 0:
+                                # SKU normal: usar primeira embalagem disponivel
+                                embalagem_pedido = item_ids_do_sku['embalagem'].iloc[0]
+                                item_id_pedido = f"{item}_{embalagem_pedido}"
+                            else:
+                                # SKU restrito ou com pedido (não está em df_base): usar embalagem mais comum da classe
+                                item_ids_da_classe = df_base[df_base['classe'] == classe]
+                                if len(item_ids_da_classe) > 0:
+                                    embalagem_mais_comum = item_ids_da_classe['embalagem'].mode()
+                                    if len(embalagem_mais_comum) > 0:
+                                        embalagem_pedido = embalagem_mais_comum.iloc[0]
+                                        item_id_pedido = f"{item}_{embalagem_pedido}"
+                                    else:
+                                        # Fallback: usar primeira embalagem da classe
+                                        embalagem_pedido = item_ids_da_classe['embalagem'].iloc[0]
+                                        item_id_pedido = f"{item}_{embalagem_pedido}"
+                                else:
+                                    # Classe sem item_ids em df_base (todos os SKUs foram removidos)
+                                    # Usar embalagem padrão mais comum (buscar em df_custos original)
+                                    df_custos = self.dados.get('custos', pd.DataFrame(columns=['item_id', 'item', 'embalagem']))
+                                    if len(df_custos) > 0:
+                                        # Buscar embalagem mais comum em toda a base de custos
+                                        embalagem_mais_comum_geral = df_custos['embalagem'].mode()
+                                        if len(embalagem_mais_comum_geral) > 0:
+                                            embalagem_pedido = embalagem_mais_comum_geral.iloc[0]
+                                        else:
+                                            embalagem_pedido = df_custos['embalagem'].iloc[0] if len(df_custos) > 0 else 'CX12'
+                                        item_id_pedido = f"{item}_{embalagem_pedido}"
+                                    else:
+                                        # Último fallback: usar embalagem padrão
+                                        embalagem_pedido = 'CX12'  # Embalagem padrão mais comum
+                                        item_id_pedido = f"{item}_{embalagem_pedido}"
+                            
+                            # Se ainda não conseguimos criar um item_id válido, usar fallback final
+                            if item_id_pedido is None or embalagem_pedido is None:
+                                embalagem_pedido = 'CX12'  # Embalagem padrão
+                                item_id_pedido = f"{item}_{embalagem_pedido}"
+                                self.logger.warning(f"  [AVISO] Pedido do SKU {item} usando embalagem padrão (CX12): classe sem item_ids em df_base.")
+                            
+                            # Mapear informacoes do SKU
+                            tem_pedido = True  # Sempre True para pedidos atendidos
+                            item_int = int(item) if pd.notna(item) else None
+                            sku_restrito = False  # Base já filtrada por A∩B; coluna mantida por compatibilidade
+                            tem_demanda_historica = item_int in skus_com_demanda_historica if item_int is not None else False
+                            
+                            # Verificar se custo foi calculado usando média da classe
+                            # Para pandas Series, usar acesso direto em vez de .get()
+                            if 'custo_medio_classe' in row.index:
+                                custo_medio_classe = bool(row['custo_medio_classe'])
+                            else:
+                                custo_medio_classe = False
+                            
                             resultados.append({
+                                'item_id': item_id_pedido,
                                 'item': item,
-                                'embalagem': 'PEDIDO',  # Pedidos nao especificam embalagem
+                                'embalagem': embalagem_pedido,  # Usar embalagem real quando possivel
                                 'classe': row['classe'],
                                 'quantidade': qtd_atendida,  # Manter em ovos
                                 'quantidade_caixas': qtd_caixas_pedido,  # Adicionar coluna em caixas
@@ -1455,7 +2026,11 @@ class ModeloOtimizacaoComRealocacao:
                                 'margem_unitaria': row['margem_unitaria'],
                                 'receita_total': qtd_caixas_pedido * row['preco'],  # CAIXAS × R$/CAIXA
                                 'custo_total': qtd_caixas_pedido * row['custo_ytd'],  # CAIXAS × R$/CAIXA
-                                'margem_total': qtd_caixas_pedido * row['margem_unitaria']  # CAIXAS × R$/CAIXA
+                                'margem_total': qtd_caixas_pedido * row['margem_unitaria'],  # CAIXAS × R$/CAIXA
+                                'tem_pedido': tem_pedido,  # SKU tem pedido
+                                'sku_restrito': sku_restrito,  # SKU esta na lista de restritos
+                                'tem_demanda_historica': tem_demanda_historica,  # SKU tem historico de demanda
+                                'custo_medio_classe': custo_medio_classe  # Custo foi calculado usando média da classe
                             })
         
         self.resultado = pd.DataFrame(resultados)
@@ -1467,7 +2042,8 @@ class ModeloOtimizacaoComRealocacao:
                                                    'tipo_restricao', 'quantidade_restricao',
                                                    'producao_total', 'producao_disponivel', 'preco', 
                                                    'custo_ytd', 'margem_unitaria', 'receita_total', 
-                                                   'custo_total', 'margem_total'])
+                                                   'custo_total', 'margem_total', 'tem_pedido', 
+                                                   'sku_restrito', 'tem_demanda_historica', 'custo_medio_classe'])
         
         if len(self.resultado) > 0:
             # Nota: Removidas colunas variacao_qtd e variacao_pct
@@ -1529,14 +2105,29 @@ class ModeloOtimizacaoComRealocacao:
         custo_otimizado = self.resultado['custo_total'].sum()
         
         #  Metricas baseline: para cada classe, usar a margem/custo medio dos item_id
-        # O baseline assume distribuicao uniforme da producao entre todos os item_id da classe
+        # O baseline assume distribuicao uniforme entre os item_id da classe.
+        # Quando considerar_demanda_historica=true, o baseline deve usar o MESMO volume
+        # alocado que a solucao otimizada (por classe), senao comparamos volume total
+        # diferente (producao 100% vs volume limitado pela demanda) e o ganho fica distorcido.
+        considerar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
         df_producao = self.dados['producao']
         margem_baseline = 0.0
         custo_baseline = 0.0
         
+        # Volume alocado por classe (da solucao otimizada), para baseline com demanda historica
+        if considerar_demanda and 'classe' in self.resultado.columns and 'quantidade' in self.resultado.columns:
+            qtd_alocada_por_classe = self.resultado.groupby('classe')['quantidade'].sum()
+        else:
+            qtd_alocada_por_classe = None
+        
         for _, row in df_producao.iterrows():
             classe = row['classe']
-            qtd_producao = row['producao_total']
+            # Com demanda historica: baseline = mesmo volume alocado (distribuicao uniforme)
+            # Sem demanda historica: baseline = producao total da classe (distribuicao uniforme)
+            if qtd_alocada_por_classe is not None and classe in qtd_alocada_por_classe.index:
+                qtd_producao = float(qtd_alocada_por_classe[classe])
+            else:
+                qtd_producao = row['producao_total']
             
             # Buscar todos os item_id desta classe
             item_ids_classe = df_base[df_base['classe'] == classe]
@@ -1568,6 +2159,8 @@ class ModeloOtimizacaoComRealocacao:
         self.logger.info("\n" + "="*80)
         self.logger.info("COMPARATIVO: BASELINE vs OTIMIZADO")
         self.logger.info("="*80)
+        if considerar_demanda:
+            self.logger.info("  (Baseline = mesmo volume alocado, distribuicao uniforme por classe)")
         
         # Sempre exibir margem (para comparacao)
         self.logger.info(f"  Margem Baseline (sem realocacao): R$ {margem_baseline:,.2f}")
@@ -1680,18 +2273,39 @@ class ModeloOtimizacaoComRealocacao:
             # Aba 3: Estatisticas e Resumo Executivo
             df_estatisticas = self._criar_aba_estatisticas(resumo_classe)
             df_estatisticas.to_excel(writer, sheet_name='Estatisticas', index=False)
+            
+            # Aba 4: Pedidos Ignorados (se houver)
+            pedidos_ignorados = self.dados.get('pedidos_ignorados', [])
+            if len(pedidos_ignorados) > 0:
+                df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
+                df_pedidos_ignorados = df_pedidos_ignorados.sort_values('quantidade_total_pedida', ascending=False)
+                df_pedidos_ignorados.to_excel(writer, sheet_name='Pedidos Ignorados', index=False)
         
         # Salvar resumo por classe separado (para compatibilidade)
         arquivo_resumo_xlsx = output_dir / f'resumo_por_classe_{modo_sufixo}_{timestamp}.xlsx'
         resumo_classe.to_excel(arquivo_resumo_xlsx, index=False, engine='openpyxl')
         
+        # Salvar pedidos ignorados (se houver)
+        pedidos_ignorados = self.dados.get('pedidos_ignorados', [])
+        if len(pedidos_ignorados) > 0:
+            df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
+            df_pedidos_ignorados = df_pedidos_ignorados.sort_values('quantidade_total_pedida', ascending=False)
+            arquivo_pedidos_ignorados_csv = output_dir / f'pedidos_ignorados_{modo_sufixo}_{timestamp}.csv'
+            arquivo_pedidos_ignorados_xlsx = output_dir / f'pedidos_ignorados_{modo_sufixo}_{timestamp}.xlsx'
+            df_pedidos_ignorados.to_csv(arquivo_pedidos_ignorados_csv, index=False, encoding='utf-8')
+            df_pedidos_ignorados.to_excel(arquivo_pedidos_ignorados_xlsx, index=False, engine='openpyxl')
+        
         self.logger.info(f"\n[OK] Resultados salvos em {output_dir}/")
         self.logger.info(f"  CSV:")
         self.logger.info(f"    - {arquivo_resultado_csv.name}")
         self.logger.info(f"    - {arquivo_resumo_csv.name}")
+        num_abas = 4 if len(pedidos_ignorados) > 0 else 3
         self.logger.info(f"  Excel:")
-        self.logger.info(f"    - {arquivo_resultado_xlsx.name} (com 3 abas: Detalhado, Resumo, Estatisticas)")
+        self.logger.info(f"    - {arquivo_resultado_xlsx.name} (com {num_abas} abas: Detalhado, Resumo, Estatisticas" + (", Pedidos Ignorados" if len(pedidos_ignorados) > 0 else "") + ")")
         self.logger.info(f"    - {arquivo_resumo_xlsx.name}")
+        if len(pedidos_ignorados) > 0:
+            self.logger.info(f"    - {arquivo_pedidos_ignorados_csv.name}")
+            self.logger.info(f"    - {arquivo_pedidos_ignorados_xlsx.name}")
     
     def _criar_aba_estatisticas(self, resumo_classe: pd.DataFrame):
         """Cria DataFrame com estatisticas e resumo executivo."""
@@ -1736,6 +2350,17 @@ class ModeloOtimizacaoComRealocacao:
             estatisticas.append({'Categoria': 'PEDIDOS ATENDIDOS', 'Metrica': 'Quantidade Atendida', 'Valor': f'{qtd_atendida:,.0f}', 'Unidade': 'unidades'})
             estatisticas.append({'Categoria': 'PEDIDOS ATENDIDOS', 'Metrica': 'Percentual Medio Atendido', 'Valor': f'{pct_medio:.1f}', 'Unidade': '%'})
             estatisticas.append({'Categoria': 'PEDIDOS ATENDIDOS', 'Metrica': 'Margem dos Pedidos', 'Valor': f'R$ {margem_pedidos:,.2f}', 'Unidade': 'R$'})
+        
+        # Adicionar estatisticas de pedidos ignorados
+        pedidos_ignorados = self.dados.get('pedidos_ignorados', [])
+        if len(pedidos_ignorados) > 0:
+            total_ignorado = sum(p['quantidade_total_pedida'] for p in pedidos_ignorados)
+            skus_sem_classe = len([p for p in pedidos_ignorados if 'nao encontrado em classes' in p['motivo']])
+            classes_sem_producao = len([p for p in pedidos_ignorados if 'nao tem producao' in p['motivo']])
+            estatisticas.append({'Categoria': 'PEDIDOS IGNORADOS', 'Metrica': 'SKUs Ignorados', 'Valor': f'{len(pedidos_ignorados)}', 'Unidade': 'SKUs'})
+            estatisticas.append({'Categoria': 'PEDIDOS IGNORADOS', 'Metrica': 'Quantidade Ignorada', 'Valor': f'{total_ignorado:,.0f}', 'Unidade': 'unidades'})
+            estatisticas.append({'Categoria': 'PEDIDOS IGNORADOS', 'Metrica': 'SKUs sem Classe', 'Valor': f'{skus_sem_classe}', 'Unidade': 'SKUs'})
+            estatisticas.append({'Categoria': 'PEDIDOS IGNORADOS', 'Metrica': 'Classes sem Producao', 'Valor': f'{classes_sem_producao}', 'Unidade': 'SKUs'})
         
         # 3. OTIMIZACAO NO EXCEDENTE
         if len(df_excedente) > 0:
