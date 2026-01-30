@@ -564,11 +564,35 @@ class ModeloOtimizacaoComRealocacao:
                 else:
                     self.logger.warning("  Coluna 'Estab' nao encontrada para filtro de estabelecimentos.")
             
-            # Corrigir unidades da quantidade de items (de caixas de 360 ovos para unidades)
-            # TODO: CORRIGIR - Esta multiplicacao por 360 assume que todas as caixas tem 360 ovos,
-            # mas existem outros tipos de embalagem (ex: CX 12 BJ 30 UN = 360, CX 24 BJ 10 UN = 240).
-            # Deve usar a coluna 'CONV. P OVO' do faturamento ou calcular baseado na embalagem do item.
-            df_fat[col_qtd] = df_fat[col_qtd] * 360
+            # Converter quantidade de CAIXAS para OVOS usando a embalagem real de cada item
+            # (ao invés de assumir 360 ovos/caixa para todos)
+            from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
+            
+            # Detectar coluna de descrição
+            col_desc = None
+            for col in df_fat.columns:
+                if 'descri' in col.lower() and 'item' in col.lower():
+                    col_desc = col
+                    break
+            if col_desc is None:
+                col_desc = 'Descrição do item'  # fallback
+            
+            # Extrair embalagem e calcular ovos por caixa
+            df_fat['_embalagem'] = df_fat[col_desc].apply(extrair_embalagem_descricao)
+            df_fat['_ovos_por_caixa'] = df_fat['_embalagem'].apply(calcular_qtd_embalagem)
+            
+            # Usar 360 como fallback para embalagens não reconhecidas
+            df_fat['_ovos_por_caixa'] = df_fat['_ovos_por_caixa'].fillna(360)
+            
+            # Log de estatísticas da conversão
+            ovos_dist = df_fat['_ovos_por_caixa'].value_counts().to_dict()
+            self.logger.info(f"  Distribuição de ovos/caixa: {ovos_dist}")
+            
+            # Converter quantidade para ovos
+            df_fat[col_qtd] = df_fat[col_qtd] * df_fat['_ovos_por_caixa']
+            
+            # Limpar colunas temporárias
+            df_fat = df_fat.drop(columns=['_embalagem', '_ovos_por_caixa'])
             
             # Converter data
             df_fat[col_data] = pd.to_datetime(df_fat[col_data], errors='coerce')

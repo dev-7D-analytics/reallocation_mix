@@ -34,7 +34,7 @@ solver:
   # Limites de tempo e gap
   time_limit_seconds: 600  # 10 minutos (ajustar conforme necessário)
   time_limit_ms: 600000    # 10 minutos em milissegundos
-  gap_percentage: 0.01     # 1% de gap de otimalidade
+  gap_percentage: 0.001     # 1% de gap de otimalidade
   
   # Paralelização
   num_threads: 4           # Usar 4 threads (ajustar conforme CPU)
