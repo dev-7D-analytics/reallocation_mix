@@ -1,0 +1,909 @@
+"""
+ETL Pipeline para o Modelo de Otimização de Mix.
+
+Este módulo é responsável por:
+1. Carregar dados de múltiplas fontes (produção, custos, preços, etc.)
+2. Transformar e validar os dados
+3. Produzir o DataFrame `base_otimizacao` que é o contrato com o modelo de otimização
+
+O modelo de otimização NÃO deve conhecer detalhes de como os dados são carregados.
+Ele apenas recebe o DataFrame pronto.
+
+Autor: Romulo Brito
+Data: 2025-01-30
+"""
+
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from typing import Dict, Optional, Tuple
+import logging
+from dataclasses import dataclass
+
+
+@dataclass
+class DadosCarregados:
+    """Container para todos os dados carregados pelo ETL."""
+    producao: pd.DataFrame
+    classes: pd.DataFrame
+    pedidos: pd.DataFrame
+    pedidos_por_sku: pd.DataFrame
+    precos: pd.DataFrame
+    custos: pd.DataFrame
+    demanda_historica: pd.DataFrame
+    skus_restritos: list
+
+
+@dataclass
+class ResultadoETL:
+    """Resultado do pipeline ETL - contrato com o modelo de otimização."""
+    base_otimizacao: pd.DataFrame
+    producao_por_classe: pd.Series
+    producao_excedente_por_classe: Dict[str, float]
+    pedidos_garantidos_por_sku: Dict[int, float]
+    pedidos_garantidos: pd.DataFrame
+    pedidos_ignorados: pd.DataFrame
+    usar_apenas_excedente: bool
+    atender_pedidos: bool
+    dados_brutos: DadosCarregados  # Para auditoria/debug
+
+
+class ETLPipeline:
+    """
+    Pipeline de ETL que carrega e transforma dados para o modelo de otimização.
+    
+    Uso:
+        etl = ETLPipeline(config)
+        resultado = etl.executar()
+        df_base = resultado.base_otimizacao
+    """
+    
+    def __init__(self, config: Dict, logger: Optional[logging.Logger] = None):
+        """
+        Inicializa o pipeline ETL.
+        
+        Args:
+            config: Dicionário de configuração (carregado do config.yaml)
+            logger: Logger opcional. Se não fornecido, cria um padrão.
+        """
+        self.config = config
+        self.logger = logger or self._criar_logger()
+        self._dados: Optional[DadosCarregados] = None
+    
+    def _criar_logger(self) -> logging.Logger:
+        """Cria logger padrão se não fornecido."""
+        logger = logging.getLogger(__name__)
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+        return logger
+    
+    def executar(self) -> ResultadoETL:
+        """
+        Executa o pipeline ETL completo.
+        
+        Returns:
+            ResultadoETL contendo:
+            - base_otimizacao: DataFrame pronto para o modelo
+            - Metadados adicionais (produção por classe, pedidos, etc.)
+        """
+        self.logger.info("\n" + "="*80)
+        self.logger.info("ETAPA 1: CARREGAMENTO DE DADOS (ETL)")
+        self.logger.info("="*80)
+        
+        # 1. Carregar dados brutos
+        dados = self._carregar_todos_dados()
+        self._dados = dados
+        
+        # 2. Preparar base de otimização (transformações)
+        resultado = self._preparar_base_otimizacao(dados)
+        
+        self.logger.info("\n[OK] ETL concluído com sucesso!")
+        
+        return resultado
+    
+    def _carregar_todos_dados(self) -> DadosCarregados:
+        """Carrega todos os dados necessários."""
+        producao = self._carregar_producao()
+        classes = self._carregar_classes()
+        pedidos, pedidos_por_sku = self._carregar_pedidos()
+        precos = self._carregar_precos()
+        custos = self._carregar_custos()
+        demanda_historica = self._carregar_demanda_historica()
+        skus_restritos = self._carregar_skus_restritos()
+        
+        return DadosCarregados(
+            producao=producao,
+            classes=classes,
+            pedidos=pedidos,
+            pedidos_por_sku=pedidos_por_sku,
+            precos=precos,
+            custos=custos,
+            demanda_historica=demanda_historica,
+            skus_restritos=skus_restritos
+        )
+    
+    def _carregar_producao(self) -> pd.DataFrame:
+        """Carrega produção por classe de produtos."""
+        self.logger.info("\n[1/8] Carregando producao por classe...")
+        
+        path = Path(self.config['paths'].get('producao', 'inputs/producao_classe.csv'))
+        
+        if not path.exists():
+            raise FileNotFoundError(f"Arquivo de producao nao encontrado: {path}")
+        
+        df_producao = pd.read_csv(path)
+        
+        # Validar colunas
+        if 'Classe_Produto' not in df_producao.columns or 'quantidade' not in df_producao.columns:
+            raise ValueError("Arquivo de producao deve conter 'Classe_Produto' e 'quantidade'")
+        
+        # Agregar por classe (soma se houver duplicatas)
+        df_producao_agg = df_producao.groupby('Classe_Produto')['quantidade'].sum().reset_index()
+        df_producao_agg.columns = ['classe', 'producao_total']
+        df_producao_agg = df_producao_agg[df_producao_agg['producao_total'] > 0]
+        
+        self.logger.info(f"  Classes com producao: {len(df_producao_agg)}")
+        self.logger.info(f"  Producao total: {df_producao_agg['producao_total'].sum():,.0f} unidades")
+        
+        # Log distribuição
+        self.logger.info("\n  Distribuicao por classe (top 10):")
+        for _, row in df_producao_agg.nlargest(10, 'producao_total').iterrows():
+            self.logger.info(f"    {row['classe']}: {row['producao_total']:,.0f} unidades")
+        
+        return df_producao_agg
+    
+    def _carregar_classes(self) -> pd.DataFrame:
+        """Carrega mapeamento SKU -> Classe."""
+        self.logger.info("\n[2/8] Carregando classificacao de SKUs...")
+        
+        path = Path(self.config['paths'].get('classes', 'inputs/classes.csv'))
+        
+        if not path.exists():
+            raise FileNotFoundError(f"Arquivo de classes nao encontrado: {path}")
+        
+        # Suporta CSV e Excel
+        if path.suffix in ['.xlsx', '.xls']:
+            df_classes = pd.read_excel(path)
+        else:
+            df_classes = pd.read_csv(path)
+        
+        # Padronizar nomes de colunas
+        col_mapping = {}
+        for col in df_classes.columns:
+            col_lower = col.lower()
+            if col_lower == 'item' or 'sku' in col_lower or 'codigo' in col_lower:
+                col_mapping[col] = 'item'
+            elif 'classe' in col_lower:
+                col_mapping[col] = 'classe'
+        
+        df_classes = df_classes.rename(columns=col_mapping)
+        
+        if 'item' not in df_classes.columns or 'classe' not in df_classes.columns:
+            raise ValueError(f"Arquivo de classes deve conter colunas de item e classe. Encontradas: {list(df_classes.columns)}")
+        
+        df_classes['item'] = pd.to_numeric(df_classes['item'], errors='coerce')
+        df_classes = df_classes[df_classes['item'].notna()]
+        df_classes['item'] = df_classes['item'].astype(int)
+        
+        self.logger.info(f"  SKUs com classe: {len(df_classes)}")
+        self.logger.info(f"  Classes unicas: {df_classes['classe'].nunique()}")
+        
+        return df_classes[['item', 'classe']].drop_duplicates()
+    
+    def _carregar_pedidos(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Carrega pedidos de clientes."""
+        self.logger.info("\n[3/8] Carregando pedidos de clientes...")
+        
+        path = Path(self.config['paths'].get('pedidos', 'inputs/pedidos.csv'))
+        
+        if not path.exists():
+            self.logger.warning(f"  Arquivo de pedidos nao encontrado: {path}")
+            df_vazio = pd.DataFrame(columns=['cod_cliente', 'item', 'quantidade_pedida'])
+            return df_vazio, pd.DataFrame(columns=['item', 'quantidade_total_pedida'])
+        
+        # Suporta CSV e Excel
+        if path.suffix in ['.xlsx', '.xls']:
+            df_pedidos = pd.read_excel(path)
+        else:
+            df_pedidos = pd.read_csv(path)
+        
+        # Padronizar colunas
+        col_mapping = {}
+        for col in df_pedidos.columns:
+            col_lower = col.lower()
+            if 'cliente' in col_lower:
+                col_mapping[col] = 'cod_cliente'
+            elif 'item' in col_lower or 'sku' in col_lower:
+                col_mapping[col] = 'item'
+            elif 'qtd' in col_lower or 'quantidade' in col_lower:
+                col_mapping[col] = 'quantidade_pedida'
+        
+        df_pedidos = df_pedidos.rename(columns=col_mapping)
+        
+        df_pedidos['item'] = pd.to_numeric(df_pedidos['item'], errors='coerce')
+        df_pedidos = df_pedidos[df_pedidos['item'].notna()]
+        df_pedidos['item'] = df_pedidos['item'].astype(int)
+        
+        # Agregar por SKU
+        pedidos_por_sku = df_pedidos.groupby('item')['quantidade_pedida'].sum().reset_index()
+        pedidos_por_sku.columns = ['item', 'quantidade_total_pedida']
+        
+        self.logger.info(f"  Pedidos carregados: {len(df_pedidos):,}")
+        self.logger.info(f"  Clientes unicos: {df_pedidos['cod_cliente'].nunique() if 'cod_cliente' in df_pedidos.columns else 0}")
+        self.logger.info(f"  SKUs com pedidos: {pedidos_por_sku['item'].nunique()}")
+        self.logger.info(f"  Quantidade total pedida: {pedidos_por_sku['quantidade_total_pedida'].sum():,.0f} unidades")
+        
+        return df_pedidos, pedidos_por_sku
+    
+    def _carregar_precos(self) -> pd.DataFrame:
+        """Carrega preços por item_id."""
+        self.logger.info("\n[4/8] Carregando precos...")
+        
+        path = Path(self.config['paths'].get('precos', 'inputs/precos.csv'))
+        
+        if not path.exists():
+            self.logger.warning(f"  Arquivo de precos nao encontrado: {path}")
+            return pd.DataFrame(columns=['item_id', 'preco'])
+        
+        # Suporta CSV e Parquet
+        if path.suffix == '.parquet':
+            df_precos = pd.read_parquet(path)
+        else:
+            df_precos = pd.read_csv(path)
+        
+        # Padronizar para ter item_id e preco
+        if 'item_id' not in df_precos.columns:
+            # Tentar criar item_id a partir de item + embalagem
+            if 'item' in df_precos.columns and 'embalagem' in df_precos.columns:
+                df_precos['item_id'] = df_precos['item'].astype(str) + '_' + df_precos['embalagem']
+        
+        if 'preco' not in df_precos.columns:
+            for col in df_precos.columns:
+                if 'preco' in col.lower() or 'price' in col.lower():
+                    df_precos['preco'] = df_precos[col]
+                    break
+        
+        self.logger.info(f"  Itens unicos (item_id) com preco: {df_precos['item_id'].nunique() if 'item_id' in df_precos.columns else 0}")
+        self.logger.info(f"  Preco medio: R$ {df_precos['preco'].mean():.2f}" if 'preco' in df_precos.columns else "  Preco: N/A")
+        
+        return df_precos
+    
+    def _carregar_custos(self) -> pd.DataFrame:
+        """Carrega custos por item_id - otimizado para bases grandes."""
+        self.logger.info("\n[5/8] Carregando custos...")
+        
+        path = Path(self.config['paths'].get('custos', 'inputs/custos.parquet'))
+        
+        if not path.exists():
+            raise FileNotFoundError(f"Arquivo de custos nao encontrado: {path}")
+        
+        # Importar função de extração de embalagem
+        from extrair_compatibilidade_embalagem import extrair_embalagem_descricao
+        
+        is_parquet = path.suffix == '.parquet'
+        
+        if is_parquet:
+            # Ler apenas colunas necessárias para economizar memória
+            colunas_necessarias = ['Estab', 'item', 'MÊS', 'ano', 'Custo Médio', 'Quantidade', 'UF', 'Descrição do item']
+            self.logger.info(f"  Lendo arquivo Parquet (apenas colunas necessarias)...")
+            
+            df_custo = pd.read_parquet(path, columns=colunas_necessarias, engine='pyarrow')
+            
+            # Aplicar filtros de estabelecimento e período
+            dados_config = self.config.get('dados', {})
+            mes_custo = dados_config.get('mes_custo', 11)
+            ano_custo = dados_config.get('ano_custo', 2025)
+            estab_custo = dados_config.get('estab_custo', 100)
+            meses_janela = dados_config.get('meses_janela_custo', 6)
+            
+            # Criar lista de períodos
+            periodos = []
+            for i in range(meses_janela):
+                mes = mes_custo - i
+                ano = ano_custo
+                while mes <= 0:
+                    mes += 12
+                    ano -= 1
+                periodos.append((ano, mes))
+            
+            self.logger.info(f"  Aplicando filtros: Estab={estab_custo}, janela de {meses_janela} meses...")
+            self.logger.info(f"  Períodos incluídos: {', '.join([f'{a}-{m:02d}' for a, m in periodos])}")
+            
+            # Filtrar por estabelecimento primeiro (mais eficiente)
+            df_custo = df_custo[df_custo['Estab'] == estab_custo].copy()
+            
+            # Filtrar por período usando vetorização
+            df_custo['_periodo'] = list(zip(df_custo['ano'], df_custo['MÊS']))
+            df_custo = df_custo[df_custo['_periodo'].isin(periodos)].copy()
+            df_custo = df_custo.drop(columns=['_periodo'])
+            
+            self.logger.info(f"  Registros após filtros de periodo: {len(df_custo):,}")
+            
+            # Filtrar exportação
+            antes_uf = len(df_custo)
+            df_custo = df_custo[df_custo['UF'] != 'EX'].copy()
+            if antes_uf - len(df_custo) > 0:
+                self.logger.info(f"  Registros de exportacao removidos: {antes_uf - len(df_custo):,}")
+            
+            # Converter tipos
+            df_custo['Custo Médio'] = pd.to_numeric(df_custo['Custo Médio'], errors='coerce')
+            df_custo['Quantidade'] = pd.to_numeric(df_custo['Quantidade'], errors='coerce')
+            
+            # Filtrar registros válidos
+            df_custo = df_custo[
+                (df_custo['Quantidade'] > 0) & 
+                (df_custo['Custo Médio'].notna())
+            ].copy()
+            
+            # Custo total para agregação ponderada (mesmo racional do original)
+            df_custo['custo_total'] = df_custo['Custo Médio']
+            
+            # Extrair embalagem
+            df_custo['embalagem'] = df_custo['Descrição do item'].apply(extrair_embalagem_descricao)
+            
+            # Criar item_id
+            df_custo['item'] = pd.to_numeric(df_custo['item'], errors='coerce')
+            df_custo = df_custo[df_custo['item'].notna() & df_custo['embalagem'].notna()].copy()
+            df_custo['item_id'] = df_custo['item'].astype(int).astype(str) + '_' + df_custo['embalagem']
+            
+            # Criar ano_mes para primeira agregação
+            df_custo['ano_mes'] = df_custo['ano'].astype(str) + '-' + df_custo['MÊS'].astype(str).str.zfill(2)
+            
+            # Agregar usando MÉDIA PONDERADA (mesma lógica do modelo original)
+            self.logger.info(f"  Agregando por item_id (média ponderada)...")
+            
+            # Primeira agregação: por (item, embalagem, ano_mes)
+            custos_mes = df_custo.groupby(['item', 'embalagem', 'ano_mes']).agg({
+                'Quantidade': 'sum',
+                'custo_total': 'sum'
+            }).reset_index()
+            
+            # Segunda agregação: por (item, embalagem) - soma total
+            df_custo_agg = custos_mes.groupby(['item', 'embalagem']).agg({
+                'Quantidade': 'sum',
+                'custo_total': 'sum'
+            }).reset_index()
+            
+            # Custo final = custo_total / volume_total (média ponderada)
+            df_custo_agg['custo_ytd'] = df_custo_agg['custo_total'] / df_custo_agg['Quantidade']
+            df_custo_agg['item_id'] = df_custo_agg['item'].astype(int).astype(str) + '_' + df_custo_agg['embalagem']
+            
+            df_custo = df_custo_agg[['item_id', 'item', 'embalagem', 'custo_ytd']]
+        else:
+            df_custo = pd.read_csv(path)
+        
+        # Filtrar custos válidos
+        df_custo = df_custo[
+            df_custo['custo_ytd'].notna() & 
+            (df_custo['custo_ytd'] > 0)
+        ].copy()
+        
+        self.logger.info(f"  Itens unicos (item_id) com custo: {df_custo['item_id'].nunique()}")
+        self.logger.info(f"  Custo medio: R$ {df_custo['custo_ytd'].mean():.2f}")
+        
+        return df_custo
+    
+    def _carregar_demanda_historica(self) -> pd.DataFrame:
+        """Carrega demanda histórica por SKU."""
+        self.logger.info("\n[6/8] Carregando demanda historica...")
+        
+        usar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
+        
+        if not usar_demanda:
+            self.logger.info("  Demanda historica: Desabilitada")
+            return pd.DataFrame(columns=['item', 'demanda_max'])
+        
+        path = Path(self.config['paths'].get('faturamento', 'inputs/faturamento.parquet'))
+        
+        if not path.exists():
+            self.logger.warning(f"  Arquivo de faturamento nao encontrado: {path}")
+            return pd.DataFrame(columns=['item', 'demanda_max'])
+        
+        # Importar funções necessárias
+        from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
+        
+        df_fat = pd.read_parquet(path)
+        
+        # Detectar colunas
+        col_item = 'item' if 'item' in df_fat.columns else None
+        col_qtd = 'Quantidade' if 'Quantidade' in df_fat.columns else None
+        col_data = 'Dt.Emissão' if 'Dt.Emissão' in df_fat.columns else None
+        col_desc = 'Descrição do item' if 'Descrição do item' in df_fat.columns else None
+        
+        if not all([col_item, col_qtd, col_data]):
+            self.logger.warning("  Colunas necessárias não encontradas no faturamento")
+            return pd.DataFrame(columns=['item', 'demanda_max'])
+        
+        # Filtrar estabelecimentos
+        estabs_manter = self.config.get('negocio', {}).get('filtrar_granjas', [])
+        if estabs_manter and 'Estab' in df_fat.columns:
+            df_fat = df_fat[df_fat['Estab'].astype(str).isin([str(e) for e in estabs_manter])].copy()
+            self.logger.info(f"  Mantendo estabelecimentos: {estabs_manter}")
+        
+        # CORREÇÃO: Converter quantidade de CAIXAS para OVOS usando embalagem real
+        if col_desc:
+            df_fat['_embalagem'] = df_fat[col_desc].apply(extrair_embalagem_descricao)
+            df_fat['_ovos_por_caixa'] = df_fat['_embalagem'].apply(calcular_qtd_embalagem)
+            df_fat['_ovos_por_caixa'] = df_fat['_ovos_por_caixa'].fillna(360)
+            
+            # Log distribuição
+            ovos_dist = df_fat['_ovos_por_caixa'].value_counts().to_dict()
+            self.logger.info(f"  Distribuição de ovos/caixa: {ovos_dist}")
+            
+            df_fat[col_qtd] = df_fat[col_qtd] * df_fat['_ovos_por_caixa']
+            df_fat = df_fat.drop(columns=['_embalagem', '_ovos_por_caixa'])
+        else:
+            # Fallback: multiplicar por 360
+            df_fat[col_qtd] = df_fat[col_qtd] * 360
+        
+        # Converter data e filtrar período
+        df_fat[col_data] = pd.to_datetime(df_fat[col_data], errors='coerce')
+        df_fat = df_fat[df_fat[col_data].notna()]
+        
+        periodo_meses = self.config.get('modelo', {}).get('periodo_historico_meses', 6)
+        data_limite = df_fat[col_data].max() - pd.DateOffset(months=periodo_meses)
+        df_fat = df_fat[df_fat[col_data] >= data_limite]
+        
+        # Agregar por período (semanal por padrão)
+        granularidade = self.config.get('modelo', {}).get('granularidade_demanda', 'S').upper()
+        
+        if granularidade == 'S':
+            df_fat['periodo'] = df_fat[col_data].dt.to_period('W')
+        elif granularidade == 'M':
+            df_fat['periodo'] = df_fat[col_data].dt.to_period('M')
+        else:
+            df_fat['periodo'] = df_fat[col_data].dt.date
+        
+        # Calcular demanda máxima por SKU
+        df_agregado = df_fat.groupby([col_item, 'periodo'])[col_qtd].sum().reset_index()
+        df_agregado.columns = ['item', 'periodo', 'demanda_periodo']
+        
+        # Máximo histórico × fator
+        fator = self.config.get('modelo', {}).get('fator_demanda_maxima', 1.2)
+        
+        df_demanda = df_agregado.groupby('item')['demanda_periodo'].max().reset_index()
+        df_demanda.columns = ['item', 'demanda_max']
+        df_demanda['demanda_max'] = df_demanda['demanda_max'] * fator
+        
+        self.logger.info(f"  SKUs com demanda historica: {len(df_demanda)}")
+        self.logger.info(f"  Demanda maxima media: {df_demanda['demanda_max'].mean():,.0f} unidades")
+        
+        return df_demanda
+    
+    def _carregar_skus_restritos(self) -> list:
+        """Carrega lista de SKUs permitidos/restritos."""
+        self.logger.info("\n[7/8] Carregando SKUs permitidos...")
+        
+        path = Path(self.config['paths'].get('skus_restritos', 'inputs/skus_restritos.xlsx'))
+        
+        if not path.exists():
+            self.logger.info("  Arquivo de SKUs restritos nao encontrado - todos permitidos")
+            return []
+        
+        try:
+            df = pd.read_excel(path)
+            
+            # Procurar coluna de item
+            col_item = None
+            for col in df.columns:
+                if 'item' in col.lower() or 'sku' in col.lower() or 'codigo' in col.lower():
+                    col_item = col
+                    break
+            
+            if col_item is None:
+                col_item = df.columns[0]
+            
+            skus = df[col_item].dropna().astype(int).tolist()
+            
+            self.logger.info(f"  SKUs permitidos: {len(skus)}")
+            
+            return skus
+        except Exception as e:
+            self.logger.warning(f"  Erro ao carregar SKUs restritos: {e}")
+            return []
+    
+    def _preparar_base_otimizacao(self, dados: DadosCarregados) -> ResultadoETL:
+        """
+        Prepara o DataFrame base_otimizacao que é o contrato com o modelo.
+        
+        Esta é a transformação principal que combina todos os dados carregados.
+        """
+        self.logger.info("\n[8/8] Preparando base de otimizacao...")
+        
+        from extrair_compatibilidade_embalagem import calcular_qtd_embalagem
+        
+        # Filtrar por SKUs na produção do estabelecimento
+        skus_producao = self._obter_skus_producao()
+        
+        # Aplicar filtro de SKUs permitidos
+        if len(dados.skus_restritos) > 0 and len(skus_producao) > 0:
+            skus_producao = skus_producao & set(dados.skus_restritos)
+            self.logger.info(f"  SKUs após interseção com permitidos: {len(skus_producao)}")
+        
+        # Classes com produção
+        classes_com_producao = set(dados.producao['classe'].unique())
+        
+        # SKUs com produção (que pertencem a classes com produção)
+        skus_com_producao = set(dados.classes[dados.classes['classe'].isin(classes_com_producao)]['item'].unique())
+        if len(skus_producao) > 0:
+            skus_com_producao = skus_com_producao & skus_producao
+        
+        # Começar pela base de custos
+        df_base = dados.custos[['item_id', 'item', 'embalagem', 'custo_ytd']].copy()
+        df_base['item'] = df_base['item'].astype(int)
+        
+        # Filtrar por SKUs na produção
+        if len(skus_producao) > 0:
+            df_base = df_base[df_base['item'].isin(skus_producao)].copy()
+        
+        # Flag de custo médio
+        df_base['custo_medio_classe'] = False
+        
+        # Adicionar classe
+        df_base = df_base.merge(dados.classes, on='item', how='inner')
+        
+        # Filtrar apenas classes com produção
+        df_base = df_base[df_base['classe'].isin(classes_com_producao)].copy()
+        
+        # Calcular ovos por caixa ANTES de usar na agregação
+        df_base['qtd_ovos_por_caixa'] = df_base['embalagem'].apply(calcular_qtd_embalagem)
+        
+        # =====================================================================
+        # INCLUIR SKUs SEM CUSTOS: LÓGICA MELHORADA
+        # Usar apenas embalagens reais (preço, demanda histórica, ou típica da classe)
+        # Ajustar custo proporcionalmente ao tamanho da embalagem
+        # =====================================================================
+        skus_com_custos = set(df_base['item'].unique())
+        skus_sem_custos = skus_com_producao - skus_com_custos
+        
+        if len(skus_sem_custos) > 0:
+            self.logger.info(f"  SKUs sem custos: {len(skus_sem_custos)} (aplicando lógica melhorada)")
+            
+            # Calcular custo médio por classe e embalagem de referência
+            custo_por_classe = df_base.groupby('classe').agg({
+                'custo_ytd': 'mean',
+                'qtd_ovos_por_caixa': 'mean'  # Embalagem média da classe
+            }).to_dict('index')
+            
+            # Calcular custo médio geral - ALERTAR se usar fallback hardcoded
+            if len(df_base) > 0:
+                custo_medio_geral = df_base['custo_ytd'].mean()
+                ovos_ref_geral = df_base['qtd_ovos_por_caixa'].mean()
+                usou_fallback_hardcoded = False
+            else:
+                custo_medio_geral = 132.82  # FALLBACK HARDCODED
+                ovos_ref_geral = 360  # FALLBACK HARDCODED
+                usou_fallback_hardcoded = True
+                self.logger.warning("=" * 80)
+                self.logger.warning("ALERTA: Usando valores HARDCODED pois df_base está vazio!")
+                self.logger.warning(f"  - Custo médio geral: R$ {custo_medio_geral:.2f} (HARDCODED)")
+                self.logger.warning(f"  - Ovos por caixa referência: {ovos_ref_geral} (HARDCODED)")
+                self.logger.warning("=" * 80)
+            
+            # Criar índices para busca rápida
+            precos_por_item = dados.precos.groupby('item')['embalagem'].apply(set).to_dict() if 'embalagem' in dados.precos.columns else {}
+            demanda_por_item = dados.demanda_historica.set_index('item')['demanda_max'].to_dict() if len(dados.demanda_historica) > 0 else {}
+            
+            # Embalagem mais comum por classe (fallback)
+            embalagem_comum_classe = df_base.groupby('classe')['embalagem'].agg(
+                lambda x: x.value_counts().index[0] if len(x) > 0 else 'CX 12 BJ 30 UN'
+            ).to_dict()
+            
+            linhas_sem_custo = []
+            stats = {'preco': 0, 'demanda': 0, 'classe': 0}
+            alertas_fallback = []  # Lista de SKUs que usaram fallback
+            
+            for item in skus_sem_custos:
+                classe_sku = dados.classes[dados.classes['item'] == item]['classe'].values
+                if len(classe_sku) == 0:
+                    continue
+                    
+                classe = classe_sku[0]
+                
+                # Obter custo médio da classe e ovos de referência
+                if classe in custo_por_classe:
+                    custo_ref = custo_por_classe[classe]['custo_ytd']
+                    ovos_ref = custo_por_classe[classe]['qtd_ovos_por_caixa']
+                else:
+                    custo_ref = custo_medio_geral
+                    ovos_ref = ovos_ref_geral
+                
+                if custo_ref == 0 or pd.isna(custo_ref):
+                    custo_ref = custo_medio_geral
+                if ovos_ref == 0 or pd.isna(ovos_ref):
+                    ovos_ref = ovos_ref_geral
+                
+                # HIERARQUIA DE EMBALAGENS REAIS:
+                # 1. Se tem preço → usar embalagens com preço (custo médio da classe)
+                embalagens_item = set()
+                fonte = None
+                
+                if item in precos_por_item:
+                    embalagens_item = precos_por_item[item]
+                    fonte = 'preco'
+                    stats['preco'] += 1
+                
+                # 2. Se tem demanda histórica → usar embalagem mais comum da classe
+                elif item in demanda_por_item:
+                    embalagens_item = {embalagem_comum_classe.get(classe, 'CX 12 BJ 30 UN')}
+                    fonte = 'demanda'
+                    stats['demanda'] += 1
+                
+                # 3. Fallback: usar embalagem mais comum da classe
+                else:
+                    embalagens_item = {embalagem_comum_classe.get(classe, 'CX 12 BJ 30 UN')}
+                    fonte = 'classe'
+                    stats['classe'] += 1
+                
+                # Criar item_ids apenas para embalagens reais
+                # Usar custo médio da classe SEM ajuste proporcional (como o original)
+                # para manter consistência com os preços
+                for embalagem in embalagens_item:
+                    ovos_embalagem = calcular_qtd_embalagem(embalagem)
+                    if ovos_embalagem is None or ovos_embalagem == 0:
+                        continue
+                    
+                    item_id = f"{item}_{embalagem}"
+                    
+                    # Determinar origem do custo para rastreabilidade
+                    if classe in custo_por_classe and custo_por_classe[classe]['custo_ytd'] > 0:
+                        origem_custo = 'custo_medio_classe'
+                    else:
+                        origem_custo = 'custo_medio_geral'
+                        if usou_fallback_hardcoded:
+                            origem_custo = 'FALLBACK_HARDCODED'
+                            alertas_fallback.append(f"{item_id} (custo={custo_ref:.2f})")
+                    
+                    linhas_sem_custo.append({
+                        'item_id': item_id,
+                        'item': item,
+                        'embalagem': embalagem,
+                        'custo_ytd': custo_ref,
+                        'classe': classe,
+                        'custo_medio_classe': True,
+                        'origem_custo': origem_custo,
+                        'origem_embalagem': fonte  # preco, demanda, ou classe
+                    })
+            
+            if linhas_sem_custo:
+                df_sem_custo = pd.DataFrame(linhas_sem_custo)
+                df_base = pd.concat([df_base, df_sem_custo], ignore_index=True)
+                self.logger.info(f"  Adicionados {len(linhas_sem_custo)} item_ids (fonte embalagem: preço={stats['preco']}, demanda={stats['demanda']}, classe={stats['classe']})")
+                
+                # ALERTAR se usou fallbacks
+                if alertas_fallback:
+                    self.logger.warning("=" * 80)
+                    self.logger.warning(f"ALERTA: {len(alertas_fallback)} SKUs usaram CUSTO FALLBACK HARDCODED!")
+                    for alerta in alertas_fallback[:10]:  # Mostrar até 10
+                        self.logger.warning(f"  - {alerta}")
+                    if len(alertas_fallback) > 10:
+                        self.logger.warning(f"  ... e mais {len(alertas_fallback) - 10} SKUs")
+                    self.logger.warning("=" * 80)
+                
+                # Resumo das origens
+                if 'origem_custo' in df_sem_custo.columns:
+                    origem_counts = df_sem_custo['origem_custo'].value_counts()
+                    self.logger.info(f"  Origem dos custos: {origem_counts.to_dict()}")
+        
+        # Adicionar preços (merge left para manter todos os item_ids)
+        # Criar item_id no df_precos se não existir
+        if 'item_id' not in dados.precos.columns:
+            dados.precos['item_id'] = dados.precos['item'].astype(str) + '_' + dados.precos['embalagem']
+        
+        df_base = df_base.merge(
+            dados.precos[['item_id', 'preco']], 
+            on='item_id', 
+            how='left'
+        )
+        
+        # Rastrear origem do preço
+        if 'origem_preco' not in df_base.columns:
+            df_base['origem_preco'] = None
+        df_base.loc[df_base['preco'].notna(), 'origem_preco'] = 'preco_direto'
+        
+        # Preencher preços faltantes com média do MESMO SKU (outras embalagens)
+        # Esta é a lógica do modelo original
+        preco_medio_sku = dados.precos.groupby('item')['preco'].mean()
+        mask_sem_preco_1 = df_base['preco'].isna()
+        df_base['preco'] = df_base['preco'].fillna(df_base['item'].map(preco_medio_sku))
+        df_base.loc[mask_sem_preco_1 & df_base['preco'].notna(), 'origem_preco'] = 'preco_medio_sku'
+        
+        # Se ainda não tiver preço, usar média GERAL (como o modelo original)
+        preco_medio_geral = dados.precos['preco'].mean()
+        mask_sem_preco_2 = df_base['preco'].isna()
+        if mask_sem_preco_2.any():
+            df_base.loc[mask_sem_preco_2, 'preco'] = preco_medio_geral
+            df_base.loc[mask_sem_preco_2, 'origem_preco'] = 'preco_medio_geral'
+            self.logger.warning(f"  ALERTA: {mask_sem_preco_2.sum()} item_ids sem preço direto - usando preço médio geral (R$ {preco_medio_geral:.2f})")
+            # Listar os SKUs afetados
+            skus_sem_preco = df_base.loc[mask_sem_preco_2, 'item_id'].tolist()
+            for sku in skus_sem_preco[:5]:
+                self.logger.warning(f"    - {sku}")
+            if len(skus_sem_preco) > 5:
+                self.logger.warning(f"    ... e mais {len(skus_sem_preco) - 5} SKUs")
+        
+        if df_base['preco'].isna().any():
+            self.logger.warning(f"  {df_base['preco'].isna().sum()} item_ids ainda sem preço após fallbacks")
+        
+        # Recalcular ovos por caixa para novos item_ids e filtrar
+        df_base['qtd_ovos_por_caixa'] = df_base['embalagem'].apply(calcular_qtd_embalagem)
+        df_base = df_base[df_base['qtd_ovos_por_caixa'].notna()].copy()
+        
+        # Calcular margem
+        df_base['margem_unitaria'] = df_base['preco'] - df_base['custo_ytd']
+        
+        # Filtrar margens válidas
+        df_base = df_base[
+            (df_base['margem_unitaria'] > 0) &
+            (df_base['preco'] > 0) &
+            (df_base['custo_ytd'] > 0)
+        ].copy()
+        
+        # Adicionar produção por classe
+        producao_por_classe = dados.producao.set_index('classe')['producao_total']
+        df_base['producao_total'] = df_base['classe'].map(producao_por_classe).fillna(0)
+        
+        # Adicionar pedidos
+        pedidos_dict = dados.pedidos_por_sku.set_index('item')['quantidade_total_pedida'].to_dict()
+        df_base['quantidade_total_pedida'] = df_base['item'].map(pedidos_dict).fillna(0)
+        
+        # Adicionar demanda histórica
+        if len(dados.demanda_historica) > 0:
+            demanda_dict = dados.demanda_historica.set_index('item')['demanda_max'].to_dict()
+            df_base['tem_demanda_historica'] = df_base['item'].isin(demanda_dict.keys())
+            df_base['limite_demanda_historica'] = df_base['item'].map(demanda_dict)
+        else:
+            df_base['tem_demanda_historica'] = False
+            df_base['limite_demanda_historica'] = np.nan
+        
+        # Calcular produção disponível para otimização
+        usar_apenas_excedente = self.config.get('modelo', {}).get('usar_apenas_excedente', True)
+        atender_pedidos = self.config.get('modelo', {}).get('atender_pedidos', True)
+        
+        # Processar pedidos e calcular excedente
+        pedidos_garantidos_por_sku, pedidos_garantidos_df, pedidos_ignorados = \
+            self._processar_pedidos(df_base, dados, atender_pedidos)
+        
+        # Calcular produção excedente por classe
+        producao_excedente = {}
+        for classe in df_base['classe'].unique():
+            producao_classe = producao_por_classe.get(classe, 0)
+            pedidos_classe = sum(
+                qtd for sku, qtd in pedidos_garantidos_por_sku.items()
+                if sku in df_base[df_base['classe'] == classe]['item'].values
+            )
+            producao_excedente[classe] = max(0, producao_classe - pedidos_classe)
+        
+        # Adicionar produção disponível para otimização
+        if usar_apenas_excedente:
+            df_base['producao_disponivel_otimizacao_classe'] = df_base['classe'].map(producao_excedente).fillna(0)
+        else:
+            df_base['producao_disponivel_otimizacao_classe'] = df_base['producao_total']
+        
+        # Log resumo
+        self.logger.info(f"  Item_id validos: {len(df_base)}")
+        self.logger.info(f"  SKUs validos: {df_base['item'].nunique()}")
+        self.logger.info(f"  Classes validas: {df_base['classe'].nunique()}")
+        self.logger.info(f"  Margem unitaria media: R$ {df_base['margem_unitaria'].mean():.2f}")
+        
+        # RESUMO DE RASTREABILIDADE - Informar origens dos dados
+        self.logger.info("\n" + "=" * 80)
+        self.logger.info("RASTREABILIDADE DOS DADOS")
+        self.logger.info("=" * 80)
+        
+        # Origem dos custos
+        if 'custo_medio_classe' in df_base.columns:
+            custo_direto = (~df_base['custo_medio_classe'].fillna(False)).sum()
+            custo_classe = df_base['custo_medio_classe'].fillna(False).sum()
+            self.logger.info(f"CUSTOS:")
+            self.logger.info(f"  - Custo direto (base de custos): {custo_direto} SKUs")
+            self.logger.info(f"  - Custo médio da classe: {custo_classe} SKUs")
+        
+        # Origem dos preços
+        if 'origem_preco' in df_base.columns:
+            origem_preco_counts = df_base['origem_preco'].value_counts()
+            self.logger.info(f"PREÇOS:")
+            for origem, count in origem_preco_counts.items():
+                self.logger.info(f"  - {origem}: {count} SKUs")
+        
+        # Origem das embalagens (para SKUs sem custo)
+        if 'origem_embalagem' in df_base.columns:
+            origem_emb_counts = df_base['origem_embalagem'].dropna().value_counts()
+            if len(origem_emb_counts) > 0:
+                self.logger.info(f"EMBALAGENS (SKUs sem custo direto):")
+                for origem, count in origem_emb_counts.items():
+                    self.logger.info(f"  - {origem}: {count} SKUs")
+        
+        self.logger.info("=" * 80)
+        
+        return ResultadoETL(
+            base_otimizacao=df_base,
+            producao_por_classe=producao_por_classe,
+            producao_excedente_por_classe=producao_excedente,
+            pedidos_garantidos_por_sku=pedidos_garantidos_por_sku,
+            pedidos_garantidos=pedidos_garantidos_df,
+            pedidos_ignorados=pedidos_ignorados,
+            usar_apenas_excedente=usar_apenas_excedente,
+            atender_pedidos=atender_pedidos,
+            dados_brutos=dados
+        )
+    
+    def _obter_skus_producao(self) -> set:
+        """Obtém lista de SKUs que aparecem na produção do estabelecimento."""
+        path = Path(self.config['paths'].get('producao_bruta', 'inputs/PRODUÇÃO DIA.xlsx'))
+        
+        if not path.exists():
+            return set()
+        
+        try:
+            df = pd.read_excel(path, sheet_name="CE0302", skiprows=1)
+            
+            # Filtrar por semana
+            semana_ref = self.config.get('dados', {}).get('semana_ref', '2025-51')
+            df['week'] = pd.to_datetime(df['Data Trans']).dt.isocalendar().week
+            df['year'] = pd.to_datetime(df['Data Trans']).dt.isocalendar().year
+            df['year_week'] = df['year'].astype(str) + '-' + df['week'].astype(str).str.zfill(2)
+            df = df[df['year_week'] == semana_ref].copy()
+            
+            # Filtrar por estabelecimento
+            estabelecimentos = self.config.get('dados', {}).get('estabelecimentos', [100])
+            col_estab = 'Est' if 'Est' in df.columns else 'Estab'
+            if col_estab in df.columns:
+                df = df[df[col_estab].isin(estabelecimentos)].copy()
+            
+            # Extrair SKUs
+            col_item = 'Cod Item' if 'Cod Item' in df.columns else 'CODIGO ITEM'
+            if col_item in df.columns:
+                df[col_item] = pd.to_numeric(df[col_item], errors='coerce')
+                return set(df[col_item].dropna().astype(int).unique())
+        except Exception as e:
+            self.logger.warning(f"  Erro ao obter SKUs da produção: {e}")
+        
+        return set()
+    
+    def _processar_pedidos(
+        self, 
+        df_base: pd.DataFrame, 
+        dados: DadosCarregados,
+        atender_pedidos: bool
+    ) -> Tuple[Dict[int, float], pd.DataFrame, pd.DataFrame]:
+        """Processa pedidos e retorna quantidades garantidas."""
+        
+        if not atender_pedidos:
+            return {}, pd.DataFrame(), dados.pedidos
+        
+        pedidos_garantidos = {}
+        pedidos_garantidos_list = []
+        pedidos_ignorados_list = []
+        
+        # Agrupar pedidos por SKU
+        for item, qtd in dados.pedidos_por_sku.set_index('item')['quantidade_total_pedida'].items():
+            if item in df_base['item'].values:
+                # SKU válido - garantir pedido
+                classe = df_base[df_base['item'] == item]['classe'].iloc[0]
+                producao_classe = df_base[df_base['item'] == item]['producao_total'].iloc[0]
+                
+                pedidos_garantidos[item] = qtd
+                pedidos_garantidos_list.append({
+                    'item': item,
+                    'classe': classe,
+                    'quantidade_pedida': qtd,
+                    'quantidade_atendida': qtd,
+                    'producao_total_classe': producao_classe
+                })
+            else:
+                # SKU não encontrado
+                pedidos_ignorados_list.append({
+                    'item': item,
+                    'quantidade_pedida': qtd,
+                    'motivo': 'SKU não encontrado na base'
+                })
+        
+        return (
+            pedidos_garantidos,
+            pd.DataFrame(pedidos_garantidos_list) if pedidos_garantidos_list else pd.DataFrame(),
+            pd.DataFrame(pedidos_ignorados_list) if pedidos_ignorados_list else pd.DataFrame()
+        )

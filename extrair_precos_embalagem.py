@@ -120,14 +120,30 @@ def main(argv=None):
     filtros_aplicados = []
     
     # Filtro por estabelecimento
+    # Se nao foi passado via argumento, usar do config.yaml
     if args.estab:
+        estab_filtro = args.estab
+    else:
+        # Ler do config.yaml (estab_custo ou estabelecimentos)
+        dados_config = config.get('dados', {})
+        estab_filtro = dados_config.get('estab_custo', dados_config.get('estabelecimentos', [100]))
+        # Se for lista, usar o primeiro elemento
+        if isinstance(estab_filtro, list):
+            estab_filtro = estab_filtro[0] if len(estab_filtro) > 0 else 100
+        estab_filtro = [str(estab_filtro)]  # Converter para lista de strings
+    
+    if estab_filtro:
         if 'Estab' not in df_custo.columns:
             print("[ERRO] Coluna 'Estab' não encontrada no dataset de custos.")
             print(f"  Colunas disponíveis: {list(df_custo.columns)}")
             return
-        df_custo = df_custo[df_custo['Estab'].astype(str).isin(args.estab)].copy()
-        filtros_aplicados.append(f"Estab={args.estab}")
-        print(f"  Filtro Estab: {args.estab} -> {len(df_custo):,} registros")
+        antes_filtro_estab = len(df_custo)
+        df_custo = df_custo[df_custo['Estab'].astype(str).isin(estab_filtro)].copy()
+        removidos_estab = antes_filtro_estab - len(df_custo)
+        filtros_aplicados.append(f"Estab={estab_filtro}")
+        print(f"  Filtro Estab: {estab_filtro} -> {len(df_custo):,} registros")
+        if removidos_estab > 0:
+            print(f"  Removidos {removidos_estab:,} registros de outros estabelecimentos")
     
     # Filtro por mês/ano com janela de tempo
     if args.mes and args.ano:
