@@ -278,6 +278,7 @@ class Otimizador:
                     resultados.append({
                         'item_id': item_id,
                         'item': row['item'],
+                        'descricao': row.get('descricao', None),
                         'embalagem': row['embalagem'],
                         'classe': row['classe'],
                         'quantidade': qtd_ovos,

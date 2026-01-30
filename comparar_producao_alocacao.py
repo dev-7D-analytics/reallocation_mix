@@ -428,7 +428,7 @@ def carregar_alocacao(arquivo_resultado: Optional[str], sep: str = ",", decimal:
     return aloc_agg, csv_path
 
 
-def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, year_week: str) -> pd.DataFrame:
+def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, year_week: str, config: Optional[Dict] = None) -> pd.DataFrame:
     """Combine producao and alocacao by item_id to compare volumes."""
     comparacao = producao.merge(
         alocacao,
@@ -449,8 +449,43 @@ def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, year_we
 
     comparacao["year_week"] = year_week
     comparacao["data_producao"] = comparacao["data_producao"].fillna(get_week_start_date(year_week))
+    
+    # Adicionar descrição dos itens
+    comparacao = _adicionar_descricao(comparacao, config)
 
     return comparacao.sort_values("diferenca_absoluta", ascending=False).reset_index(drop=True)
+
+
+def _adicionar_descricao(df: pd.DataFrame, config: Optional[Dict] = None) -> pd.DataFrame:
+    """Adiciona coluna de descrição dos itens a partir da base de faturamento."""
+    try:
+        # Determinar caminho da base de faturamento
+        if config:
+            path_fat = Path(config.get('paths', {}).get('faturamento', 'inputs/manti_fat_2025_full.parquet'))
+        else:
+            path_fat = Path('inputs/manti_fat_2025_full.parquet')
+        
+        if not path_fat.exists():
+            df['descricao'] = None
+            return df
+        
+        # Carregar descrições
+        df_desc = pd.read_parquet(path_fat, columns=['item', 'Descrição do item'])
+        df_desc = df_desc.drop_duplicates(subset=['item'])
+        df_desc.columns = ['item', 'descricao']
+        df_desc['item'] = df_desc['item'].astype(int)
+        
+        # Garantir que item é int
+        df['item'] = df['item'].astype(int)
+        
+        # Merge
+        df = df.merge(df_desc, on='item', how='left')
+        
+    except Exception as e:
+        print(f"[AVISO] Erro ao carregar descrições: {e}")
+        df['descricao'] = None
+    
+    return df
 
 
 def _parse_args() -> argparse.Namespace:
@@ -526,7 +561,7 @@ def main():
     except Exception:
         pass
 
-    comparacao = construir_comparacao(producao, alocacao, year_week)
+    comparacao = construir_comparacao(producao, alocacao, year_week, config)
     
     # PRIMEIRO: Tentar usar preços e custos do arquivo de resultado do modelo (mais completo)
     # Isso garante que item_ids com alocação tenham preços/custos mesmo que não estejam nos arquivos externos

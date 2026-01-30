@@ -752,6 +752,9 @@ class ETLPipeline:
         # Calcular margem
         df_base['margem_unitaria'] = df_base['preco'] - df_base['custo_ytd']
         
+        # Adicionar descrição dos itens
+        df_base = self._adicionar_descricao(df_base)
+        
         # Filtrar margens válidas
         df_base = df_base[
             (df_base['margem_unitaria'] > 0) &
@@ -924,3 +927,32 @@ class ETLPipeline:
             pd.DataFrame(pedidos_garantidos_list) if pedidos_garantidos_list else pd.DataFrame(),
             pd.DataFrame(pedidos_ignorados_list) if pedidos_ignorados_list else pd.DataFrame()
         )
+    
+    def _adicionar_descricao(self, df_base: pd.DataFrame) -> pd.DataFrame:
+        """Adiciona coluna de descrição dos itens a partir da base de faturamento."""
+        try:
+            path_fat = Path(self.config['paths'].get('faturamento', 'inputs/manti_fat_2025_full.parquet'))
+            
+            if not path_fat.exists():
+                self.logger.warning("  Base de faturamento não encontrada - descrição não adicionada")
+                df_base['descricao'] = None
+                return df_base
+            
+            # Carregar apenas colunas necessárias
+            df_desc = pd.read_parquet(path_fat, columns=['item', 'Descrição do item'])
+            df_desc = df_desc.drop_duplicates(subset=['item'])
+            df_desc.columns = ['item', 'descricao']
+            df_desc['item'] = df_desc['item'].astype(int)
+            
+            # Merge com df_base
+            df_base = df_base.merge(df_desc, on='item', how='left')
+            
+            # Log
+            com_desc = df_base['descricao'].notna().sum()
+            self.logger.info(f"  Descrições adicionadas: {com_desc} de {len(df_base)} itens")
+            
+        except Exception as e:
+            self.logger.warning(f"  Erro ao carregar descrições: {e}")
+            df_base['descricao'] = None
+        
+        return df_base
