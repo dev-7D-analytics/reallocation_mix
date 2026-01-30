@@ -457,19 +457,36 @@ class ETLPipeline:
         else:
             df_fat['periodo'] = df_fat[col_data].dt.date
         
-        # Calcular demanda máxima por SKU
+        # Calcular demanda por SKU agregada por período
         df_agregado = df_fat.groupby([col_item, 'periodo'])[col_qtd].sum().reset_index()
         df_agregado.columns = ['item', 'periodo', 'demanda_periodo']
         
-        # Máximo histórico × fator
+        # Tipo de cálculo: maximo, media ou percentil
+        tipo_calculo = self.config.get('modelo', {}).get('tipo_calculo_demanda', 'maximo').lower()
         fator = self.config.get('modelo', {}).get('fator_demanda_maxima', 1.2)
         
-        df_demanda = df_agregado.groupby('item')['demanda_periodo'].max().reset_index()
-        df_demanda.columns = ['item', 'demanda_max']
+        if tipo_calculo == 'media':
+            # Média dos períodos
+            df_demanda = df_agregado.groupby('item')['demanda_periodo'].mean().reset_index()
+            df_demanda.columns = ['item', 'demanda_max']
+            self.logger.info(f"  Tipo de calculo: MEDIA dos periodos x {fator}")
+        elif tipo_calculo == 'percentil':
+            # Percentil configurado
+            percentil = self.config.get('modelo', {}).get('percentil_demanda', 95)
+            df_demanda = df_agregado.groupby('item')['demanda_periodo'].quantile(percentil/100).reset_index()
+            df_demanda.columns = ['item', 'demanda_max']
+            self.logger.info(f"  Tipo de calculo: PERCENTIL {percentil} x {fator}")
+        else:
+            # Máximo histórico (padrão)
+            df_demanda = df_agregado.groupby('item')['demanda_periodo'].max().reset_index()
+            df_demanda.columns = ['item', 'demanda_max']
+            self.logger.info(f"  Tipo de calculo: MAXIMO historico x {fator}")
+        
+        # Aplicar fator de expansão
         df_demanda['demanda_max'] = df_demanda['demanda_max'] * fator
         
         self.logger.info(f"  SKUs com demanda historica: {len(df_demanda)}")
-        self.logger.info(f"  Demanda maxima media: {df_demanda['demanda_max'].mean():,.0f} unidades")
+        self.logger.info(f"  Limite demanda medio: {df_demanda['demanda_max'].mean():,.0f} unidades")
         
         return df_demanda
     

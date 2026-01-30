@@ -116,7 +116,7 @@ modelo:
   # Restrições de demanda histórica
   considerar_demanda_historica: true  # true = limita alocacao baseada em demanda historica
   granularidade_demanda: S  # Granularidade da agregacao: M=Mensal, S=Semanal, D=Diaria
-  tipo_calculo_demanda: maximo  # Tipo de calculo: "percentil" ou "maximo"
+  tipo_calculo_demanda: media  # Tipo de calculo: "maximo", "media" ou "percentil"
   percentil_demanda: 95  # Percentil da demanda historica (50=mediana, 75=percentil 75, 90=percentil 90) - usado apenas se tipo_calculo_demanda=percentil
   fator_expansao_demanda: 5  # Multiplicador sobre o percentil (1.0=sem expansao, 1.5=50% acima, 2.0=dobro, 5.0=5x) - usado apenas se tipo_calculo_demanda=percentil
   fator_percentual_maximo: 1.2  # Fator percentual sobre o maximo historico (1.0=igual ao maximo, 1.2=20% acima, 1.5=50% acima) - usado apenas se tipo_calculo_demanda=maximo
