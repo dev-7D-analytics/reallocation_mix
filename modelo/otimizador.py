@@ -275,27 +275,36 @@ class Otimizador:
                     receita_total = qtd_caixas * row['preco']
                     custo_total = qtd_caixas * row['custo_ytd']
                     
+                    # Ordenação lógica das colunas por categoria:
+                    # 1. Identificação | 2. Quantidades | 3. Financeiro unitário
+                    # 4. Totais | 5. Restrições/Limites | 6. Flags/Status
                     resultados.append({
+                        # === IDENTIFICAÇÃO ===
                         'item_id': item_id,
                         'item': row['item'],
                         'descricao': row.get('descricao', None),
                         'embalagem': row['embalagem'],
                         'classe': row['classe'],
+                        # === QUANTIDADES ===
                         'quantidade': qtd_ovos,
                         'quantidade_caixas': qtd_caixas,
-                        'tipo': 'otimizacao',
+                        # === FINANCEIRO UNITÁRIO ===
                         'preco': row['preco'],
                         'custo_ytd': row['custo_ytd'],
                         'margem_unitaria': row['margem_unitaria'],
                         'margem_por_ovo': row['margem_unitaria'] / row['qtd_ovos_por_caixa'],
+                        # === TOTAIS FINANCEIROS ===
                         'receita_total': receita_total,
                         'custo_total': custo_total,
                         'margem_total': margem_total,
-                        'tem_demanda_historica': row.get('tem_demanda_historica', False),
+                        # === RESTRIÇÕES / LIMITES ===
                         'limite_demanda_historica': row.get('limite_demanda_historica', np.nan),
-                        'producao_total': row['producao_total'],
                         'producao_disponivel': row['producao_disponivel_otimizacao_classe'],
-                        'custo_medio_classe': row.get('custo_medio_classe', False)
+                        'producao_total': row['producao_total'],
+                        # === FLAGS / STATUS ===
+                        'tem_demanda_historica': row.get('tem_demanda_historica', False),
+                        'custo_medio_classe': row.get('custo_medio_classe', False),
+                        'tipo': 'otimizacao',
                     })
         
         df_resultado = pd.DataFrame(resultados)

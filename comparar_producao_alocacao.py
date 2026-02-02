@@ -920,6 +920,31 @@ def main():
     output_path_csv = RESULTS_DIR / f"comparacao_producao_alocacao_{year_week}.csv"
     output_path_xlsx = RESULTS_DIR / f"comparacao_producao_alocacao_{year_week}.xlsx"
     
+    # Reordenar colunas por categoria lógica para facilitar leitura
+    # 1. Identificação | 2. Período | 3. Quantidades | 4. Financeiro unitário
+    # 5. Restrições | 6. Flags/Status | 7. Origens dos dados
+    colunas_ordenadas = [
+        # === IDENTIFICAÇÃO ===
+        'item_id', 'item', 'descricao', 'embalagem', 'Classe_Produto',
+        # === PERÍODO ===
+        'year_week', 'data_producao',
+        # === QUANTIDADES ===
+        'quantidade_produzida', 'quantidade_alocada', 'diferenca_aloc_menos_prod', 'diferenca_absoluta',
+        # === FINANCEIRO UNITÁRIO ===
+        'preco', 'custo_ytd', 'margem_unitaria', 'margem_por_ovo',
+        # === RESTRIÇÕES / LIMITES ===
+        'limite_demanda_historica',
+        # === FLAGS / STATUS ===
+        'origem_dado', 'tem_pedido', 'pedido_ignorado', 'sku_restrito', 
+        'tem_demanda_historica', 'custo_medio_classe',
+        # === ORIGENS DOS DADOS ===
+        'preco_origem', 'custo_origem',
+    ]
+    # Manter apenas colunas que existem e adicionar outras ao final
+    colunas_existentes = [c for c in colunas_ordenadas if c in comparacao.columns]
+    colunas_restantes = [c for c in comparacao.columns if c not in colunas_ordenadas]
+    comparacao = comparacao[colunas_existentes + colunas_restantes]
+    
     # Salvar CSV
     comparacao.to_csv(output_path_csv, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
     

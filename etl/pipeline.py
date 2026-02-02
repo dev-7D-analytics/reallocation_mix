@@ -386,6 +386,72 @@ class ETLPipeline:
         
         return df_custo
     
+    def _aplicar_correcao_estabelecimento(self, df_fat: pd.DataFrame) -> pd.DataFrame:
+        """
+        Aplica correção de estabelecimento na base de faturamento.
+        
+        Alguns clientes foram registrados no Estab 100 mas na verdade são atendidos
+        por outros estabelecimentos. O arquivo 'ESTAB CORRIGIDO.xlsx' contém o 
+        mapeamento Cliente -> Estab Padrao correto.
+        
+        Cria uma nova coluna 'Estab_Corrigido' preservando o 'Estab' original.
+        """
+        # Verificar se existe arquivo de correção
+        path_correcao = Path(self.config['paths'].get('estab_corrigido', 'inputs/ESTAB CORRIGIDO.xlsx'))
+        
+        if not path_correcao.exists():
+            self.logger.warning(f"  Arquivo de correção de estabelecimento não encontrado: {path_correcao}")
+            # Se não existe arquivo, apenas copia Estab para Estab_Corrigido
+            df_fat['Estab_Corrigido'] = df_fat['Estab']
+            return df_fat
+        
+        # Verificar se existe coluna de cliente na base de faturamento
+        col_cliente = 'Cod.Emitente' if 'Cod.Emitente' in df_fat.columns else None
+        
+        if col_cliente is None:
+            self.logger.warning("  Coluna 'Cod.Emitente' não encontrada - correção de Estab não aplicada")
+            df_fat['Estab_Corrigido'] = df_fat['Estab']
+            return df_fat
+        
+        try:
+            # Carregar mapeamento Cliente -> Estab Padrao
+            df_correcao = pd.read_excel(path_correcao)
+            
+            if 'Cliente' not in df_correcao.columns or 'Estab Padrao' not in df_correcao.columns:
+                self.logger.warning("  Colunas 'Cliente' ou 'Estab Padrao' não encontradas no arquivo de correção")
+                df_fat['Estab_Corrigido'] = df_fat['Estab']
+                return df_fat
+            
+            # Criar dicionário de mapeamento Cliente -> Estab Padrao
+            mapa_estab = dict(zip(df_correcao['Cliente'], df_correcao['Estab Padrao']))
+            
+            # Criar coluna Estab_Corrigido
+            # Se o cliente está no mapeamento, usa o Estab Padrao; senão, mantém o Estab original
+            df_fat['Estab_Corrigido'] = df_fat.apply(
+                lambda row: mapa_estab.get(row[col_cliente], row['Estab']),
+                axis=1
+            )
+            
+            # Contar quantos registros foram corrigidos
+            registros_corrigidos = (df_fat['Estab'] != df_fat['Estab_Corrigido']).sum()
+            
+            self.logger.info(f"  Correção de estabelecimento aplicada:")
+            self.logger.info(f"    - Mapeamento carregado: {len(mapa_estab)} clientes")
+            self.logger.info(f"    - Registros corrigidos: {registros_corrigidos:,} de {len(df_fat):,}")
+            
+            if registros_corrigidos > 0:
+                # Mostrar distribuição das correções
+                correcoes = df_fat[df_fat['Estab'] != df_fat['Estab_Corrigido']].groupby(['Estab', 'Estab_Corrigido']).size()
+                self.logger.info(f"    - Principais correções:")
+                for (estab_orig, estab_novo), count in correcoes.head(5).items():
+                    self.logger.info(f"      {estab_orig} -> {estab_novo}: {count:,} registros")
+            
+        except Exception as e:
+            self.logger.warning(f"  Erro ao aplicar correção de estabelecimento: {e}")
+            df_fat['Estab_Corrigido'] = df_fat['Estab']
+        
+        return df_fat
+    
     def _carregar_demanda_historica(self) -> pd.DataFrame:
         """Carrega demanda histórica por SKU."""
         self.logger.info("\n[6/8] Carregando demanda historica...")
@@ -417,27 +483,23 @@ class ETLPipeline:
             self.logger.warning("  Colunas necessárias não encontradas no faturamento")
             return pd.DataFrame(columns=['item', 'demanda_max'])
         
-        # Filtrar estabelecimentos
-        estabs_manter = self.config.get('negocio', {}).get('filtrar_granjas', [])
-        if estabs_manter and 'Estab' in df_fat.columns:
-            df_fat = df_fat[df_fat['Estab'].astype(str).isin([str(e) for e in estabs_manter])].copy()
-            self.logger.info(f"  Mantendo estabelecimentos: {estabs_manter}")
+        # Aplicar correção de estabelecimento (alguns clientes foram registrados no Estab errado)
+        df_fat = self._aplicar_correcao_estabelecimento(df_fat)
         
-        # CORREÇÃO: Converter quantidade de CAIXAS para OVOS usando embalagem real
-        if col_desc:
-            df_fat['_embalagem'] = df_fat[col_desc].apply(extrair_embalagem_descricao)
-            df_fat['_ovos_por_caixa'] = df_fat['_embalagem'].apply(calcular_qtd_embalagem)
-            df_fat['_ovos_por_caixa'] = df_fat['_ovos_por_caixa'].fillna(360)
-            
-            # Log distribuição
-            ovos_dist = df_fat['_ovos_por_caixa'].value_counts().to_dict()
-            self.logger.info(f"  Distribuição de ovos/caixa: {ovos_dist}")
-            
-            df_fat[col_qtd] = df_fat[col_qtd] * df_fat['_ovos_por_caixa']
-            df_fat = df_fat.drop(columns=['_embalagem', '_ovos_por_caixa'])
-        else:
-            # Fallback: multiplicar por 360
-            df_fat[col_qtd] = df_fat[col_qtd] * 360
+        # Filtrar estabelecimentos usando coluna corrigida
+        estabs_manter = self.config.get('negocio', {}).get('filtrar_granjas', [])
+        if estabs_manter and 'Estab_Corrigido' in df_fat.columns:
+            antes = len(df_fat)
+            df_fat = df_fat[df_fat['Estab_Corrigido'].astype(str).isin([str(e) for e in estabs_manter])].copy()
+            self.logger.info(f"  Mantendo estabelecimentos (corrigido): {estabs_manter}")
+            self.logger.info(f"  Registros após filtro: {len(df_fat)} de {antes}")
+        
+        # A base de faturamento está normalizada para caixas de 360 ovos
+        # A coluna 'Quantidade' representa caixas equivalentes de 360 ovos
+        # Para obter quantidade em ovos: Quantidade × 360
+        # Nota: CONV. P OVO = Quantidade × 360 (verificado em 100% dos registros)
+        self.logger.info(f"  Convertendo quantidade para ovos (Quantidade × 360)")
+        df_fat[col_qtd] = df_fat[col_qtd] * 360
         
         # Converter data e filtrar período
         df_fat[col_data] = pd.to_datetime(df_fat[col_data], errors='coerce')
@@ -502,6 +564,7 @@ class ETLPipeline:
         
         try:
             df = pd.read_excel(path)
+            total_original = len(df)
             
             # Procurar coluna de item
             col_item = None
@@ -513,9 +576,28 @@ class ETLPipeline:
             if col_item is None:
                 col_item = df.columns[0]
             
+            # Aplicar filtros de validação
+            # 1. STATUS = ATIVO
+            if 'STATUS' in df.columns:
+                df = df[df['STATUS'] == 'ATIVO']
+                self.logger.info(f"  Filtro STATUS='ATIVO': {len(df)} de {total_original}")
+            
+            # 2. ESTAB = 100
+            if 'ESTAB' in df.columns:
+                antes = len(df)
+                df = df[df['ESTAB'] == 100]
+                self.logger.info(f"  Filtro ESTAB=100: {len(df)} de {antes}")
+            
+            # 3. TIPO diferente de ["Exportação", "GRANEL", "MARCA PROPRIA"]
+            tipos_excluidos = ['Exportação', 'GRANEL', 'MARCA PROPRIA']
+            if 'TIPO' in df.columns:
+                antes = len(df)
+                df = df[~df['TIPO'].isin(tipos_excluidos)]
+                self.logger.info(f"  Filtro TIPO not in {tipos_excluidos}: {len(df)} de {antes}")
+            
             skus = df[col_item].dropna().astype(int).tolist()
             
-            self.logger.info(f"  SKUs permitidos: {len(skus)}")
+            self.logger.info(f"  SKUs permitidos (após filtros): {len(skus)} de {total_original} originais")
             
             return skus
         except Exception as e:

@@ -1,156 +1,75 @@
-# Configuração do Modelo de Otimização de Mix Diário
-# Data: 2024-12-08
-# Versão: 1.0
-
-# ==============================================================================
-# CAMINHOS DOS ARQUIVOS
-# ==============================================================================
-paths:
-  # Arquivos de entrada (todos na pasta inputs/)
-  # estoque: "inputs/manti_estoque.parquet"  # DEPRECADO: usar producao por classe
-  producao_bruta: "inputs/PRODUÇÃO DIA.xlsx"  # Producao semanal bruta por SKU e embalagem
-  producao: "inputs/producao_classe.csv"  # Producao por classe de produtos
-  classes: "inputs/base_skus_classes.xlsx"  # Classificacao de SKUs por classe
-  pedidos: "inputs/pedidos_clientes.csv"  # Pedidos de clientes (pode ser parcial)
-  # compatibilidade: "inputs/compatibilidade_sku_embalagem.csv"  # DEPRECADO: item ja vem com embalagem
-  precos: "inputs/precos_sku_embalagem.csv"
-  custos: "inputs/MANTI-PRIC_Custos_12012026.parquet"  # Parquet com filtros: Estab=100, MÊS=11, ano=2025
-  faturamento: "inputs/manti_fat_2025_full.parquet"  # Faturamento historico para calcular demanda
-  # faturamento: "inputs/MANTI-PRIC_Custos_12012026.parquet"  # Faturamento historico para calcular demanda
-  skus_restritos: "inputs/skus_restritos.xlsx"  # SKUs permitidos para producao no estab (ESTAB=100, ATIVO); filtra PRODUÇÃO DIA (A∩B)
-  # custo_embalagem: "inputs/custo_embalagem.csv"  # Opcional
-  
-  # Arquivos de saída
-  output_dir: "resultados"
-  logs_dir: "logs"
-
-# ==============================================================================
-# PARÂMETROS DO SOLVER (OR-Tools)
-# ==============================================================================
-solver:
-  # Tipo de solver
-  solver_type: "SCIP_MIXED_INTEGER_PROGRAMMING"  # OR-Tools padrão
-  
-  # Limites de tempo e gap
-  time_limit_seconds: 600  # 10 minutos (ajustar conforme necessário)
-  time_limit_ms: 600000    # 10 minutos em milissegundos
-  gap_percentage: 0.001     # 1% de gap de otimalidade
-  
-  # Paralelização
-  num_threads: 4           # Usar 4 threads (ajustar conforme CPU)
-  
-  # Logging
-  verbose: true            # Mostrar progresso do solver
-  
-  # Tolerâncias numéricas
-  primal_tolerance: 1.0e-7
-  dual_tolerance: 1.0e-7
-
-# ==============================================================================
-# PARÂMETROS DE PREPARAÇÃO DE DADOS
-# ==============================================================================
-dados:
-  # Semana referência para produção
-  semana_ref: "2025-51"
-  
-  # Período de custos e preços (devem ser do mesmo mês/ano)
-  mes_custo: 11   # Mês de referência para custos (1-12) - novembro 2025
-  ano_custo: 2025 # Ano de referência para custos
-  estab_custo: 100 # Estabelecimento para custos
-  meses_janela_custo: 6  # Janela de meses para custos (últimos N meses a partir de mes_custo/ano_custo)
-  
-  mes_preco: 11   # Mês de referência para preços (deve ser igual a mes_custo)
-  ano_preco: 2025 # Ano de referência para preços (deve ser igual a ano_custo)
-  estab_preco: 100 # Estabelecimento para preços
-  meses_janela_preco: 6  # Janela de meses para preços (últimos N meses a partir de mes_preco/ano_preco)
-  
-  # Estabelecimentos para otimização (lista de estabelecimentos a serem considerados)
-  # Usado para filtrar SKUs restritos e outras operações que dependem de estabelecimento
-  estabelecimentos: [100]  # Lista de estabelecimentos (ex: [100, 116, 1100])
-  
-  # Tipo de estoque
-  tipo_estoque: "DISPONIVEL PARA VENDA"  
-  
-  # Filtros de qualidade de dados
-  sku_minimo_transacoes: 1      # Mínimo de transações para considerar SKU
-  
-  # Tratamento de outliers
-  remover_outliers_preco: true
-  percentil_inferior_preco: 1   # Remover 1% menores preços
-  percentil_superior_preco: 99  # Remover 1% maiores preços
-
-# ==============================================================================
-# PARÂMETROS DE NEGÓCIO
-# ==============================================================================
-negocio:
-  # Margem mínima
-  margem_minima_percentual: 0.0 # 0% = aceita qualquer margem positiva
-  filtrar_skus_margem_negativa: true  # Remover SKUs com margem negativa
-  filtrar_granjas: ["100"] # Lista de estabelecimentos a MANTER no cálculo de demanda histórica (vazia = todos)
-
-# ==============================================================================
-# PARÂMETROS DO MODELO
-# ==============================================================================
-modelo:
-  # Tipo de variáveis
-  variaveis_continuas: true     # true = LP relaxado, false = MILP puro
-  
-  # Objetivo
-  tipo_objetivo: maximizar_margem  # "maximizar_margem" ou "minimizar_custos"
-  maximizar_margem_absoluta: true      # true = R$, false = % (usado apenas se tipo_objetivo=maximizar_margem)
-  
-  # Restrições opcionais
-  escoar_todo_estoque: true   # Se true, força escoar pelo menos 95% do estoque
-  
-  # Realocação entre SKUs da mesma classe
-  limite_realocacao: 2.5  # SKU pode receber até 2x seu estoque original (1.0 = sem realocação)
-  
-  # Controle de volume para otimização
-  # IMPORTANTE: 
-  # - Se atender_pedidos=true, SEMPRE usa excedente (estoque - pedidos), independente desta flag
-  # - Se atender_pedidos=false, esta flag controla se usa excedente ou estoque total
-  # - Se atender_pedidos=false E usar_apenas_excedente=true, sera ajustado automaticamente para false
-  usar_apenas_excedente: false  # So faz diferenca quando atender_pedidos=false
-  atender_pedidos: false  # true = atende pedidos com prioridade, false = ignora pedidos completamente
-  
-  # Restrições de demanda histórica
-  considerar_demanda_historica: true  # true = limita alocacao baseada em demanda historica
-  granularidade_demanda: S  # Granularidade da agregacao: M=Mensal, S=Semanal, D=Diaria
-  tipo_calculo_demanda: media  # Tipo de calculo: "maximo", "media" ou "percentil"
-  percentil_demanda: 95  # Percentil da demanda historica (50=mediana, 75=percentil 75, 90=percentil 90) - usado apenas se tipo_calculo_demanda=percentil
-  fator_expansao_demanda: 5  # Multiplicador sobre o percentil (1.0=sem expansao, 1.5=50% acima, 2.0=dobro, 5.0=5x) - usado apenas se tipo_calculo_demanda=percentil
-  fator_percentual_maximo: 1.2  # Fator percentual sobre o maximo historico (1.0=igual ao maximo, 1.2=20% acima, 1.5=50% acima) - usado apenas se tipo_calculo_demanda=maximo
-  periodo_historico_meses: 12  # Quantos meses usar para calcular demanda historica
-
-# ==============================================================================
-# PARÂMETROS DE ANÁLISE DE RESULTADOS (A SER IMPLEMENTADO)
-# ==============================================================================
-analise: 
-  # Top N
-  top_n_combinations: 20       # Top 20 combinações por margem
-  
-  # Agrupamentos para análise
+analise:
   agrupar_por_embalagem: true
   agrupar_por_sku: true
-
-# ==============================================================================
-# MODO DEBUG
-# ==============================================================================
+  top_n_combinations: 20
+dados:
+  ano_custo: 2025
+  ano_preco: 2025
+  estab_custo: 100
+  estab_preco: 100
+  estabelecimentos:
+  - 100
+  mes_custo: 11
+  mes_preco: 11
+  meses_janela_custo: 6
+  meses_janela_preco: 6
+  percentil_inferior_preco: 1
+  percentil_superior_preco: 99
+  remover_outliers_preco: true
+  semana_ref: 2025-51
+  sku_minimo_transacoes: 1
+  tipo_estoque: DISPONIVEL PARA VENDA
 debug:
-  ativar: false                        # Ativar modo debug
-  salvar_modelo_mps: false             # Exportar modelo em formato MPS
-  salvar_modelo_lp: false               # Exportar modelo em formato LP
-  limitar_skus: null                    # null ou número (ex: 50 para testar)
-  seed_random: 42                      # Seed para reprodutibilidade
-
-# ==============================================================================
-# VERSIONAMENTO
-# ==============================================================================
+  ativar: false
+  limitar_skus: null
+  salvar_modelo_lp: false
+  salvar_modelo_mps: false
+  seed_random: 42
 meta:
-  versao_modelo: "1.0"
-  data_criacao: "2025-12-08"
-  autor: "7D"
-  descricao: "Modelo de otimização de mix diário (SKU x Embalagem) sem clientes"
+  autor: 7D
   changelog:
-    - "2025-12-08: Versão inicial - mix diário sem clientes"
-
+  - '2025-12-08: Versão inicial - mix diário sem clientes'
+  data_criacao: '2025-12-08'
+  descricao: Modelo de otimização de mix diário (SKU x Embalagem) sem clientes
+  versao_modelo: '1.0'
+modelo:
+  atender_pedidos: false
+  considerar_demanda_historica: true
+  escoar_todo_estoque: true
+  fator_expansao_demanda: 5
+  fator_percentual_maximo: 1.2
+  granularidade_demanda: S
+  limite_realocacao: 2.5
+  maximizar_margem_absoluta: true
+  percentil_demanda: 95
+  periodo_historico_meses: 12
+  tipo_calculo_demanda: media
+  tipo_objetivo: maximizar_margem
+  usar_apenas_excedente: false
+  variaveis_continuas: true
+negocio:
+  filtrar_granjas:
+  - '100'
+  filtrar_skus_margem_negativa: true
+  margem_minima_percentual: 0.0
+paths:
+  classes: inputs/base_skus_classes.xlsx
+  custos: inputs/MANTI-PRIC_Custos_12012026.parquet
+  estab_corrigido: inputs/ESTAB CORRIGIDO.xlsx
+  faturamento: inputs/manti_fat_2025_full.parquet
+  logs_dir: logs
+  output_dir: resultados
+  pedidos: inputs/pedidos_clientes.csv
+  precos: inputs/precos_sku_embalagem.csv
+  producao: inputs/producao_classe.csv
+  producao_bruta: inputs/PRODUÇÃO DIA.xlsx
+  skus_restritos: inputs/skus_restritos.xlsx
+solver:
+  dual_tolerance: 1.0e-07
+  gap_percentage: 0.001
+  num_threads: 4
+  primal_tolerance: 1.0e-07
+  solver_type: SCIP_MIXED_INTEGER_PROGRAMMING
+  time_limit_ms: 600000
+  time_limit_seconds: 600
+  verbose: true
