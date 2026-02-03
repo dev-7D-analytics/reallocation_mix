@@ -501,13 +501,29 @@ class ETLPipeline:
         self.logger.info(f"  Convertendo quantidade para ovos (Quantidade × 360)")
         df_fat[col_qtd] = df_fat[col_qtd] * 360
         
-        # Converter data e filtrar período
+        # Converter data e filtrar período (mesmo critério de custo/preço: mes_ref + janela)
         df_fat[col_data] = pd.to_datetime(df_fat[col_data], errors='coerce')
         df_fat = df_fat[df_fat[col_data].notna()]
         
-        periodo_meses = self.config.get('modelo', {}).get('periodo_historico_meses', 6)
-        data_limite = df_fat[col_data].max() - pd.DateOffset(months=periodo_meses)
-        df_fat = df_fat[df_fat[col_data] >= data_limite]
+        dados_config = self.config.get('dados', {})
+        mes_ref = dados_config.get('mes_custo', 11)
+        ano_ref = dados_config.get('ano_custo', 2025)
+        meses_janela = dados_config.get('meses_janela_custo', 6)
+        periodos = []
+        for i in range(meses_janela):
+            mes = mes_ref - i
+            ano = ano_ref
+            while mes <= 0:
+                mes += 12
+                ano -= 1
+            periodos.append((ano, mes))
+        df_fat['_ano'] = df_fat[col_data].dt.year
+        df_fat['_mes'] = df_fat[col_data].dt.month
+        periodos_set = set(periodos)
+        df_fat['_periodo'] = list(zip(df_fat['_ano'], df_fat['_mes']))
+        df_fat = df_fat[df_fat['_periodo'].isin(periodos_set)].copy()
+        df_fat = df_fat.drop(columns=['_ano', '_mes', '_periodo'])
+        self.logger.info(f"  Periodo demanda: janela de {meses_janela} meses ate {ano_ref}-{mes_ref:02d} -> {', '.join([f'{a}-{m:02d}' for a, m in periodos])}")
         
         # Agregar por período (semanal por padrão)
         granularidade = self.config.get('modelo', {}).get('granularidade_demanda', 'S').upper()
