@@ -774,33 +774,116 @@ def main():
     # Calcular margem unitária (em R$/caixa)
     comparacao["margem_unitaria"] = comparacao["preco"] - comparacao["custo_ytd"]
     
+    # ==========================================================================
+    # ADICIONAR SKUs COM PEDIDO MAS SEM PRODUÇÃO NA SEMANA
+    # Esses SKUs foram reservados pelo modelo mas não aparecem na produção
+    # ==========================================================================
+    if len(pedidos) > 0:
+        skus_em_comparacao = set(comparacao['item'].unique())
+        skus_com_pedido = set(pedidos['item'].tolist())
+        skus_pedido_sem_producao = skus_com_pedido - skus_em_comparacao
+        
+        if len(skus_pedido_sem_producao) > 0:
+            print(f"\n[INFO] Adicionando {len(skus_pedido_sem_producao)} SKUs com pedido mas sem produção na semana")
+            
+            # Carregar classes para mapear esses SKUs
+            if config:
+                classes_path = _resolver_caminho(config, "classes", INPUT_PATH / "base_skus_classes.xlsx")
+            else:
+                classes_path = INPUT_PATH / "base_skus_classes.xlsx"
+            
+            try:
+                df_classes = pd.read_excel(Path(classes_path))
+                col_classe = _resolver_coluna_classe(df_classes)
+                if col_classe:
+                    classes_dict = df_classes.set_index('item')[col_classe].to_dict()
+                else:
+                    classes_dict = {}
+            except Exception:
+                classes_dict = {}
+            
+            # Criar linhas para SKUs com pedido mas sem produção
+            novas_linhas = []
+            for item in skus_pedido_sem_producao:
+                qtd_pedida = pedidos[pedidos['item'] == item]['quantidade_total_pedida'].iloc[0]
+                classe = classes_dict.get(item, 'SEM_CLASSE')
+                
+                nova_linha = {
+                    'item_id': f"{item}_SEM_PRODUCAO",
+                    'item': item,
+                    'descricao': None,  # Será preenchido depois
+                    'embalagem': None,
+                    'classe': classe,
+                    'year_week': year_week,
+                    'data_producao': get_week_start_date(year_week),
+                    'quantidade_produzida': 0,
+                    'quantidade_alocada': 0,
+                    'diferenca_aloc_menos_prod': 0,
+                    'diferenca_absoluta': 0,
+                    'origem_dado': 'Somente pedido',
+                    'preco': None,
+                    'custo_ytd': None,
+                    'margem_unitaria': None,
+                    'preco_origem': None,
+                    'custo_origem': None,
+                }
+                novas_linhas.append(nova_linha)
+                print(f"    SKU {item} ({classe}): {qtd_pedida:,.0f} ovos (reserva sem produção)")
+            
+            # Concatenar ao DataFrame de comparação
+            if novas_linhas:
+                df_novas = pd.DataFrame(novas_linhas)
+                comparacao = pd.concat([comparacao, df_novas], ignore_index=True)
+                
+                # Preencher descrição para os novos SKUs (sem duplicar coluna)
+                # Carregar descrições do faturamento
+                try:
+                    if config:
+                        path_fat = Path(config.get('paths', {}).get('faturamento', 'inputs/manti_fat_2025_full.parquet'))
+                    else:
+                        path_fat = Path('inputs/manti_fat_2025_full.parquet')
+                    
+                    if path_fat.exists():
+                        df_desc = pd.read_parquet(path_fat, columns=['item', 'Descrição do item'])
+                        df_desc = df_desc.drop_duplicates(subset=['item'])
+                        df_desc.columns = ['item', 'descricao_temp']
+                        df_desc['item'] = df_desc['item'].astype(int)
+                        
+                        # Mapear descrição apenas para linhas com descricao nula
+                        desc_dict = df_desc.set_index('item')['descricao_temp'].to_dict()
+                        mask_sem_desc = comparacao['descricao'].isna()
+                        comparacao.loc[mask_sem_desc, 'descricao'] = comparacao.loc[mask_sem_desc, 'item'].map(desc_dict)
+                except Exception as e:
+                    print(f"[AVISO] Erro ao preencher descrições: {e}")
+    
     # Identificar pedidos ignorados
     # Pedidos ignorados = pedidos que NÃO foram atendidos de nenhuma forma:
     #   - NÃO estão na alocação da otimização
-    #   - NÃO foram reservados (SKUs sem classe mapeada ou sem produção na classe)
+    #   - NÃO foram reservados (SKUs sem classe mapeada)
     # NOTA: SKUs de GRANEL/Exportação que tiveram quantidade reservada NÃO são ignorados
+    # NOTA: SKUs sem produção mas com pedido também NÃO são ignorados (foram adicionados acima)
     pedidos_ignorados = []
     if len(pedidos) > 0:
         # SKUs atendidos via alocação (otimização)
         pedidos_atendidos_alocacao = set(alocacao['item'].unique())
         
-        # SKUs atendidos via reserva (aparecem na produção e tiveram classe identificada)
-        # Esses SKUs tiveram sua quantidade descontada da produção da classe
+        # SKUs atendidos via reserva (aparecem na comparação - inclui os sem produção adicionados acima)
+        skus_em_comparacao = set(comparacao['item'].unique())
         skus_em_producao = set(producao['item'].unique())
         
         # Identificar pedidos realmente ignorados
         for _, row in pedidos.iterrows():
             item = row['item']
             em_alocacao = item in pedidos_atendidos_alocacao
-            em_producao = item in skus_em_producao
+            em_comparacao = item in skus_em_comparacao  # Inclui SKUs sem produção que foram adicionados
             
             # Pedido é ignorado se NÃO foi atendido de nenhuma forma
-            # Se está em produção, foi reservado (mesmo que não esteja na otimização)
-            if not em_alocacao and not em_producao:
+            # SKUs sem produção mas com classe mapeada foram adicionados à comparação
+            if not em_alocacao and not em_comparacao:
                 pedidos_ignorados.append({
                     'item': item,
                     'quantidade_total_pedida': row['quantidade_total_pedida'],
-                    'motivo': 'SKU nao encontrado em producao nem alocacao'
+                    'motivo': 'SKU sem classe mapeada'
                 })
     
     # Adicionar colunas de mapeamento
@@ -824,13 +907,17 @@ def main():
     
     # 4. tipo: Indica origem da alocação (compatível com otimizador.py)
     # - 'otimizacao': SKU foi alocado pela otimização
-    # - 'reserva': SKU teve pedido/reserva (GRANEL/Exportação/MARCA PROPRIA)
+    # - 'reserva': SKU teve pedido/reserva com produção na semana
+    # - 'reserva_sem_producao': SKU teve pedido/reserva MAS sem produção na semana
     # - 'producao': SKU só tem produção, sem alocação nem reserva
     def determinar_tipo(row):
         if row['quantidade_alocada'] > 0:
             return 'otimizacao'
         elif row['quantidade_reservada'] > 0:
-            return 'reserva'
+            if row['quantidade_produzida'] > 0:
+                return 'reserva'
+            else:
+                return 'reserva_sem_producao'
         elif row['quantidade_produzida'] > 0:
             return 'producao'
         else:
