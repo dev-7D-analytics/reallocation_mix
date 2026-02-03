@@ -214,9 +214,9 @@ class ETLPipeline:
         col_mapping = {}
         for col in df_pedidos.columns:
             col_lower = col.lower()
-            if 'cliente' in col_lower:
+            if 'cliente' in col_lower or 'estabelecimento' in col_lower:
                 col_mapping[col] = 'cod_cliente'
-            elif 'item' in col_lower or 'sku' in col_lower:
+            elif col_lower == 'item' or 'sku' in col_lower:
                 col_mapping[col] = 'item'
             elif 'qtd' in col_lower or 'quantidade' in col_lower:
                 col_mapping[col] = 'quantidade_pedida'
@@ -870,14 +870,27 @@ class ETLPipeline:
             self._processar_pedidos(df_base, dados, atender_pedidos)
         
         # Calcular produção excedente por classe
+        # IMPORTANTE: Considerar TODOS os pedidos garantidos da classe,
+        # mesmo de SKUs que não estão na otimização (ex: GRANEL, Exportação)
         producao_excedente = {}
+        
+        # Criar mapeamento sku -> classe a partir dos pedidos garantidos
+        pedidos_por_classe = {}
+        if len(pedidos_garantidos_df) > 0:
+            for _, row in pedidos_garantidos_df.iterrows():
+                classe = row['classe']
+                qtd = row['quantidade_atendida']
+                pedidos_por_classe[classe] = pedidos_por_classe.get(classe, 0) + qtd
+        
+        # Calcular excedente para cada classe
         for classe in df_base['classe'].unique():
             producao_classe = producao_por_classe.get(classe, 0)
-            pedidos_classe = sum(
-                qtd for sku, qtd in pedidos_garantidos_por_sku.items()
-                if sku in df_base[df_base['classe'] == classe]['item'].values
-            )
-            producao_excedente[classe] = max(0, producao_classe - pedidos_classe)
+            pedidos_classe = pedidos_por_classe.get(classe, 0)
+            excedente = max(0, producao_classe - pedidos_classe)
+            producao_excedente[classe] = excedente
+            
+            if pedidos_classe > 0:
+                self.logger.info(f"    {classe}: produção={producao_classe:,.0f}, reservado={pedidos_classe:,.0f}, excedente={excedente:,.0f}")
         
         # Adicionar produção disponível para otimização
         if usar_apenas_excedente:
@@ -934,7 +947,14 @@ class ETLPipeline:
         )
     
     def _obter_skus_producao(self) -> set:
-        """Obtém lista de SKUs que aparecem na produção do estabelecimento."""
+        """
+        Obtém lista de SKUs que aparecem na produção do estabelecimento.
+        
+        IMPORTANTE: Apenas SKUs com embalagem válida (extraível) são considerados,
+        para manter consistência com a lógica de comparação.
+        """
+        from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
+        
         path = Path(self.config['paths'].get('producao_bruta', 'inputs/PRODUÇÃO DIA.xlsx'))
         
         if not path.exists():
@@ -956,6 +976,18 @@ class ETLPipeline:
             if col_estab in df.columns:
                 df = df[df[col_estab].isin(estabelecimentos)].copy()
             
+            # Extrair embalagem e calcular quantidade (mesma lógica da comparação)
+            df['embalagem'] = df['Desc Item'].apply(extrair_embalagem_descricao)
+            df['qtd_embalagem'] = df['embalagem'].apply(calcular_qtd_embalagem)
+            df['quantidade'] = df['QUANTIDADE CORRIGIDA'] * df['qtd_embalagem']
+            
+            # Filtrar apenas SKUs com embalagem válida e quantidade > 0
+            df = df[
+                (df['embalagem'].notna()) & 
+                (df['quantidade'].notna()) & 
+                (df['quantidade'] > 0)
+            ].copy()
+            
             # Extrair SKUs
             col_item = 'Cod Item' if 'Cod Item' in df.columns else 'CODIGO ITEM'
             if col_item in df.columns:
@@ -972,7 +1004,14 @@ class ETLPipeline:
         dados: DadosCarregados,
         atender_pedidos: bool
     ) -> Tuple[Dict[int, float], pd.DataFrame, pd.DataFrame]:
-        """Processa pedidos e retorna quantidades garantidas."""
+        """
+        Processa pedidos e retorna quantidades garantidas.
+        
+        REGRA: Todos os pedidos com classe mapeada são reservados.
+        A reserva é descontada da produção da classe correspondente.
+        
+        A classe é buscada primeiro na base de otimização, depois na base de classes.
+        """
         
         if not atender_pedidos:
             return {}, pd.DataFrame(), dados.pedidos
@@ -981,28 +1020,56 @@ class ETLPipeline:
         pedidos_garantidos_list = []
         pedidos_ignorados_list = []
         
+        # Criar mapeamento item -> classe a partir da base de classes
+        classes_mapeamento = dados.classes.set_index('item')['classe'].to_dict() if len(dados.classes) > 0 else {}
+        
+        # Criar mapeamento classe -> produção
+        producao_por_classe = dados.producao.set_index('classe')['producao_total'].to_dict() if len(dados.producao) > 0 else {}
+        
         # Agrupar pedidos por SKU
         for item, qtd in dados.pedidos_por_sku.set_index('item')['quantidade_total_pedida'].items():
+            # Tentar obter classe - primeiro da base de otimização, depois do mapeamento geral
+            classe = None
+            producao_classe = 0
+            
             if item in df_base['item'].values:
-                # SKU válido - garantir pedido
+                # SKU está na base de otimização
                 classe = df_base[df_base['item'] == item]['classe'].iloc[0]
                 producao_classe = df_base[df_base['item'] == item]['producao_total'].iloc[0]
-                
+            elif item in classes_mapeamento:
+                # SKU não está na otimização mas tem classe mapeada
+                # (ex: GRANEL, Exportação, MARCA PROPRIA)
+                classe = classes_mapeamento[item]
+                producao_classe = producao_por_classe.get(classe, 0)
+            
+            if classe is not None:
+                # SKU válido - garantir pedido (reserva descontada da classe)
                 pedidos_garantidos[item] = qtd
                 pedidos_garantidos_list.append({
                     'item': item,
                     'classe': classe,
                     'quantidade_pedida': qtd,
-                    'quantidade_atendida': qtd,
-                    'producao_total_classe': producao_classe
+                    'quantidade_atendida': qtd,  # Reserva total do pedido
+                    'producao_total_classe': producao_classe,
+                    'na_base_otimizacao': item in df_base['item'].values
                 })
+                self.logger.info(f"    Pedido SKU {item} ({classe}): {qtd:,.0f} ovos reservados")
             else:
-                # SKU não encontrado
+                # SKU não encontrado em nenhuma base de classes
                 pedidos_ignorados_list.append({
                     'item': item,
                     'quantidade_pedida': qtd,
-                    'motivo': 'SKU não encontrado na base'
+                    'classe': None,
+                    'motivo': 'SKU sem classe mapeada'
                 })
+                self.logger.info(f"    Pedido SKU {item}: {qtd:,.0f} ovos IGNORADO (sem classe mapeada)")
+        
+        if pedidos_garantidos_list:
+            self.logger.info(f"  Total de pedidos garantidos: {len(pedidos_garantidos_list)}")
+            self.logger.info(f"  Quantidade total reservada: {sum(p['quantidade_atendida'] for p in pedidos_garantidos_list):,.0f} ovos")
+        
+        if pedidos_ignorados_list:
+            self.logger.info(f"  Pedidos ignorados (sem classe): {len(pedidos_ignorados_list)} SKUs")
         
         return (
             pedidos_garantidos,

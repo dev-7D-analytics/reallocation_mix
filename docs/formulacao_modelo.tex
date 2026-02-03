@@ -1,0 +1,531 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{longtable}
+
+\geometry{margin=2.5cm}
+
+\title{Formulação Matemática do Modelo de Otimização\\de Alocação de Produção de Ovos}
+\author{Mantiqueira}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Visão Geral}
+%==============================================================================
+
+O modelo de otimização tem como objetivo maximizar a margem total de contribuição na alocação da produção semanal de ovos para diferentes SKUs (Stock Keeping Units), respeitando:
+
+\begin{itemize}
+    \item Capacidade de produção por classe de produto
+    \item Demanda histórica como limite superior por SKU
+    \item Reservas prioritárias para pedidos especiais (GRANEL, Exportação, Marca Própria)
+    \item Restrições de integralidade (caixas completas)
+\end{itemize}
+
+%==============================================================================
+\section{Conjuntos e Índices}
+%==============================================================================
+
+\subsection{Conjuntos Principais}
+
+\begin{align}
+I &= \{1, 2, \ldots, n\} && \text{Conjunto de todos os SKUs} \\
+C &= \{c_1, c_2, \ldots, c_m\} && \text{Conjunto de classes de produtos} \\
+S &= \{s_1, s_2, \ldots, s_k\} && \text{Conjunto de semanas no histórico} \\
+F &= \{f_1, f_2, \ldots, f_l\} && \text{Conjunto de registros de faturamento}
+\end{align}
+
+\subsection{Subconjuntos Derivados}
+
+\begin{align}
+I_c &\subseteq I && \text{SKUs pertencentes à classe } c \\
+I_{\text{válido}} &\subseteq I && \text{SKUs válidos para otimização} \\
+I_{\text{prod}} &\subseteq I && \text{SKUs com produção na semana corrente} \\
+H &\subseteq I_{\text{válido}} && \text{SKUs com demanda histórica válida} \\
+R &\subseteq I && \text{SKUs com pedidos reservados}
+\end{align}
+
+\subsection{Mapeamentos}
+
+\begin{align}
+\kappa: I &\rightarrow C && \text{Função que mapeia SKU para sua classe} \\
+\varepsilon: I &\rightarrow \mathbb{Z}^+ && \text{Função que retorna ovos por embalagem} \\
+\sigma: I &\rightarrow S && \text{Função que mapeia SKU para semanas com venda}
+\end{align}
+
+%==============================================================================
+\section{Parâmetros de Entrada}
+%==============================================================================
+
+\subsection{Dados do SKU}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{clll}
+\toprule
+\textbf{Símbolo} & \textbf{Descrição} & \textbf{Unidade} & \textbf{Domínio} \\
+\midrule
+$p_i$ & Preço de venda do SKU $i$ & R\$/caixa & $\mathbb{R}^+$ \\
+$c_i$ & Custo YTD do SKU $i$ & R\$/caixa & $\mathbb{R}^+$ \\
+$e_i$ & Quantidade de ovos por caixa & ovos/caixa & $\mathbb{Z}^+$ \\
+$\kappa(i)$ & Classe do SKU $i$ & - & $C$ \\
+$d_i$ & Descrição do SKU $i$ & - & texto \\
+\bottomrule
+\end{tabular}
+\caption{Parâmetros por SKU}
+\end{table}
+
+\subsection{Cálculo da Embalagem}
+
+A quantidade de ovos por embalagem $e_i$ é extraída da descrição do produto:
+
+\begin{equation}
+e_i = n_{\text{bandejas}} \times n_{\text{unidades}}
+\end{equation}
+
+Exemplo: ``CX 12 BJ 30 UN'' $\Rightarrow e_i = 12 \times 30 = 360$ ovos
+
+\subsection{Dados de Produção}
+
+\begin{align}
+P_c &\in \mathbb{R}^+ && \text{Produção total da classe } c \text{ na semana (ovos)} \\
+P_c &= \sum_{i \in I_c \cap I_{\text{prod}}} \hat{p}_i \cdot e_i && \text{onde } \hat{p}_i \text{ é produção em caixas}
+\end{align}
+
+\subsection{Margem de Contribuição}
+
+\textbf{Margem por caixa:}
+\begin{equation}
+m_i = p_i - c_i \quad \text{(R\$/caixa)}
+\end{equation}
+
+\textbf{Margem por ovo:}
+\begin{equation}
+\mu_i = \frac{m_i}{e_i} = \frac{p_i - c_i}{e_i} \quad \text{(R\$/ovo)}
+\end{equation}
+
+\textbf{Tratamento de custo ausente:}
+
+Quando um SKU $i$ não possui custo individual, utiliza-se a média da classe:
+\begin{equation}
+c_i = \begin{cases}
+c_i^{\text{original}} & \text{se } c_i^{\text{original}} > 0 \\[4pt]
+\displaystyle\frac{\sum_{j \in I_{\kappa(i)}} c_j}{|I_{\kappa(i)}|} & \text{caso contrário}
+\end{cases}
+\end{equation}
+
+%==============================================================================
+\section{Processamento de Dados (ETL)}
+%==============================================================================
+
+\subsection{Base de Faturamento}
+
+Cada registro de faturamento $f \in F$ contém:
+\begin{equation}
+f = (\text{item}_f, \text{cliente}_f, \text{estab}_f, \text{data}_f, q_f, \text{desc}_f)
+\end{equation}
+
+onde $q_f$ representa a quantidade em \textbf{caixas equivalentes de 360 ovos} (base normalizada).
+
+\subsection{Correção de Estabelecimento}
+
+Alguns registros de faturamento têm estabelecimento incorreto devido a transferências internas. A correção é feita via mapeamento:
+
+\begin{equation}
+E: \text{Cod.Cliente} \rightarrow \text{Estab\_Padrao}
+\end{equation}
+
+\begin{equation}
+\text{Estab\_Corrigido}(f) = \begin{cases}
+E(\text{cliente}_f) & \text{se } \text{cliente}_f \in \text{dom}(E) \\
+\text{estab}_f & \text{caso contrário}
+\end{cases}
+\end{equation}
+
+\subsection{Filtro por Estabelecimento}
+
+Apenas registros do estabelecimento de interesse são considerados:
+\begin{equation}
+F_{\text{filtrado}} = \{f \in F : \text{Estab\_Corrigido}(f) = 100\}
+\end{equation}
+
+\subsection{Agregação Temporal}
+
+Para cada registro $f$, extrai-se a semana ISO:
+\begin{equation}
+\text{semana}(f) = \text{ISO\_Week}(\text{data}_f) = (y, w) \quad \text{onde } y = \text{ano}, w = \text{semana}
+\end{equation}
+
+\subsection{Cálculo da Demanda Histórica}
+
+\subsubsection{Quantidade Semanal por SKU}
+
+Para cada SKU $i$ e semana $s$:
+\begin{equation}
+Q_{i,s} = \sum_{f \in F : \text{item}_f = i, \text{semana}(f) = s} q_f \times 360 \quad \text{(ovos)}
+\end{equation}
+
+O fator 360 converte caixas normalizadas para quantidade de ovos.
+
+\subsubsection{Limite de Demanda Histórica}
+
+\textbf{Método Máximo:}
+\begin{equation}
+D_i^{\max} = \max_{s \in S} Q_{i,s}
+\end{equation}
+
+\textbf{Método Média:}
+\begin{equation}
+D_i^{\text{média}} = \frac{1}{|S_i|} \sum_{s \in S_i} Q_{i,s}
+\end{equation}
+
+onde $S_i = \{s \in S : Q_{i,s} > 0\}$ é o conjunto de semanas com vendas do SKU $i$.
+
+\textbf{Parâmetro de configuração:}
+\begin{equation}
+D_i = \begin{cases}
+D_i^{\max} & \text{se } \texttt{tipo\_calculo\_demanda} = \texttt{maximo} \\
+D_i^{\text{média}} & \text{se } \texttt{tipo\_calculo\_demanda} = \texttt{media}
+\end{cases}
+\end{equation}
+
+\subsection{Classificação de SKUs Válidos}
+
+Um SKU é \textbf{válido para otimização} se atende todos os critérios:
+
+\begin{equation}
+i \in I_{\text{válido}} \iff \begin{cases}
+\text{ESTAB}_i = 100 & \text{(estabelecimento correto)} \\
+\text{STATUS}_i = \texttt{ATIVO} & \text{(produto ativo)} \\
+\text{TIPO}_i \notin T_{\text{reserva}} & \text{(tipo permitido)} \\
+e_i > 0 & \text{(embalagem válida)}
+\end{cases}
+\end{equation}
+
+onde $T_{\text{reserva}} = \{\texttt{GRANEL}, \texttt{Exportação}, \texttt{MARCA PROPRIA}\}$
+
+\subsection{Conjunto com Demanda Histórica}
+
+\begin{equation}
+H = \{i \in I_{\text{válido}} : D_i > 0\}
+\end{equation}
+
+SKUs em $I_{\text{válido}} \setminus H$ têm produção mas não participam da otimização por falta de validação histórica.
+
+%==============================================================================
+\section{Sistema de Reservas de Pedidos}
+%==============================================================================
+
+\subsection{Origem das Reservas}
+
+Reservas são geradas para SKUs de tipos especiais com base na demanda histórica média:
+
+\begin{equation}
+Q_i = \frac{1}{|S_i|} \sum_{s \in S_i} Q_{i,s} \quad \forall i : \text{TIPO}_i \in T_{\text{reserva}}
+\end{equation}
+
+\subsection{Critério de Elegibilidade para Reserva}
+
+Um pedido para SKU $i$ é \textbf{elegível para reserva} se:
+
+\begin{equation}
+i \in R \iff \begin{cases}
+Q_i > 0 & \text{(existe pedido)} \\
+i \in I_{\text{prod}} & \text{(tem produção na semana)} \\
+e_i > 0 & \text{(embalagem válida/extraível)}
+\end{cases}
+\end{equation}
+
+\subsection{Cálculo da Quantidade Reservada}
+
+Para cada SKU $i \in R$:
+\begin{equation}
+r_i = \min(Q_i, P_{\kappa(i)})
+\end{equation}
+
+A reserva é limitada pela produção disponível da classe.
+
+\subsection{Agregação de Reservas por Classe}
+
+Total reservado por classe:
+\begin{equation}
+R_c = \sum_{i \in R : \kappa(i) = c} r_i \quad \forall c \in C
+\end{equation}
+
+\subsection{Produção Excedente (Disponível para Otimização)}
+
+\begin{equation}
+E_c = \max(0, P_c - R_c) \quad \forall c \in C
+\end{equation}
+
+\subsection{Pedidos Ignorados}
+
+Um pedido é \textbf{ignorado} (não reservado) se:
+
+\begin{equation}
+i \in I_{\text{ignorado}} \iff (Q_i > 0) \land \left[(i \notin I_{\text{prod}}) \lor (e_i = 0)\right]
+\end{equation}
+
+\textbf{Motivos de ignorar:}
+\begin{itemize}
+    \item SKU sem produção na semana corrente
+    \item Embalagem não extraível da descrição (ex: kits)
+    \item Classe não mapeada
+\end{itemize}
+
+%==============================================================================
+\section{Modelo de Otimização}
+%==============================================================================
+
+\subsection{Variável de Decisão}
+
+\textbf{Implementação atual (OR-Tools):} a variável é \textbf{contínua} e expressa em ovos:
+
+\begin{equation}
+x_i \in \mathbb{R}^+ \quad \text{Quantidade alocada ao SKU } i \text{ (em ovos)}
+\end{equation}
+
+O solver utiliza \texttt{NumVar} (variável contínua). O resultado é tratado/arredondado posteriormente para fins de relatório.
+
+\textbf{Formulação teórica (caixas inteiras):} se fosse exigido que a alocação corresponda apenas a caixas inteiras, teríamos $x_i \in \mathbb{Z}^+$ com $x_i \equiv 0 \pmod{e_i}$, ou equivalentemente uma variável $y_i \in \mathbb{Z}^+$ em caixas (ver Seção ``Reformulação em Caixas''). Essa formulação inteira \textbf{não está implementada} na versão atual.
+
+\subsection{Função Objetivo}
+
+Maximizar a margem total de contribuição:
+
+\begin{equation}
+\max Z = \sum_{i \in H} \mu_i \cdot x_i = \sum_{i \in H} \frac{p_i - c_i}{e_i} \cdot x_i
+\end{equation}
+
+\textbf{Interpretação:} Selecionar SKUs com maior margem por ovo, respeitando as restrições.
+
+\subsection{Restrições do Modelo}
+
+\subsubsection{R1: Capacidade de Produção por Classe}
+
+A soma das alocações de uma classe não pode exceder a produção excedente:
+
+\begin{equation}
+\sum_{i \in H : \kappa(i) = c} x_i \leq E_c \quad \forall c \in C
+\end{equation}
+
+\textbf{Interpretação:} Após descontar as reservas, o modelo só pode alocar o que sobrou.
+
+\subsubsection{R2: Limite de Demanda Histórica}
+
+A alocação individual é limitada pela demanda histórica:
+
+\begin{equation}
+x_i \leq D_i \quad \forall i \in H
+\end{equation}
+
+\textbf{Interpretação:} Evita alocações para SKUs além do que o mercado historicamente absorve.
+
+\subsubsection{R3: Não-Negatividade}
+
+\begin{equation}
+x_i \geq 0 \quad \forall i \in H
+\end{equation}
+
+\subsubsection{R4: Integralidade por Embalagem (não implementada)}
+
+Na formulação teórica, a alocação deveria corresponder a caixas inteiras:
+
+\begin{equation}
+x_i = k_i \cdot e_i \quad \text{onde } k_i \in \mathbb{Z}^+ \quad \forall i \in H
+\end{equation}
+
+Equivalentemente: $x_i \equiv 0 \pmod{e_i}$. Na \textbf{implementação atual} essa restrição não é aplicada: as variáveis são contínuas ($x_i \in \mathbb{R}^+$).
+
+%==============================================================================
+\section{Formulação Compacta}
+%==============================================================================
+
+\textbf{Implementação atual (variáveis contínuas em ovos):}
+
+\begin{equation}
+\boxed{
+\begin{aligned}
+\max \quad & Z = \sum_{i \in H} \mu_i \cdot x_i \\[10pt]
+\text{sujeito a:} \quad & \\[4pt]
+& \sum_{i \in H : \kappa(i) = c} x_i \leq E_c && \forall c \in C \quad \text{(capacidade)} \\[6pt]
+& x_i \leq D_i && \forall i \in H \quad \text{(demanda histórica)} \\[6pt]
+& x_i \geq 0 && \forall i \in H \quad \text{(não-negatividade)} \\[6pt]
+& x_i \in \mathbb{R}^+ && \forall i \in H \quad \text{(contínua)}
+\end{aligned}
+}
+\end{equation}
+
+\textbf{Formulação teórica com caixas inteiras} (não implementada): acrescentar $x_i = k_i \cdot e_i$, $k_i \in \mathbb{Z}^+$, ou usar a reformulação em $y_i$ (Seção seguinte).
+
+%==============================================================================
+\section{Reformulação em Caixas (Alternativa)}
+%==============================================================================
+
+\textbf{Nota:} A implementação atual usa variáveis contínuas em \textbf{ovos} (Seção anterior). A reformulação abaixo é uma \textbf{alternativa} para o caso em que se deseja variáveis \textbf{inteiras em caixas}.
+
+Se a variável for definida em termos de caixas:
+
+\begin{equation}
+y_i = \frac{x_i}{e_i} \in \mathbb{Z}^+ \quad \text{(quantidade em caixas)}
+\end{equation}
+
+obtém-se o modelo reformulado (equivalente, com integralidade):
+
+\begin{equation}
+\begin{aligned}
+\max \quad & Z = \sum_{i \in H} m_i \cdot y_i \\[8pt]
+\text{s.a.} \quad & \sum_{i \in H : \kappa(i) = c} e_i \cdot y_i \leq E_c && \forall c \in C \\[4pt]
+& e_i \cdot y_i \leq D_i && \forall i \in H \\[4pt]
+& y_i \in \mathbb{Z}^+ && \forall i \in H
+\end{aligned}
+\end{equation}
+
+Esta formulação em $y_i$ \textbf{não está implementada} no código atual; o solver utiliza $x_i \in \mathbb{R}^+$ (ovos, contínuo).
+
+%==============================================================================
+\section{Fluxo de Execução Detalhado}
+%==============================================================================
+
+\begin{enumerate}
+    \item \textbf{Carregar configuração} (\texttt{config.yaml})
+    \begin{itemize}
+        \item Caminhos dos arquivos de entrada
+        \item Parâmetros: semana de referência, tipo de cálculo de demanda
+        \item Flags: atender pedidos, usar apenas excedente
+    \end{itemize}
+    
+    \item \textbf{Carregar dados brutos}
+    \begin{itemize}
+        \item Produção: \texttt{PRODUÇÃO DIA.xlsx}
+        \item Custos: \texttt{CUSTO ITEM.csv}
+        \item Preços: \texttt{precos\_sku\_embalagem.csv}
+        \item Classes: \texttt{base\_skus\_classes.xlsx}
+        \item Faturamento: \texttt{manti\_fat\_2025\_full.parquet}
+        \item SKUs restritos: \texttt{skus\_restritos.xlsx}
+        \item Pedidos: \texttt{pedidos\_clientes.csv}
+    \end{itemize}
+    
+    \item \textbf{Aplicar correção de estabelecimento}
+    \begin{itemize}
+        \item Carregar mapeamento \texttt{ESTAB CORRIGIDO.xlsx}
+        \item Criar coluna \texttt{Estab\_Corrigido}
+    \end{itemize}
+    
+    \item \textbf{Filtrar SKUs válidos}
+    \begin{itemize}
+        \item ESTAB = 100
+        \item STATUS = ATIVO
+        \item TIPO $\notin$ \{GRANEL, Exportação, MARCA PROPRIA\}
+    \end{itemize}
+    
+    \item \textbf{Calcular demanda histórica}
+    \begin{itemize}
+        \item Filtrar faturamento por Estab\_Corrigido = 100
+        \item Agregar por SKU e semana
+        \item Aplicar máximo ou média conforme configuração
+    \end{itemize}
+    
+    \item \textbf{Processar pedidos/reservas}
+    \begin{itemize}
+        \item Verificar elegibilidade (produção na semana, embalagem válida)
+        \item Calcular reservas $r_i$
+        \item Identificar pedidos ignorados
+    \end{itemize}
+    
+    \item \textbf{Calcular produção excedente}
+    \begin{itemize}
+        \item $E_c = P_c - R_c$ por classe
+    \end{itemize}
+    
+    \item \textbf{Montar e resolver modelo de otimização}
+    \begin{itemize}
+        \item Criar variáveis de decisão
+        \item Adicionar restrições
+        \item Executar solver (OR-Tools CP-SAT)
+    \end{itemize}
+    
+    \item \textbf{Extrair e salvar resultados}
+    \begin{itemize}
+        \item Alocação otimizada por SKU
+        \item Reservas por SKU
+        \item Métricas financeiras
+        \item Pedidos ignorados
+    \end{itemize}
+\end{enumerate}
+
+%==============================================================================
+\section{Métricas de Saída}
+%==============================================================================
+
+\subsection{Métricas de Volume}
+
+\begin{align}
+\text{Quantidade Alocada Total} &= \sum_{i \in H} x_i^* \\[6pt]
+\text{Quantidade Reservada Total} &= \sum_{i \in R} r_i \\[6pt]
+\text{Quantidade Destinada Total} &= \sum_{i \in H} x_i^* + \sum_{i \in R} r_i \\[6pt]
+\text{Saldo Não Alocado} &= \sum_{c \in C} P_c - \text{Quantidade Destinada Total}
+\end{align}
+
+\subsection{Métricas Financeiras}
+
+\begin{align}
+\text{Margem Total Otimização} &= \sum_{i \in H} \mu_i \cdot x_i^* = Z^* \\[6pt]
+\text{Receita Total} &= \sum_{i \in H} \frac{p_i}{e_i} \cdot x_i^* \\[6pt]
+\text{Custo Total} &= \sum_{i \in H} \frac{c_i}{e_i} \cdot x_i^*
+\end{align}
+
+\subsection{Métricas de Eficiência}
+
+\begin{align}
+\text{Utilização da Produção} &= \frac{\text{Quantidade Destinada Total}}{\sum_{c \in C} P_c} \times 100\% \\[6pt]
+\text{Taxa de Atendimento de Pedidos} &= \frac{|R|}{|R| + |I_{\text{ignorado}}|} \times 100\%
+\end{align}
+
+%==============================================================================
+\section{Glossário de Símbolos}
+%==============================================================================
+
+\begin{longtable}{cl}
+\toprule
+\textbf{Símbolo} & \textbf{Descrição} \\
+\midrule
+\endhead
+$I$ & Conjunto de todos os SKUs \\
+$C$ & Conjunto de classes de produtos \\
+$H$ & Conjunto de SKUs com demanda histórica válida \\
+$R$ & Conjunto de SKUs com reservas \\
+$i$ & Índice de SKU \\
+$c$ & Índice de classe \\
+$s$ & Índice de semana \\
+$p_i$ & Preço do SKU $i$ (R\$/caixa) \\
+$c_i$ & Custo do SKU $i$ (R\$/caixa) \\
+$e_i$ & Ovos por embalagem do SKU $i$ \\
+$m_i$ & Margem por caixa do SKU $i$ \\
+$\mu_i$ & Margem por ovo do SKU $i$ \\
+$P_c$ & Produção total da classe $c$ (ovos) \\
+$D_i$ & Limite de demanda histórica do SKU $i$ (ovos) \\
+$Q_i$ & Quantidade de pedido/reserva do SKU $i$ (ovos) \\
+$r_i$ & Quantidade reservada do SKU $i$ (ovos) \\
+$R_c$ & Total reservado da classe $c$ (ovos) \\
+$E_c$ & Produção excedente da classe $c$ (ovos) \\
+$x_i$ & Variável de decisão: alocação do SKU $i$ (ovos); na implementação atual $x_i \in \mathbb{R}^+$ (contínua) \\
+$y_i$ & Variável auxiliar: alocação do SKU $i$ (caixas) \\
+$\kappa(i)$ & Classe do SKU $i$ \\
+$Z$ & Função objetivo (margem total) \\
+\bottomrule
+\end{longtable}
+
+\end{document}

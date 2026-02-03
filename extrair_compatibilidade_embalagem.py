@@ -102,6 +102,24 @@ def extrair_embalagem_descricao(descricao: str) -> str:
         num_un = match.group(2)
         return f"CX {num_bj} BJ {num_un} UN"
     
+    # Padrão 4d: CX C/ [número] BJ [número] UN (C/ = COM abreviado)
+    # Ex: "CX C/ 6 BJ 30 UN"
+    padrao4d = r'CX\s+C/\s*(\d+)\s+BJ\s+(\d+)(?:\s+UN)?'
+    match = re.search(padrao4d, desc_upper)
+    if match:
+        num_bj = match.group(1)
+        num_un = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+    
+    # Padrão 4e: CX C/ [número] BJ DE [número] UN
+    # Ex: "CX C/ 6 BJ DE 30 UN"
+    padrao4e = r'CX\s+C/\s*(\d+)\s+BJ\s+DE\s+(\d+)(?:\s+UN)?'
+    match = re.search(padrao4e, desc_upper)
+    if match:
+        num_bj = match.group(1)
+        num_un = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+    
     # Padrão 5: CX [número] BJ (sem UN, tentar encontrar UN depois)
     padrao5 = r'CX\s+(?:COM\s+)?(\d+)\s+BJ'
     match5 = re.search(padrao5, desc_upper)

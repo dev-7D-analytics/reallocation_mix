@@ -33,7 +33,7 @@ meta:
   descricao: Modelo de otimização de mix diário (SKU x Embalagem) sem clientes
   versao_modelo: '1.0'
 modelo:
-  atender_pedidos: false
+  atender_pedidos: true
   considerar_demanda_historica: true
   escoar_todo_estoque: true
   fator_expansao_demanda: 5
@@ -45,7 +45,7 @@ modelo:
   periodo_historico_meses: 12
   tipo_calculo_demanda: media
   tipo_objetivo: maximizar_margem
-  usar_apenas_excedente: false
+  usar_apenas_excedente: true
   variaveis_continuas: true
 negocio:
   filtrar_granjas:

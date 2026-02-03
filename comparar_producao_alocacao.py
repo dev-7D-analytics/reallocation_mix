@@ -101,16 +101,25 @@ def _carregar_pedidos(config: Dict) -> pd.DataFrame:
     
     try:
         df_pedidos = pd.read_csv(path)
-        if 'item' not in df_pedidos.columns or 'quantidade_pedida' not in df_pedidos.columns:
+        
+        # Detectar coluna de quantidade (pode ser 'quantidade_pedida' ou 'quantidade')
+        col_qtd = None
+        for col in df_pedidos.columns:
+            col_lower = col.lower()
+            if 'quantidade' in col_lower or 'qtd' in col_lower:
+                col_qtd = col
+                break
+        
+        if 'item' not in df_pedidos.columns or col_qtd is None:
             return pd.DataFrame(columns=["item", "quantidade_total_pedida"])
         
         df_pedidos['item'] = pd.to_numeric(df_pedidos['item'], errors='coerce')
         df_pedidos = df_pedidos[df_pedidos['item'].notna()].copy()
         df_pedidos['item'] = df_pedidos['item'].astype(int)
-        df_pedidos = df_pedidos[df_pedidos['quantidade_pedida'] > 0].copy()
+        df_pedidos = df_pedidos[df_pedidos[col_qtd] > 0].copy()
         
         # Agregar pedidos por SKU
-        pedidos_por_sku = df_pedidos.groupby('item')['quantidade_pedida'].sum().reset_index()
+        pedidos_por_sku = df_pedidos.groupby('item')[col_qtd].sum().reset_index()
         pedidos_por_sku.columns = ['item', 'quantidade_total_pedida']
         return pedidos_por_sku
     except Exception:
@@ -375,12 +384,12 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
     if col_classe is None:
         raise ValueError("Coluna de classe nao encontrada em base_skus_classes.xlsx")
 
-    df_classes = df_classes[["item", col_classe]].rename(columns={col_classe: "Classe_Produto"})
+    df_classes = df_classes[["item", col_classe]].rename(columns={col_classe: "classe"})
     df_prod = df_prod.merge(df_classes, on="item", how="left")
-    df_prod["Classe_Produto"] = df_prod["Classe_Produto"].fillna("OUTROS")
+    df_prod["classe"] = df_prod["classe"].fillna("OUTROS")
 
     prod_agg = (
-        df_prod.groupby(["item", "embalagem", "item_id", "Classe_Produto"], as_index=False)["quantidade"]
+        df_prod.groupby(["item", "embalagem", "item_id", "classe"], as_index=False)["quantidade"]
         .sum()
         .rename(columns={"quantidade": "quantidade_produzida"})
     )
@@ -423,7 +432,7 @@ def carregar_alocacao(arquivo_resultado: Optional[str], sep: str = ",", decimal:
     aloc_agg = (
         df_aloc.groupby(["item_id", "item", "embalagem", "classe",], as_index=False)["quantidade"]
         .sum()
-        .rename(columns={"quantidade": "quantidade_alocada", "classe": "Classe_Produto"})
+        .rename(columns={"quantidade": "quantidade_alocada"})
     )
     return aloc_agg, csv_path
 
@@ -432,7 +441,7 @@ def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, year_we
     """Combine producao and alocacao by item_id to compare volumes."""
     comparacao = producao.merge(
         alocacao,
-        on=["item_id", "item", "embalagem", "Classe_Produto"],
+        on=["item_id", "item", "embalagem", "classe"],
         how="outer",
     )
     comparacao["quantidade_produzida"] = comparacao["quantidade_produzida"].fillna(0)
@@ -766,51 +775,70 @@ def main():
     comparacao["margem_unitaria"] = comparacao["preco"] - comparacao["custo_ytd"]
     
     # Identificar pedidos ignorados
-    # Pedidos ignorados = pedidos que nao foram atendidos (nao estao em alocacao)
+    # Pedidos ignorados = pedidos que NÃO foram atendidos de nenhuma forma:
+    #   - NÃO estão na alocação da otimização
+    #   - NÃO foram reservados (SKUs sem classe mapeada ou sem produção na classe)
+    # NOTA: SKUs de GRANEL/Exportação que tiveram quantidade reservada NÃO são ignorados
     pedidos_ignorados = []
     if len(pedidos) > 0:
-        # Tentar carregar pedidos ignorados do resultado do modelo (se disponivel)
-        try:
-            df_aloc_completo = pd.read_csv(caminho_resultado)
-            if 'tipo' in df_aloc_completo.columns:
-                # Pedidos atendidos sao aqueles com tipo='PEDIDO'
-                pedidos_atendidos = set(df_aloc_completo[df_aloc_completo['tipo'] == 'PEDIDO']['item'].unique())
-            else:
-                # Se nao tem coluna tipo, assumir que todos os itens em alocacao foram atendidos
-                pedidos_atendidos = set(alocacao['item'].unique())
-        except Exception:
-            # Fallback: assumir que itens em alocacao foram atendidos
-            pedidos_atendidos = set(alocacao['item'].unique())
+        # SKUs atendidos via alocação (otimização)
+        pedidos_atendidos_alocacao = set(alocacao['item'].unique())
         
-        # Identificar pedidos ignorados (pedidos que nao foram atendidos)
+        # SKUs atendidos via reserva (aparecem na produção e tiveram classe identificada)
+        # Esses SKUs tiveram sua quantidade descontada da produção da classe
+        skus_em_producao = set(producao['item'].unique())
+        
+        # Identificar pedidos realmente ignorados
         for _, row in pedidos.iterrows():
             item = row['item']
-            if item not in pedidos_atendidos:
-                # Verificar se SKU esta em producao
-                sku_em_producao = item in set(producao['item'].unique())
-                motivo = 'SKU nao encontrado em producao' if not sku_em_producao else 'Pedido nao atendido (outro motivo)'
+            em_alocacao = item in pedidos_atendidos_alocacao
+            em_producao = item in skus_em_producao
+            
+            # Pedido é ignorado se NÃO foi atendido de nenhuma forma
+            # Se está em produção, foi reservado (mesmo que não esteja na otimização)
+            if not em_alocacao and not em_producao:
                 pedidos_ignorados.append({
                     'item': item,
                     'quantidade_total_pedida': row['quantidade_total_pedida'],
-                    'motivo': motivo
+                    'motivo': 'SKU nao encontrado em producao nem alocacao'
                 })
     
     # Adicionar colunas de mapeamento
     # 1. tem_pedido: SKU tem pedido
+    # 2. quantidade_reservada: quantidade pedida/reservada para o SKU
     if len(pedidos) > 0:
         skus_com_pedido = set(pedidos['item'].tolist())
+        pedidos_dict = pedidos.set_index('item')['quantidade_total_pedida'].to_dict()
         comparacao["tem_pedido"] = comparacao["item"].isin(skus_com_pedido)
+        comparacao["quantidade_reservada"] = comparacao["item"].map(pedidos_dict).fillna(0)
     else:
         comparacao["tem_pedido"] = False
+        comparacao["quantidade_reservada"] = 0
     
-    # 4. pedido_ignorado: SKU tem pedido que foi ignorado
+    # 3. pedido_ignorado: SKU tem pedido que foi ignorado
     if len(pedidos_ignorados) > 0:
         skus_com_pedido_ignorado = set([p['item'] for p in pedidos_ignorados])
         comparacao["pedido_ignorado"] = comparacao["item"].isin(skus_com_pedido_ignorado)
     else:
         comparacao["pedido_ignorado"] = False
     
-    # 2. sku_restrito: SKU NÃO está na lista de permitidos (portanto é restrito)
+    # 4. tipo: Indica origem da alocação (compatível com otimizador.py)
+    # - 'otimizacao': SKU foi alocado pela otimização
+    # - 'reserva': SKU teve pedido/reserva (GRANEL/Exportação/MARCA PROPRIA)
+    # - 'producao': SKU só tem produção, sem alocação nem reserva
+    def determinar_tipo(row):
+        if row['quantidade_alocada'] > 0:
+            return 'otimizacao'
+        elif row['quantidade_reservada'] > 0:
+            return 'reserva'
+        elif row['quantidade_produzida'] > 0:
+            return 'producao'
+        else:
+            return 'outro'
+    
+    comparacao['tipo'] = comparacao.apply(determinar_tipo, axis=1)
+    
+    # 5. sku_restrito: SKU NÃO está na lista de permitidos (portanto é restrito)
     # NOVA SEMÂNTICA: lista contém SKUs PERMITIDOS para o estabelecimento
     # Quem está na lista é permitido (sku_restrito=False)
     # Quem NÃO está na lista é restrito (sku_restrito=True)
@@ -925,17 +953,17 @@ def main():
     # 5. Restrições | 6. Flags/Status | 7. Origens dos dados
     colunas_ordenadas = [
         # === IDENTIFICAÇÃO ===
-        'item_id', 'item', 'descricao', 'embalagem', 'Classe_Produto',
+        'item_id', 'item', 'descricao', 'embalagem', 'classe',
         # === PERÍODO ===
         'year_week', 'data_producao',
         # === QUANTIDADES ===
-        'quantidade_produzida', 'quantidade_alocada', 'diferenca_aloc_menos_prod', 'diferenca_absoluta',
+        'quantidade_produzida', 'quantidade_alocada', 'quantidade_reservada', 'diferenca_aloc_menos_prod', 'diferenca_absoluta',
         # === FINANCEIRO UNITÁRIO ===
         'preco', 'custo_ytd', 'margem_unitaria', 'margem_por_ovo',
         # === RESTRIÇÕES / LIMITES ===
         'limite_demanda_historica',
         # === FLAGS / STATUS ===
-        'origem_dado', 'tem_pedido', 'pedido_ignorado', 'sku_restrito', 
+        'tipo', 'origem_dado', 'tem_pedido', 'pedido_ignorado', 'sku_restrito', 
         'tem_demanda_historica', 'custo_medio_classe',
         # === ORIGENS DOS DADOS ===
         'preco_origem', 'custo_origem',
