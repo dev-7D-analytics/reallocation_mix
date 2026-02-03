@@ -404,11 +404,11 @@ def carregar_alocacao(arquivo_resultado: Optional[str], sep: str = ",", decimal:
     if arquivo_resultado:
         csv_path = Path(arquivo_resultado)
     else:
-        # Tentar primeiro arquivos com timestamp (mais recentes)
-        candidatos = sorted(RESULTS_DIR.glob("resultado_realocacao_*_*.csv"))
+        # Tentar primeiro arquivos resultado_realocacao_completo (nome padrão)
+        candidatos = sorted(RESULTS_DIR.glob("resultado_realocacao_completo_*.csv"))
         if not candidatos:
-            # Fallback para arquivos antigos
-            candidatos = sorted(RESULTS_DIR.glob("resultado_realocacao_completo_*.csv"))
+            # Fallback para resultado_otimizacao (nome antigo)
+            candidatos = sorted(RESULTS_DIR.glob("resultado_otimizacao_*.csv"))
         if not candidatos:
             raise FileNotFoundError(f"Nenhum resultado encontrado em {RESULTS_DIR.resolve()}")
         csv_path = candidatos[-1]
