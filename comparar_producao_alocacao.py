@@ -88,9 +88,14 @@ def _carregar_precos(config: Dict) -> pd.DataFrame:
     elif "item_id" not in df_precos.columns:
         raise ValueError("Arquivo de precos deve conter 'item_id' ou ('item' e 'embalagem')")
 
-    df_precos = df_precos[["item_id", "preco"]].copy()
-    df_precos = df_precos[df_precos["preco"] > 0]
-    return df_precos.drop_duplicates(["item_id"])
+    df_precos = df_precos[df_precos["preco"] > 0].copy()
+    # Garantir coluna item para fallback por SKU (qualquer embalagem) no comparador
+    if "item" not in df_precos.columns and "item_id" in df_precos.columns:
+        df_precos["item"] = pd.to_numeric(df_precos["item_id"].astype(str).str.split("_").str[0], errors="coerce")
+    colunas_out = ["item_id", "preco"]
+    if "item" in df_precos.columns:
+        colunas_out = ["item_id", "item", "preco"]
+    return df_precos[colunas_out].drop_duplicates(["item_id"])
 
 
 def _carregar_pedidos(config: Dict) -> pd.DataFrame:
@@ -166,11 +171,34 @@ def _carregar_skus_restritos(config: Dict) -> pd.DataFrame:
         return pd.DataFrame(columns=["item"])
 
 
-def _carregar_demanda_historica(config: Dict) -> pd.DataFrame:
-    """Carrega demanda histórica (se disponível)."""
-    # Tentar carregar do resultado do modelo primeiro (se tiver coluna tem_demanda_historica)
-    # Caso contrário, retornar DataFrame vazio
-    return pd.DataFrame(columns=["item", "demanda_max"])
+def _carregar_demanda_historica_completa(caminho: Optional[Path] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Carrega demanda histórica completa a partir de demanda_historica_*.xlsx em resultados/.
+    
+    Returns:
+        (df_demanda, df_param): df_demanda com colunas item, descricao, classe, demanda_max;
+        df_param com colunas parametro, valor (aba Parametros do Excel).
+    """
+    if caminho is None:
+        candidatos = sorted(RESULTS_DIR.glob("demanda_historica_*.xlsx"))
+        if not candidatos:
+            return pd.DataFrame(columns=["item", "descricao", "classe", "demanda_max"]), pd.DataFrame(columns=["parametro", "valor"])
+        caminho = candidatos[-1]
+    if not caminho.exists():
+        return pd.DataFrame(columns=["item", "descricao", "classe", "demanda_max"]), pd.DataFrame(columns=["parametro", "valor"])
+    try:
+        df_demanda = pd.read_excel(caminho, sheet_name="Demanda")
+        df_demanda["item"] = pd.to_numeric(df_demanda["item"], errors="coerce")
+        df_demanda = df_demanda[df_demanda["item"].notna()].copy()
+        df_demanda["item"] = df_demanda["item"].astype(int)
+        if "demanda_max" not in df_demanda.columns:
+            return pd.DataFrame(columns=["item", "descricao", "classe", "demanda_max"]), pd.DataFrame(columns=["parametro", "valor"])
+        df_param = pd.read_excel(caminho, sheet_name="Parametros")
+        if "parametro" not in df_param.columns or "valor" not in df_param.columns:
+            df_param = pd.DataFrame(columns=["parametro", "valor"])
+        return df_demanda, df_param
+    except Exception:
+        return pd.DataFrame(columns=["item", "descricao", "classe", "demanda_max"]), pd.DataFrame(columns=["parametro", "valor"])
 
 
 def _carregar_custos(config: Dict) -> pd.DataFrame:
@@ -194,7 +222,7 @@ def _carregar_custos(config: Dict) -> pd.DataFrame:
         estab_custo = dados_config.get('estab_custo', 100)  # Default: 100
         meses_janela = dados_config.get('meses_janela_custo', 1)  # Janela de meses (últimos N meses)
         
-        # Calcular range de meses
+        # Calcular range de meses (filtro vetorizado para evitar apply em 150k+ linhas)
         if meses_janela > 1:
             periodos = []
             for i in range(meses_janela):
@@ -204,10 +232,11 @@ def _carregar_custos(config: Dict) -> pd.DataFrame:
                     mes += 12
                     ano -= 1
                 periodos.append((ano, mes))
-            
+            periodos_set = set(periodos)
             mask_estab = df_custo['Estab'] == estab_custo
-            mask_periodo = df_custo.apply(lambda row: (row['ano'], row['MÊS']) in periodos, axis=1)
-            df_custo = df_custo[mask_estab & mask_periodo].copy()
+            df_custo['_periodo'] = list(zip(df_custo['ano'], df_custo['MÊS']))
+            mask_periodo = df_custo['_periodo'].isin(periodos_set)
+            df_custo = df_custo[mask_estab & mask_periodo].drop(columns=['_periodo']).copy()
         else:
             df_custo = df_custo[
                 (df_custo['Estab'] == estab_custo) & 
@@ -233,9 +262,11 @@ def _carregar_custos(config: Dict) -> pd.DataFrame:
         # Criar coluna ano_mes
         df_custo['ano_mes'] = df_custo['ano'].astype(str) + '-' + df_custo['MÊS'].astype(str).str.zfill(2)
         
-        # Extrair embalagem e criar item_id
+        # Extrair embalagem e criar item_id (aplicar só em descrições únicas para ganho de velocidade)
         col_item_desc = 'Descrição do item'
-        df_custo['embalagem'] = df_custo[col_item_desc].apply(extrair_embalagem_descricao)
+        unicos_desc = df_custo[col_item_desc].dropna().unique()
+        mapa_embalagem = {d: extrair_embalagem_descricao(d) for d in unicos_desc}
+        df_custo['embalagem'] = df_custo[col_item_desc].map(mapa_embalagem)
         df_custo['item'] = pd.to_numeric(df_custo['item'], errors='coerce')
         df_custo = df_custo[df_custo['item'].notna() & df_custo['embalagem'].notna()].copy()
         df_custo['item_id'] = df_custo['item'].astype(str) + '_' + df_custo['embalagem']
@@ -534,6 +565,14 @@ def main():
     precos = _carregar_precos(config)
     custos = _carregar_custos(config)
     
+    # Mapeamentos por item (SKU) a partir dos arquivos externos - fallback quando item_id não bate
+    precos_por_item_externo = {}
+    custos_por_item_externo = {}
+    if len(precos) > 0 and "item" in precos.columns and "preco" in precos.columns:
+        precos_por_item_externo = precos.groupby("item")["preco"].first().to_dict()
+    if len(custos) > 0 and "item" in custos.columns and "custo_ytd" in custos.columns:
+        custos_por_item_externo = custos.groupby("item")["custo_ytd"].first().to_dict()
+    
     # Carregar informações para mapeamento
     pedidos = _carregar_pedidos(config)
     skus_restritos = _carregar_skus_restritos(config)
@@ -544,6 +583,8 @@ def main():
     custo_medio_classe_por_item_id = {}  # item_id -> True/False
     limite_demanda_por_item = {}  # item -> limite_demanda_historica
     margem_por_ovo_por_item = {}  # item -> margem_por_ovo (R$/ovo - métrica otimizada)
+    df_demanda_historica = pd.DataFrame(columns=["item", "descricao", "classe", "demanda_max"])
+    df_param_demanda = pd.DataFrame(columns=["parametro", "valor"])
     try:
         df_aloc_completo = pd.read_csv(caminho_resultado)
         if 'tem_demanda_historica' in df_aloc_completo.columns and 'item' in df_aloc_completo.columns:
@@ -569,6 +610,9 @@ def main():
             custo_medio_classe_por_item_id = df_aloc_completo.set_index('item_id')['custo_medio_classe'].to_dict()
     except Exception:
         pass
+
+    # Carregar demanda histórica completa (todos os SKUs com limite) do Excel demanda_historica_*.xlsx
+    df_demanda_historica, df_param_demanda = _carregar_demanda_historica_completa(None)
 
     comparacao = construir_comparacao(producao, alocacao, year_week, config)
     
@@ -631,20 +675,27 @@ def main():
     except Exception as e:
         pass
     
-    # Fazer merge: primeiro com resultado do modelo, depois com arquivos externos (fallback)
-    # ESTRATÉGIA MELHORADA PARA MISMATCH DE EMBALAGEM:
-    # 1. Tentar buscar do item_id produzido (merge direto)
-    # 2. Se não encontrar e houver mismatch, buscar do item_id alocado (que está no output do modelo)
-    # 3. Se ainda não encontrar, buscar de qualquer embalagem do mesmo SKU
+    # Fazer merge: primeiro com resultado do modelo (resultado_realocacao_completo_*.csv),
+    # depois com arquivos externos (fallback). O output do modelo contém TODOS os item_ids
+    # que entraram na otimização (preco, custo_ytd, margem_unitaria, margem_por_ovo, etc.);
+    # assim o comparador usa os mesmos valores que a otimização quando o item_id existe no resultado.
+    # ESTRATÉGIA: 1) Merge por item_id no resultado | 2) Mismatch: item_id alocado do mesmo SKU
+    # | 3) Arquivo externo por item_id | 4) Resultado por item (outra embalagem) | 5) Externo por item
+    
+    # Normalizar item_id (str, strip) para garantir match no merge com resultado
+    comparacao["item_id"] = comparacao["item_id"].astype(str).str.strip()
+    if precos_resultado is not None:
+        precos_resultado["item_id"] = precos_resultado["item_id"].astype(str).str.strip()
+    if custos_resultado is not None:
+        custos_resultado["item_id"] = custos_resultado["item_id"].astype(str).str.strip()
     
     # Inicializar flags para rastrear origem dos dados
     comparacao['preco_origem'] = None
     comparacao['custo_origem'] = None
     
     if precos_resultado is not None and len(precos_resultado) > 0:
-        # PASSO 1: Merge direto com item_id produzido
-        # Renomear coluna do resultado para evitar conflito
-        precos_resultado_renamed = precos_resultado.rename(columns={'preco': 'preco_resultado'})
+        # PASSO 1: Merge direto com item_id (resultado da otimização)
+        precos_resultado_renamed = precos_resultado[["item_id", "preco"]].rename(columns={"preco": "preco_resultado"})
         comparacao = comparacao.merge(precos_resultado_renamed, on="item_id", how="left")
         # Preencher preço do resultado se não tiver
         if 'preco_resultado' in comparacao.columns:
@@ -675,21 +726,22 @@ def main():
                 comparacao.loc[list(precos_alocados.keys()), 'preco'] = pd.Series(precos_alocados)
                 comparacao.loc[list(precos_alocados.keys()), 'preco_origem'] = 'item_id_alocado'
         
-        # PASSO 3: Fallback para arquivo externo se ainda não tiver preço
+        # PASSO 3: Fallback para arquivo externo (por item_id)
         mask_sem_preco = comparacao['preco'].isna()
-        if mask_sem_preco.any():
-            comparacao = comparacao.merge(precos, on="item_id", how="left", suffixes=('', '_externo'))
+        if mask_sem_preco.any() and len(precos) > 0 and "item_id" in precos.columns:
+            precos_merge = precos[["item_id", "preco"]].copy()
+            precos_merge["item_id"] = precos_merge["item_id"].astype(str).str.strip()
+            precos_merge = precos_merge.rename(columns={"preco": "preco_externo"})
+            comparacao = comparacao.merge(precos_merge, on="item_id", how="left")
             comparacao.loc[mask_sem_preco, 'preco'] = comparacao.loc[mask_sem_preco, 'preco'].fillna(
                 comparacao.loc[mask_sem_preco, 'preco_externo']
             )
-            comparacao.loc[
-                (mask_sem_preco) & (comparacao['preco_externo'].notna()), 
-                'preco_origem'
-            ] = 'arquivo_externo'
-            if 'preco_externo' in comparacao.columns:
-                comparacao = comparacao.drop(columns=['preco_externo'])
+            # Só marcar arquivo_externo onde ainda não tem origem (preservar item_id_produzido)
+            mask_set = mask_sem_preco & comparacao["preco_externo"].notna() & comparacao["preco_origem"].isna()
+            comparacao.loc[mask_set, "preco_origem"] = "arquivo_externo"
+            comparacao = comparacao.drop(columns=["preco_externo"], errors="ignore")
         
-        # PASSO 4: Fallback final - usar qualquer preço disponível do mesmo SKU
+        # PASSO 4: Fallback - usar qualquer preço disponível do mesmo SKU (resultado do modelo)
         if precos_por_item is not None:
             mask_sem_preco = comparacao['preco'].isna()
             if mask_sem_preco.any():
@@ -698,13 +750,27 @@ def main():
                     (mask_sem_preco) & (comparacao['preco'].notna()), 
                     'preco_origem'
                 ] = 'mesmo_sku_outra_embalagem'
+        # PASSO 5: Fallback final - preço por item do arquivo externo (input de preços)
+        if len(precos_por_item_externo) > 0:
+            mask_sem_preco = comparacao['preco'].isna()
+            if mask_sem_preco.any():
+                comparacao.loc[mask_sem_preco, 'preco'] = comparacao.loc[mask_sem_preco, 'item'].map(precos_por_item_externo)
+                comparacao.loc[
+                    (mask_sem_preco) & (comparacao['preco'].notna()), 
+                    'preco_origem'
+                ] = 'arquivo_externo_por_item'
     else:
-        # Se não tem preços do resultado, usar apenas arquivo externo
-        comparacao = comparacao.merge(precos, on="item_id", how="left")
-        if 'preco' in comparacao.columns:
-            comparacao.loc[comparacao['preco'].notna(), 'preco_origem'] = 'arquivo_externo'
+        # Se não tem preços do resultado, usar arquivo externo (por item_id e depois por item)
+        comparacao = comparacao.merge(precos[["item_id", "preco"]], on="item_id", how="left")
+        if "preco" in comparacao.columns:
+            comparacao.loc[comparacao["preco"].notna(), "preco_origem"] = "arquivo_externo"
         else:
-            comparacao['preco'] = None
+            comparacao["preco"] = None
+        if len(precos_por_item_externo) > 0:
+            mask_sem_preco = comparacao["preco"].isna()
+            if mask_sem_preco.any():
+                comparacao.loc[mask_sem_preco, "preco"] = comparacao.loc[mask_sem_preco, "item"].map(precos_por_item_externo)
+                comparacao.loc[(mask_sem_preco) & (comparacao["preco"].notna()), "preco_origem"] = "arquivo_externo_por_item"
     
     if custos_resultado is not None and len(custos_resultado) > 0:
         # PASSO 1: Merge direto com item_id produzido
@@ -747,14 +813,12 @@ def main():
             comparacao.loc[mask_sem_custo, 'custo_ytd'] = comparacao.loc[mask_sem_custo, 'custo_ytd'].fillna(
                 comparacao.loc[mask_sem_custo, 'custo_ytd_externo']
             )
-            comparacao.loc[
-                (mask_sem_custo) & (comparacao['custo_ytd_externo'].notna()), 
-                'custo_origem'
-            ] = 'arquivo_externo'
-            if 'custo_ytd_externo' in comparacao.columns:
-                comparacao = comparacao.drop(columns=['custo_ytd_externo'])
+            # Só marcar arquivo_externo onde ainda não tem origem (preservar item_id_produzido)
+            mask_set = mask_sem_custo & comparacao["custo_ytd_externo"].notna() & comparacao["custo_origem"].isna()
+            comparacao.loc[mask_set, "custo_origem"] = "arquivo_externo"
+            comparacao = comparacao.drop(columns=["custo_ytd_externo"], errors="ignore")
         
-        # PASSO 4: Fallback final - usar qualquer custo disponível do mesmo SKU
+        # PASSO 4: Fallback - usar qualquer custo disponível do mesmo SKU (resultado do modelo)
         if custos_por_item is not None:
             mask_sem_custo = comparacao['custo_ytd'].isna()
             if mask_sem_custo.any():
@@ -763,13 +827,27 @@ def main():
                     (mask_sem_custo) & (comparacao['custo_ytd'].notna()), 
                     'custo_origem'
                 ] = 'mesmo_sku_outra_embalagem'
+        # PASSO 5: Fallback final - custo por item do arquivo externo (input de custos)
+        if len(custos_por_item_externo) > 0:
+            mask_sem_custo = comparacao['custo_ytd'].isna()
+            if mask_sem_custo.any():
+                comparacao.loc[mask_sem_custo, 'custo_ytd'] = comparacao.loc[mask_sem_custo, 'item'].map(custos_por_item_externo)
+                comparacao.loc[
+                    (mask_sem_custo) & (comparacao['custo_ytd'].notna()), 
+                    'custo_origem'
+                ] = 'arquivo_externo_por_item'
     else:
-        # Se não tem custos do resultado, usar apenas arquivo externo
+        # Se não tem custos do resultado, usar arquivo externo (por item_id e depois por item)
         comparacao = comparacao.merge(custos[["item_id", "custo_ytd"]], on="item_id", how="left")
-        if 'custo_ytd' in comparacao.columns:
-            comparacao.loc[comparacao['custo_ytd'].notna(), 'custo_origem'] = 'arquivo_externo'
+        if "custo_ytd" in comparacao.columns:
+            comparacao.loc[comparacao["custo_ytd"].notna(), "custo_origem"] = "arquivo_externo"
         else:
-            comparacao['custo_ytd'] = None
+            comparacao["custo_ytd"] = None
+        if len(custos_por_item_externo) > 0:
+            mask_sem_custo = comparacao["custo_ytd"].isna()
+            if mask_sem_custo.any():
+                comparacao.loc[mask_sem_custo, "custo_ytd"] = comparacao.loc[mask_sem_custo, "item"].map(custos_por_item_externo)
+                comparacao.loc[(mask_sem_custo) & (comparacao["custo_ytd"].notna()), "custo_origem"] = "arquivo_externo_por_item"
     
     # Calcular margem unitária (em R$/caixa)
     comparacao["margem_unitaria"] = comparacao["preco"] - comparacao["custo_ytd"]
@@ -936,24 +1014,40 @@ def main():
         # Se não há lista de permitidos, ninguém é restrito
         comparacao["sku_restrito"] = False
     
-    # 3. tem_demanda_historica: SKU tem histórico de demanda
-    if len(skus_com_demanda) > 0:
-        comparacao["tem_demanda_historica"] = comparacao["item"].isin(skus_com_demanda)
+    # 3 e 4. Demanda histórica: usar resultado do modelo + arquivo demanda_historica_*.xlsx (todos os SKUs considerados)
+    demanda_max_por_item = {}
+    if len(df_demanda_historica) > 0 and "item" in df_demanda_historica.columns and "demanda_max" in df_demanda_historica.columns:
+        demanda_max_por_item = df_demanda_historica.groupby("item")["demanda_max"].first().to_dict()
+    # limite_demanda_historica: prioridade resultado do modelo, depois demanda_historica xlsx
+    comparacao["limite_demanda_historica"] = comparacao["item"].map(limite_demanda_por_item)
+    if len(demanda_max_por_item) > 0:
+        falta = comparacao["limite_demanda_historica"].isna()
+        comparacao.loc[falta, "limite_demanda_historica"] = comparacao.loc[falta, "item"].map(demanda_max_por_item)
+    # demanda_max: mesma informação (para consistência com aba Demanda Histórica)
+    comparacao["demanda_max"] = comparacao["limite_demanda_historica"]
+    # tem_demanda_historica: True se está no resultado com flag ou se tem demanda_max no arquivo
+    comparacao["tem_demanda_historica"] = comparacao["item"].isin(skus_com_demanda)
+    if len(demanda_max_por_item) > 0:
+        comparacao["tem_demanda_historica"] = comparacao["tem_demanda_historica"] | comparacao["item"].isin(demanda_max_por_item)
+
+    # Parâmetros do cálculo de demanda histórica (mesmo valor para todas as linhas; origem: aba Parametros do demanda_historica_*.xlsx)
+    if len(df_param_demanda) > 0 and "parametro" in df_param_demanda.columns and "valor" in df_param_demanda.columns:
+        param_valor = df_param_demanda.set_index("parametro")["valor"].to_dict()
+        for col in ["periodo_demanda_mes_ref", "periodo_demanda_ano_ref", "periodo_demanda_janela_meses", "tipo_calculo_demanda", "granularidade_demanda"]:
+            comparacao[col] = param_valor.get(col, None)
     else:
-        comparacao["tem_demanda_historica"] = False
+        for col in ["periodo_demanda_mes_ref", "periodo_demanda_ano_ref", "periodo_demanda_janela_meses", "tipo_calculo_demanda", "granularidade_demanda"]:
+            comparacao[col] = None
     
-    # 4. limite_demanda_historica: Valor do limite de demanda histórica utilizado na restrição
-    if len(limite_demanda_por_item) > 0:
-        comparacao["limite_demanda_historica"] = comparacao["item"].map(limite_demanda_por_item)
-    else:
-        comparacao["limite_demanda_historica"] = None
-    
-    # 5. margem_por_ovo: Margem por ovo (R$/ovo) - métrica otimizada pelo modelo
-    # Primeiro: tentar usar valores do resultado do modelo (para SKUs alocados)
+    # 5. margem_por_ovo: Margem por ovo (R$/ovo) - do resultado do modelo quando disponível
+    # Primeiro: por item_id (valor exato do output da otimização); depois por item (outra embalagem)
+    comparacao["margem_por_ovo"] = None
+    if df_aloc_completo is not None and len(df_aloc_completo) > 0 and "margem_por_ovo" in df_aloc_completo.columns and "item_id" in df_aloc_completo.columns:
+        margem_por_item_id = df_aloc_completo[["item_id", "margem_por_ovo"]].drop_duplicates("item_id").set_index("item_id")["margem_por_ovo"]
+        comparacao["margem_por_ovo"] = comparacao["item_id"].astype(str).map(margem_por_item_id)
     if len(margem_por_ovo_por_item) > 0:
-        comparacao["margem_por_ovo"] = comparacao["item"].map(margem_por_ovo_por_item)
-    else:
-        comparacao["margem_por_ovo"] = None
+        mask_sem = comparacao["margem_por_ovo"].isna()
+        comparacao.loc[mask_sem, "margem_por_ovo"] = comparacao.loc[mask_sem, "item"].map(margem_por_ovo_por_item)
     
     # Segundo: calcular margem_por_ovo para SKUs que não têm (baseado na embalagem)
     # Função para extrair ovos por caixa da embalagem (ex: "CX 12 BJ 20 UN" = 12*20 = 240)
@@ -1047,11 +1141,13 @@ def main():
         'quantidade_produzida', 'quantidade_alocada', 'quantidade_reservada', 'diferenca_aloc_menos_prod', 'diferenca_absoluta',
         # === FINANCEIRO UNITÁRIO ===
         'preco', 'custo_ytd', 'margem_unitaria', 'margem_por_ovo',
-        # === RESTRIÇÕES / LIMITES ===
-        'limite_demanda_historica',
+        # === DEMANDA HISTÓRICA ===
+        'tem_demanda_historica', 'demanda_max', 'limite_demanda_historica',
+        'periodo_demanda_mes_ref', 'periodo_demanda_ano_ref', 'periodo_demanda_janela_meses',
+        'tipo_calculo_demanda', 'granularidade_demanda',
         # === FLAGS / STATUS ===
-        'tipo', 'origem_dado', 'tem_pedido', 'pedido_ignorado', 'sku_restrito', 
-        'tem_demanda_historica', 'custo_medio_classe',
+        'tipo', 'origem_dado', 'tem_pedido', 'pedido_ignorado', 'sku_restrito',
+        'custo_medio_classe',
         # === ORIGENS DOS DADOS ===
         'preco_origem', 'custo_origem',
     ]
@@ -1068,8 +1164,13 @@ def main():
         with pd.ExcelWriter(output_path_xlsx, engine='openpyxl') as writer:
             # Aba 1: Comparacao
             comparacao.to_excel(writer, sheet_name='Comparacao', index=False)
-            
-            # Aba 2: Pedidos Ignorados (se houver)
+            # Aba 2: Demanda Histórica (todos os SKUs com limite; origem: demanda_historica_*.xlsx)
+            if len(df_demanda_historica) > 0:
+                df_demanda_historica.to_excel(writer, sheet_name='Demanda Historica', index=False)
+            # Aba 3: Parametros Demanda (parâmetros do cálculo; origem: aba Parametros do demanda_historica_*.xlsx)
+            if len(df_param_demanda) > 0:
+                df_param_demanda.to_excel(writer, sheet_name='Parametros Demanda', index=False)
+            # Aba(s) seguinte(s): Pedidos Ignorados (se houver)
             if len(pedidos_ignorados) > 0:
                 df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
                 df_pedidos_ignorados = df_pedidos_ignorados.sort_values('quantidade_total_pedida', ascending=False)
@@ -1105,9 +1206,16 @@ def main():
     print(f"  Arquivo de producao: {os.fspath(Path(producao_bruta_path))} (aba {SHEET_NAME})")
     print(f"  Resultado do modelo: {caminho_resultado}")
     print(f"  Saida gerada em:")
-    num_abas = 2 if len(pedidos_ignorados) > 0 else 1
+    abas_list = ["Comparacao"]
+    if len(df_demanda_historica) > 0:
+        abas_list.append("Demanda Historica")
+    if len(df_param_demanda) > 0:
+        abas_list.append("Parametros Demanda")
+    if len(pedidos_ignorados) > 0:
+        abas_list.append("Pedidos Ignorados")
+    num_abas = len(abas_list)
     print(f"    - CSV: {output_path_csv}")
-    print(f"    - Excel: {output_path_xlsx} (com {num_abas} aba" + ("s" if num_abas > 1 else "") + ": Comparacao" + (", Pedidos Ignorados" if len(pedidos_ignorados) > 0 else "") + ")")
+    print(f"    - Excel: {output_path_xlsx} (com {num_abas} aba" + ("s" if num_abas > 1 else "") + ": " + ", ".join(abas_list) + ")")
     if len(pedidos_ignorados) > 0:
         print(f"    - Pedidos ignorados CSV: {output_pedidos_ignorados_csv}")
         print(f"    - Pedidos ignorados Excel: {output_pedidos_ignorados_xlsx}")

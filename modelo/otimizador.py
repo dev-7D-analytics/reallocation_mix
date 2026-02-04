@@ -258,72 +258,71 @@ class Otimizador:
             )
     
     def _extrair_resultado(self) -> ResultadoOtimizacao:
-        """Extrai resultados da solução."""
+        """Extrai resultados da solução.
+        
+        Inclui TODOS os item_ids que entraram na otimização (df_base), não só os alocados.
+        Para os não alocados: quantidade=0, totais=0; preço/custo/margem unitária vêm da base.
+        Assim o output serve de referência para o comparador (preço/custo/margem por item_id).
+        """
         self.logger.info("\nExtraindo resultados...")
         
         resultados = []
-        
         for idx, row in self.df_base.iterrows():
             item_id = row['item_id']
+            qtd_ovos = self.variaveis[item_id].solution_value() if item_id in self.variaveis else 0.0
+            qtd_ovos = float(qtd_ovos) if qtd_ovos is not None else 0.0
             
-            if item_id in self.variaveis:
-                qtd_ovos = self.variaveis[item_id].solution_value()
-                
-                if qtd_ovos > 0.01:  # Threshold para evitar valores muito pequenos
-                    qtd_caixas = qtd_ovos / row['qtd_ovos_por_caixa']
-                    margem_total = qtd_caixas * row['margem_unitaria']
-                    receita_total = qtd_caixas * row['preco']
-                    custo_total = qtd_caixas * row['custo_ytd']
-                    
-                    # Ordenação lógica das colunas por categoria:
-                    # 1. Identificação | 2. Quantidades | 3. Financeiro unitário
-                    # 4. Totais | 5. Restrições/Limites | 6. Flags/Status
-                    resultados.append({
-                        # === IDENTIFICAÇÃO ===
-                        'item_id': item_id,
-                        'item': row['item'],
-                        'descricao': row.get('descricao', None),
-                        'embalagem': row['embalagem'],
-                        'classe': row['classe'],
-                        # === QUANTIDADES ===
-                        'quantidade': qtd_ovos,
-                        'quantidade_caixas': qtd_caixas,
-                        # === FINANCEIRO UNITÁRIO ===
-                        'preco': row['preco'],
-                        'custo_ytd': row['custo_ytd'],
-                        'margem_unitaria': row['margem_unitaria'],
-                        'margem_por_ovo': row['margem_unitaria'] / row['qtd_ovos_por_caixa'],
-                        # === TOTAIS FINANCEIROS ===
-                        'receita_total': receita_total,
-                        'custo_total': custo_total,
-                        'margem_total': margem_total,
-                        # === RESTRIÇÕES / LIMITES ===
-                        'limite_demanda_historica': row.get('limite_demanda_historica', np.nan),
-                        'producao_disponivel': row['producao_disponivel_otimizacao_classe'],
-                        'producao_total': row['producao_total'],
-                        # === FLAGS / STATUS ===
-                        'tem_demanda_historica': row.get('tem_demanda_historica', False),
-                        'custo_medio_classe': row.get('custo_medio_classe', False),
-                        'tipo': 'otimizacao',
-                    })
+            if qtd_ovos > 0.01:
+                qtd_caixas = qtd_ovos / row['qtd_ovos_por_caixa']
+                margem_total = qtd_caixas * row['margem_unitaria']
+                receita_total = qtd_caixas * row['preco']
+                custo_total = qtd_caixas * row['custo_ytd']
+            else:
+                qtd_caixas = 0.0
+                margem_total = 0.0
+                receita_total = 0.0
+                custo_total = 0.0
+            
+            resultados.append({
+                'item_id': item_id,
+                'item': row['item'],
+                'descricao': row.get('descricao', None),
+                'embalagem': row['embalagem'],
+                'classe': row['classe'],
+                'quantidade': qtd_ovos,
+                'quantidade_caixas': qtd_caixas,
+                'preco': row['preco'],
+                'custo_ytd': row['custo_ytd'],
+                'margem_unitaria': row['margem_unitaria'],
+                'margem_por_ovo': row['margem_unitaria'] / row['qtd_ovos_por_caixa'] if row['qtd_ovos_por_caixa'] and row['qtd_ovos_por_caixa'] > 0 else np.nan,
+                'receita_total': receita_total,
+                'custo_total': custo_total,
+                'margem_total': margem_total,
+                'limite_demanda_historica': row.get('limite_demanda_historica', np.nan),
+                'producao_disponivel': row['producao_disponivel_otimizacao_classe'],
+                'producao_total': row['producao_total'],
+                'tem_demanda_historica': row.get('tem_demanda_historica', False),
+                'custo_medio_classe': row.get('custo_medio_classe', False),
+                'tipo': 'otimizacao',
+            })
         
         df_resultado = pd.DataFrame(resultados)
         
-        # Calcular totais
-        if len(df_resultado) > 0:
-            margem_total = df_resultado['margem_total'].sum()
-            quantidade_total = df_resultado['quantidade'].sum()
-            
-            self.logger.info(f"\n  Combinações alocadas: {len(df_resultado)}")
+        # Totais apenas dos alocados
+        alocados = df_resultado[df_resultado['quantidade'] > 0.01]
+        if len(alocados) > 0:
+            margem_total = alocados['margem_total'].sum()
+            quantidade_total = alocados['quantidade'].sum()
+            self.logger.info(f"\n  Combinações alocadas: {len(alocados)} de {len(df_resultado)} na base")
             self.logger.info(f"  Quantidade total: {quantidade_total:,.0f} unidades")
             self.logger.info(f"  Margem total: R$ {margem_total:,.2f}")
         else:
-            margem_total = 0
-            quantidade_total = 0
+            margem_total = 0.0
+            quantidade_total = 0.0
         
-        # Resumo por classe
-        if len(df_resultado) > 0:
-            resumo = df_resultado.groupby('classe').agg({
+        # Resumo por classe (apenas alocados)
+        if len(alocados) > 0:
+            resumo = alocados.groupby('classe').agg({
                 'quantidade': 'sum',
                 'margem_total': 'sum',
                 'item': 'nunique'
