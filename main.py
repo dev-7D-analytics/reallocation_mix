@@ -418,6 +418,57 @@ def main():
     )
     
     resultado = otimizador.resolver()
+
+    # Acrescentar ao resultado as linhas de SKUs com volume reservado (pedido garantido) que não estão na base de otimização
+    if resultado_etl.pedidos_garantidos_por_sku and len(resultado.resultado) > 0:
+        itens_na_base = set(resultado.resultado['item'].astype(int))
+        df_pedidos_garantidos = getattr(resultado_etl, 'pedidos_garantidos', None)
+        tem_df_pg = (
+            isinstance(df_pedidos_garantidos, pd.DataFrame)
+            and len(df_pedidos_garantidos) > 0
+            and 'item' in df_pedidos_garantidos.columns
+            and 'classe' in df_pedidos_garantidos.columns
+        )
+        colunas_base = list(resultado.resultado.columns)
+        linhas_reserva = []
+        for item, qtd in resultado_etl.pedidos_garantidos_por_sku.items():
+            if int(item) in itens_na_base or qtd <= 0:
+                continue
+            if tem_df_pg:
+                row_pg = df_pedidos_garantidos[df_pedidos_garantidos['item'] == item]
+                classe = row_pg['classe'].iloc[0] if len(row_pg) > 0 else 'OUTROS'
+            else:
+                classe = 'OUTROS'
+            linhas_reserva.append({
+                'item_id': f"{item}_RESERVA",
+                'item': int(item),
+                'descricao': None,
+                'embalagem': 'RESERVA',
+                'classe': classe,
+                'quantidade': float(qtd),
+                'quantidade_caixas': 0.0,
+                'preco': None,
+                'custo_ytd': None,
+                'margem_unitaria': None,
+                'margem_por_ovo': None,
+                'receita_total': 0.0,
+                'custo_total': 0.0,
+                'margem_total': 0.0,
+                'limite_demanda_historica': None,
+                'producao_disponivel': 0.0,
+                'producao_total': 0.0,
+                'tem_demanda_historica': False,
+                'custo_medio_classe': False,
+                'tipo': 'reserva',
+            })
+        if linhas_reserva:
+            df_reserva = pd.DataFrame(linhas_reserva)
+            for c in colunas_base:
+                if c not in df_reserva.columns:
+                    df_reserva[c] = None
+            df_reserva = df_reserva[colunas_base]
+            resultado.resultado = pd.concat([resultado.resultado, df_reserva], ignore_index=True)
+            logger.info(f"  Incluídas {len(df_reserva)} linhas de volume reservado (SKUs com pedido fora da base de otimização)")
     
     # 4. Comparativo Baseline vs Otimizado
     logger.info("\n>>> FASE 3: COMPARATIVO")

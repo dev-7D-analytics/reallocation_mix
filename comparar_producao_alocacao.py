@@ -1,7 +1,7 @@
 import argparse
 import os
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -460,9 +460,12 @@ def carregar_alocacao(arquivo_resultado: Optional[str], sep: str = ",", decimal:
     df_aloc["embalagem"] = df_aloc["embalagem"].astype(str)
     df_aloc["classe"] = df_aloc["classe"].fillna("OUTROS")
 
+    agg_dict = {"quantidade": "sum"}
+    if "tipo" in df_aloc.columns:
+        agg_dict["tipo"] = "first"
     aloc_agg = (
-        df_aloc.groupby(["item_id", "item", "embalagem", "classe",], as_index=False)["quantidade"]
-        .sum()
+        df_aloc.groupby(["item_id", "item", "embalagem", "classe"], as_index=False)
+        .agg(agg_dict)
         .rename(columns={"quantidade": "quantidade_alocada"})
     )
     return aloc_agg, csv_path
@@ -494,6 +497,90 @@ def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, year_we
     comparacao = _adicionar_descricao(comparacao, config)
 
     return comparacao.sort_values("diferenca_absoluta", ascending=False).reset_index(drop=True)
+
+
+def agregar_comparacao_por_item(
+    comparacao: pd.DataFrame,
+    lookup_item_id_por_item: Optional[Dict[Union[int, float], str]] = None,
+) -> pd.DataFrame:
+    """
+    Agrega a comparação por item (SKU): uma linha por item com quantidades somadas.
+    Evita duplicação quando o mesmo SKU aparece em várias linhas (ex.: item_id produzido + _RESERVA).
+    Para itens que só têm linha _RESERVA, usa lookup_item_id_por_item (ex.: de preços/custos) para
+    exibir item_id e embalagem no mesmo padrão dos demais SKUs; a distinção de reserva fica em quantidade_reservada.
+    """
+    if "item" not in comparacao.columns:
+        return comparacao
+    lookup = lookup_item_id_por_item or {}
+    # Quantidades: soma produção e alocação; reserva é única por item -> max para não duplicar
+    agg_dict = {
+        "quantidade_produzida": "sum",
+        "quantidade_alocada": "sum",
+        "quantidade_reservada": "max",  # mesmo valor em todas as linhas do item
+    }
+    # Colunas que mantemos com o primeiro valor não nulo (ou primeiro)
+    for col in comparacao.columns:
+        if col in agg_dict or col == "item":
+            continue
+        if col not in agg_dict:
+            agg_dict[col] = "first"
+    # Garantir que colunas numéricas de quantidade não viram "first"
+    for k in ["quantidade_produzida", "quantidade_alocada", "quantidade_reservada"]:
+        if k in agg_dict and agg_dict[k] == "first":
+            agg_dict[k] = "sum" if k != "quantidade_reservada" else "max"
+    # Agrupar
+    por_item = comparacao.groupby("item", as_index=False).agg(agg_dict)
+    # Recalcular diferenças
+    por_item["diferenca_aloc_menos_prod"] = por_item["quantidade_alocada"] - por_item["quantidade_produzida"]
+    por_item["diferenca_absoluta"] = por_item["diferenca_aloc_menos_prod"].abs()
+    # tipo: se misto (reserva + otimização) -> "misto"
+    if "tipo" in comparacao.columns:
+        tipos_por_item = comparacao.groupby("item")["tipo"].apply(lambda s: "misto" if s.nunique() > 1 else s.iloc[0])
+        por_item["tipo"] = por_item["item"].map(tipos_por_item)
+    # origem_dado: "Ambos" se há linha com produção e linha com alocação (ou alguma "Ambos")
+    if "origem_dado" in comparacao.columns:
+        def _origem_agg(s):
+            if (s == "Ambos").any():
+                return "Ambos"
+            if (s == "Somente alocacao").any() and (s == "Somente producao").any():
+                return "Ambos"
+            if (s == "Somente alocacao").any():
+                return "Somente alocacao"
+            return "Somente producao"
+        origem_por_item = comparacao.groupby("item")["origem_dado"].apply(_origem_agg)
+        por_item["origem_dado"] = por_item["item"].map(origem_por_item)
+    # item_id e embalagem: principal (não RESERVA); se só _RESERVA, buscar item_id/embalagem em lookup (ex.: preços/custos)
+    if "item_id" in por_item.columns:
+        def _item_id_principal(g):
+            ids = g["item_id"].dropna().astype(str)
+            nao_reserva = ids[~ids.str.endswith("_RESERVA")]
+            if len(nao_reserva):
+                return nao_reserva.iloc[0]
+            # Item só tem linha(s) RESERVA: usar lookup para mesmo padrão dos demais SKUs (item_id com embalagem)
+            item_val = g.name
+            key = int(item_val) if pd.notna(item_val) else None
+            return lookup.get(key, str(key) if key is not None else "")
+        principal = comparacao.groupby("item", group_keys=False).apply(_item_id_principal, include_groups=False)
+        por_item["item_id"] = por_item["item"].map(principal)
+    if "embalagem" in por_item.columns:
+        def _embalagem_principal(g):
+            emb = g["embalagem"].dropna().astype(str)
+            nao_reserva = emb[emb != "RESERVA"]
+            if len(nao_reserva):
+                return nao_reserva.iloc[0]
+            # Item só RESERVA: derivar embalagem do lookup (item_id no formato item_embalagem)
+            item_val = g.name
+            key = int(item_val) if pd.notna(item_val) else None
+            item_id_canon = lookup.get(key)
+            if item_id_canon and "_" in str(item_id_canon):
+                return str(item_id_canon).split("_", 1)[1]
+            return "RESERVA"
+        por_item["embalagem"] = comparacao.groupby("item", group_keys=False).apply(_embalagem_principal, include_groups=False).values
+        por_item["embalagens"] = comparacao.groupby("item")["embalagem"].apply(
+            lambda s: " | ".join(s.dropna().astype(str).unique())
+        ).values
+    por_item = por_item.sort_values("diferenca_absoluta", ascending=False).reset_index(drop=True)
+    return por_item
 
 
 def _adicionar_descricao(df: pd.DataFrame, config: Optional[Dict] = None) -> pd.DataFrame:
@@ -985,9 +1072,10 @@ def main():
     
     # 4. tipo: Indica origem da alocação (compatível com otimizador.py)
     # - 'otimizacao': SKU foi alocado pela otimização
-    # - 'reserva': SKU teve pedido/reserva com produção na semana
+    # - 'reserva': SKU teve volume reservado (pedido garantido) no modelo
     # - 'reserva_sem_producao': SKU teve pedido/reserva MAS sem produção na semana
     # - 'producao': SKU só tem produção, sem alocação nem reserva
+    # Quando o CSV do modelo traz coluna 'tipo' (ex.: 'reserva'), preservar; senão inferir.
     def determinar_tipo(row):
         if row['quantidade_alocada'] > 0:
             return 'otimizacao'
@@ -1001,7 +1089,10 @@ def main():
         else:
             return 'outro'
     
-    comparacao['tipo'] = comparacao.apply(determinar_tipo, axis=1)
+    if 'tipo' in comparacao.columns:
+        comparacao['tipo'] = comparacao['tipo'].fillna(comparacao.apply(determinar_tipo, axis=1))
+    else:
+        comparacao['tipo'] = comparacao.apply(determinar_tipo, axis=1)
     
     # 5. sku_restrito: SKU NÃO está na lista de permitidos (portanto é restrito)
     # NOVA SEMÂNTICA: lista contém SKUs PERMITIDOS para o estabelecimento
@@ -1049,24 +1140,41 @@ def main():
         mask_sem = comparacao["margem_por_ovo"].isna()
         comparacao.loc[mask_sem, "margem_por_ovo"] = comparacao.loc[mask_sem, "item"].map(margem_por_ovo_por_item)
     
-    # Segundo: calcular margem_por_ovo para SKUs que não têm (baseado na embalagem)
-    # Função para extrair ovos por caixa da embalagem (ex: "CX 12 BJ 20 UN" = 12*20 = 240)
+    # Segundo: calcular margem_por_ovo para SKUs que não têm (baseado na embalagem ou descrição)
+    # Função para extrair ovos por caixa da embalagem (ex: "CX 12 BJ 20 UN" = 240; "30 DZ" = 360)
     def extrair_ovos_por_caixa(embalagem):
         if pd.isna(embalagem):
             return None
         import re
+        s = str(embalagem).strip()
         # Padrão: "CX X BJ Y UN" onde X = bandejas, Y = ovos por bandeja
-        match = re.search(r'CX\s*(\d+)\s*BJ\s*(\d+)', str(embalagem), re.IGNORECASE)
+        match = re.search(r'CX\s*(\d+)\s*BJ\s*(\d+)', s, re.IGNORECASE)
         if match:
             bandejas = int(match.group(1))
             ovos_por_bandeja = int(match.group(2))
             return bandejas * ovos_por_bandeja
+        # Padrão: "X DZ" ou "CX C/ X DZ" (dúzias) -> 12 ovos por dúzia
+        match_dz = re.search(r'(?:CX\s*C?/?\s*)?(\d+)\s*DZ', s, re.IGNORECASE)
+        if match_dz:
+            return int(match_dz.group(1)) * 12
         return None
     
     # Calcular para registros sem margem_por_ovo mas com margem_unitaria
     sem_margem_ovo = comparacao['margem_por_ovo'].isna() & comparacao['margem_unitaria'].notna()
     if sem_margem_ovo.sum() > 0:
-        ovos_por_caixa = comparacao.loc[sem_margem_ovo, 'embalagem'].apply(extrair_ovos_por_caixa)
+        def _ovos_para_linha(row):
+            emb = row.get('embalagem')
+            ovos = extrair_ovos_por_caixa(emb)
+            if ovos is not None:
+                return ovos
+            # Embalagem RESERVA: tentar extrair da descrição (ex.: "SANTA CLARA CX C/30 DZ 300 UN")
+            if emb == "RESERVA" and 'descricao' in row.index:
+                emb_desc = extrair_embalagem_descricao(row['descricao']) if pd.notna(row.get('descricao')) else None
+                ovos = extrair_ovos_por_caixa(emb_desc) if emb_desc else None
+                if ovos is not None:
+                    return ovos
+            return None
+        ovos_por_caixa = comparacao.loc[sem_margem_ovo].apply(_ovos_para_linha, axis=1)
         comparacao.loc[sem_margem_ovo, 'margem_por_ovo'] = comparacao.loc[sem_margem_ovo, 'margem_unitaria'] / ovos_por_caixa
     
     # 6. custo_medio_classe: Custo foi calculado usando média da classe
@@ -1156,13 +1264,70 @@ def main():
     colunas_restantes = [c for c in comparacao.columns if c not in colunas_ordenadas]
     comparacao = comparacao[colunas_existentes + colunas_restantes]
     
-    # Salvar CSV
+    # Lookup item -> item_id (com embalagem) para itens que só aparecem como _RESERVA: preços, custos e resultado
+    # para exibir item_id/embalagem no mesmo padrão dos demais SKUs (evita item_id com _RESERVA quando há fonte)
+    lookup_item_id_por_item = {}
+    if len(precos) > 0 and "item_id" in precos.columns and "item" in precos.columns:
+        df_precos_id = precos[~precos["item_id"].astype(str).str.endswith("_RESERVA")].copy()
+        df_precos_id["item"] = pd.to_numeric(df_precos_id["item"], errors="coerce")
+        df_precos_id = df_precos_id[df_precos_id["item"].notna()].drop_duplicates("item", keep="first")
+        lookup_item_id_por_item = df_precos_id.set_index("item")["item_id"].astype(str).to_dict()
+        lookup_item_id_por_item = {int(k): v for k, v in lookup_item_id_por_item.items()}
+    if len(custos) > 0 and "item_id" in custos.columns and "item" in custos.columns:
+        df_custos_id = custos[~custos["item_id"].astype(str).str.endswith("_RESERVA")].copy()
+        df_custos_id["item"] = pd.to_numeric(df_custos_id["item"], errors="coerce")
+        df_custos_id = df_custos_id[df_custos_id["item"].notna()].drop_duplicates("item", keep="first")
+        custos_por_item = df_custos_id.set_index("item")["item_id"].astype(str).to_dict()
+        custos_por_item = {int(k): v for k, v in custos_por_item.items()}
+        for k, v in custos_por_item.items():
+            lookup_item_id_por_item.setdefault(k, v)
+    # Completar com resultado do modelo (item_id não _RESERVA) para itens que tenham preço/custo mas não estavam em preços/custos
+    if df_aloc_completo is not None and len(df_aloc_completo) > 0 and "item_id" in df_aloc_completo.columns and "item" in df_aloc_completo.columns:
+        df_aloc_completo["item_id"] = df_aloc_completo["item_id"].astype(str)
+        df_nao_reserva = df_aloc_completo[~df_aloc_completo["item_id"].str.endswith("_RESERVA")]
+        if len(df_nao_reserva) > 0:
+            df_nao_reserva = df_nao_reserva.drop_duplicates("item", keep="first")
+            for _, row in df_nao_reserva.iterrows():
+                it = row.get("item")
+                if pd.notna(it):
+                    k = int(it)
+                    lookup_item_id_por_item.setdefault(k, row["item_id"])
+    
+    # Uma única visão: uma linha por item (SKU), com item_id e embalagem principais e coluna quantidade_reservada
+    # (volume reservado fica explícito na coluna; evita linhas duplicadas 2000885 + 2000885_RESERVA)
+    comparacao = agregar_comparacao_por_item(comparacao, lookup_item_id_por_item=lookup_item_id_por_item)
+    colunas_por_item = [c for c in ["item_id", "item", "descricao", "embalagem", "embalagens", "classe"] if c in comparacao.columns]
+    colunas_por_item += [c for c in comparacao.columns if c not in colunas_por_item]
+    comparacao = comparacao[[c for c in colunas_por_item if c in comparacao.columns]]
+    
+    # Recalcular margem_por_ovo após agregação para linhas que têm preço/custo mas ficaram sem (ex.: embalagem RESERVA)
+    def _ovos_pos_agg(row):
+        ovos = extrair_ovos_por_caixa(row.get("embalagem")) if "embalagem" in row.index else None
+        if ovos is not None:
+            return ovos
+        if row.get("embalagem") == "RESERVA" and "embalagens" in row.index and pd.notna(row.get("embalagens")):
+            for part in str(row["embalagens"]).split("|"):
+                part = part.strip()
+                if part and part != "RESERVA":
+                    ovos = extrair_ovos_por_caixa(part)
+                    if ovos is not None:
+                        return ovos
+        if "descricao" in row.index and pd.notna(row.get("descricao")):
+            emb_desc = extrair_embalagem_descricao(row["descricao"])
+            return extrair_ovos_por_caixa(emb_desc) if emb_desc else None
+        return None
+    sem_margem = comparacao["margem_por_ovo"].isna() & comparacao["margem_unitaria"].notna()
+    if sem_margem.sum() > 0:
+        ovos_pos = comparacao.loc[sem_margem].apply(_ovos_pos_agg, axis=1)
+        comparacao.loc[sem_margem, "margem_por_ovo"] = comparacao.loc[sem_margem, "margem_unitaria"] / ovos_pos
+    
+    # Salvar CSV (única tabela: uma linha por SKU, quantidade_reservada na coluna específica)
     comparacao.to_csv(output_path_csv, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
     
     # Salvar Excel
     try:
         with pd.ExcelWriter(output_path_xlsx, engine='openpyxl') as writer:
-            # Aba 1: Comparacao
+            # Aba 1: Comparacao (uma linha por item; item_id e embalagem principais; volume reservado em quantidade_reservada)
             comparacao.to_excel(writer, sheet_name='Comparacao', index=False)
             # Aba 2: Demanda Histórica (todos os SKUs com limite; origem: demanda_historica_*.xlsx)
             if len(df_demanda_historica) > 0:
@@ -1180,6 +1345,8 @@ def main():
         comparacao.to_excel(output_path_xlsx, index=False, engine='openpyxl')
     except Exception as e:
         print(f"[AVISO] Erro ao salvar Excel: {e}. Salve apenas CSV.")
+    
+    abas_list = ["Comparacao"]
     
     # Salvar pedidos ignorados em arquivo separado (se houver)
     output_pedidos_ignorados_csv = None
@@ -1206,7 +1373,6 @@ def main():
     print(f"  Arquivo de producao: {os.fspath(Path(producao_bruta_path))} (aba {SHEET_NAME})")
     print(f"  Resultado do modelo: {caminho_resultado}")
     print(f"  Saida gerada em:")
-    abas_list = ["Comparacao"]
     if len(df_demanda_historica) > 0:
         abas_list.append("Demanda Historica")
     if len(df_param_demanda) > 0:
