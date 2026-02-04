@@ -470,6 +470,58 @@ def main():
             resultado.resultado = pd.concat([resultado.resultado, df_reserva], ignore_index=True)
             logger.info(f"  Incluídas {len(df_reserva)} linhas de volume reservado (SKUs com pedido fora da base de otimização)")
     
+    # Acrescentar linhas da classe OUTROS (não otimizada): aparecem no output com alocação 0
+    base_outros = getattr(resultado_etl, 'base_outros', None)
+    if base_outros is not None and len(base_outros) > 0 and len(resultado.resultado) > 0:
+        colunas_base = list(resultado.resultado.columns)
+        linhas_outros = []
+        for _, row in base_outros.iterrows():
+            qtd_ovos = row.get('qtd_ovos_por_caixa') or 0
+            linhas_outros.append({
+                'item_id': row['item_id'],
+                'item': int(row['item']),
+                'descricao': row.get('descricao', None),
+                'embalagem': row['embalagem'],
+                'classe': 'OUTROS',
+                'quantidade': 0.0,
+                'quantidade_caixas': 0.0,
+                'preco': row.get('preco'),
+                'custo_ytd': row.get('custo_ytd'),
+                'margem_unitaria': row.get('margem_unitaria'),
+                'margem_por_ovo': (row['margem_unitaria'] / qtd_ovos) if qtd_ovos and row.get('margem_unitaria') is not None else None,
+                'receita_total': 0.0,
+                'custo_total': 0.0,
+                'margem_total': 0.0,
+                'limite_demanda_historica': row.get('limite_demanda_historica'),
+                'producao_disponivel': row.get('producao_disponivel_otimizacao_classe', 0.0),
+                'producao_total': row.get('producao_total', 0.0),
+                'tem_demanda_historica': row.get('tem_demanda_historica', False),
+                'custo_medio_classe': row.get('custo_medio_classe', False),
+                'tipo': 'outros',
+            })
+        df_outros = pd.DataFrame(linhas_outros)
+        for c in colunas_base:
+            if c not in df_outros.columns:
+                df_outros[c] = None
+        df_outros = df_outros[colunas_base]
+        resultado.resultado = pd.concat([resultado.resultado, df_outros], ignore_index=True)
+        logger.info(f"  Incluídas {len(df_outros)} linhas da classe OUTROS (alocação = 0, não otimizada)")
+    # Incluir OUTROS no resumo por classe com alocação 0 (sempre, para a classe aparecer mesmo sem itens na base)
+    if len(resultado.resumo_classe.columns) > 0 and 'classe' in resultado.resumo_classe.columns:
+        if 'OUTROS' not in resultado.resumo_classe['classe'].values:
+            skus_outros = base_outros['item'].nunique() if base_outros is not None and len(base_outros) > 0 else 0
+            linha_outros = pd.DataFrame([{
+                'classe': 'OUTROS',
+                'quantidade_alocada': 0.0,
+                'margem_total': 0.0,
+                'skus_alocados': skus_outros,
+            }])
+            for c in resultado.resumo_classe.columns:
+                if c not in linha_outros.columns:
+                    linha_outros[c] = 0.0
+            linha_outros = linha_outros[resultado.resumo_classe.columns]
+            resultado.resumo_classe = pd.concat([resultado.resumo_classe, linha_outros], ignore_index=True)
+    
     # 4. Comparativo Baseline vs Otimizado
     logger.info("\n>>> FASE 3: COMPARATIVO")
     comparativo = calcular_comparativo_baseline(

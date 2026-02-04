@@ -1296,11 +1296,9 @@ def main():
     # Uma única visão: uma linha por item (SKU), com item_id e embalagem principais e coluna quantidade_reservada
     # (volume reservado fica explícito na coluna; evita linhas duplicadas 2000885 + 2000885_RESERVA)
     comparacao = agregar_comparacao_por_item(comparacao, lookup_item_id_por_item=lookup_item_id_por_item)
-    colunas_por_item = [c for c in ["item_id", "item", "descricao", "embalagem", "embalagens", "classe"] if c in comparacao.columns]
-    colunas_por_item += [c for c in comparacao.columns if c not in colunas_por_item]
-    comparacao = comparacao[[c for c in colunas_por_item if c in comparacao.columns]]
-    
+
     # Recalcular margem_por_ovo após agregação para linhas que têm preço/custo mas ficaram sem (ex.: embalagem RESERVA)
+    # (usa "embalagens" internamente; coluna "embalagens" é removida do output abaixo)
     def _ovos_pos_agg(row):
         ovos = extrair_ovos_por_caixa(row.get("embalagem")) if "embalagem" in row.index else None
         if ovos is not None:
@@ -1320,7 +1318,12 @@ def main():
     if sem_margem.sum() > 0:
         ovos_pos = comparacao.loc[sem_margem].apply(_ovos_pos_agg, axis=1)
         comparacao.loc[sem_margem, "margem_por_ovo"] = comparacao.loc[sem_margem, "margem_unitaria"] / ovos_pos
-    
+
+    # Ordem de colunas para exportação: manter "embalagem" (valor único); não exportar "embalagens" (concatenação com | RESERVA)
+    colunas_por_item = [c for c in ["item_id", "item", "descricao", "embalagem", "classe"] if c in comparacao.columns]
+    colunas_por_item += [c for c in comparacao.columns if c not in colunas_por_item and c != "embalagens"]
+    comparacao = comparacao[[c for c in colunas_por_item if c in comparacao.columns]]
+
     # Salvar CSV (única tabela: uma linha por SKU, quantidade_reservada na coluna específica)
     comparacao.to_csv(output_path_csv, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
     

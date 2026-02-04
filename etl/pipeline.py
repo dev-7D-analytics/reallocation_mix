@@ -46,6 +46,7 @@ class ResultadoETL:
     usar_apenas_excedente: bool
     atender_pedidos: bool
     dados_brutos: DadosCarregados  # Para auditoria/debug
+    base_outros: Optional[pd.DataFrame] = None  # Itens classe OUTROS (não otimizados; aparecem no output com alocação 0)
 
 
 class ETLPipeline:
@@ -950,6 +951,15 @@ class ETLPipeline:
         
         self.logger.info("=" * 80)
         
+        # Classe OUTROS não é otimizada: excluir da base enviada ao modelo; manter para aparecer no output com alocação 0
+        mask_outros = df_base['classe'] == 'OUTROS'
+        if mask_outros.any():
+            df_outros = df_base[mask_outros].copy()
+            df_base = df_base[~mask_outros].copy()
+            self.logger.info(f"  Classe OUTROS: {len(df_outros)} itens excluídos da otimização (alocação = 0 no output)")
+        else:
+            df_outros = pd.DataFrame()
+        
         return ResultadoETL(
             base_otimizacao=df_base,
             producao_por_classe=producao_por_classe,
@@ -959,7 +969,8 @@ class ETLPipeline:
             pedidos_ignorados=pedidos_ignorados,
             usar_apenas_excedente=usar_apenas_excedente,
             atender_pedidos=atender_pedidos,
-            dados_brutos=dados
+            dados_brutos=dados,
+            base_outros=df_outros if len(df_outros) > 0 else None,
         )
     
     def _obter_skus_producao(self) -> set:
