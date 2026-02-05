@@ -69,8 +69,17 @@ def calcular_comparativo_baseline(
     # Determinar se usa demanda histórica
     considerar_demanda = config.get('modelo', {}).get('considerar_demanda_historica', False)
     
-    # Volume alocado por classe (da solução otimizada)
-    qtd_alocada_por_classe = resultado.groupby('classe')['quantidade'].sum() if 'classe' in resultado.columns else None
+    # Volume alocado por classe: apenas volume otimizável (excluir reserva e OUTROS) para comparação justa
+    # com a margem otimizada, que também não inclui margem de reserva nem de OUTROS
+    if 'classe' in resultado.columns:
+        if 'tipo' in resultado.columns:
+            mask_otimizavel = (resultado['tipo'] != 'reserva') & (resultado['tipo'] != 'outros')
+            df_otimizavel = resultado.loc[mask_otimizavel]
+            qtd_alocada_por_classe = df_otimizavel.groupby('classe')['quantidade'].sum() if len(df_otimizavel) > 0 else None
+        else:
+            qtd_alocada_por_classe = resultado.groupby('classe')['quantidade'].sum()
+    else:
+        qtd_alocada_por_classe = None
     
     margem_baseline = 0.0
     custo_baseline = 0.0
@@ -111,6 +120,7 @@ def calcular_comparativo_baseline(
     logger.info("\n" + "="*80)
     logger.info("COMPARATIVO: BASELINE vs OTIMIZADO")
     logger.info("="*80)
+    logger.info("  (Comparação justa: mesmo volume otimizável em ambos; reserva e OUTROS excluídos)")
     if considerar_demanda:
         logger.info("  (Baseline = mesmo volume alocado, distribuição uniforme por classe)")
     logger.info(f"  Margem Baseline (sem realocação): R$ {margem_baseline:,.2f}")
