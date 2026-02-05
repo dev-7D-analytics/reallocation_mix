@@ -43,7 +43,7 @@ modelo:
   limite_realocacao: 2.5
   maximizar_margem_absoluta: true
   percentil_demanda: 95
-  periodo_historico_meses: 12  # não usado para janela; janela = dados.meses_janela_custo
+  periodo_historico_meses: 12  # não usado para janela; janela = dados.meses_janela_custo TODO: verificar
   tipo_calculo_demanda: media
   tipo_objetivo: maximizar_margem
   usar_apenas_excedente: true
