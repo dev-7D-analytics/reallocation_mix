@@ -171,6 +171,69 @@ def _carregar_skus_restritos(config: Dict) -> pd.DataFrame:
         return pd.DataFrame(columns=["item"])
 
 
+def _carregar_skus_ativos_completo(config: Dict) -> pd.DataFrame:
+    """Carrega SKUs ATIVOS do estabelecimento com todas as informações disponíveis.
+    
+    Filtra por STATUS='ATIVO' e ESTAB na lista de estabelecimentos do config.
+    
+    Returns:
+        DataFrame com colunas: item, descricao (do cadastro), tipo_cadastro, status_cadastro
+    """
+    path = _resolver_caminho(config, "skus_restritos", INPUT_PATH / "skus_restritos.xlsx")
+    if not path.exists():
+        return pd.DataFrame(columns=["item", "descricao_cadastro", "tipo_cadastro", "status_cadastro"])
+    
+    try:
+        df_restritos = pd.read_excel(path)
+        
+        # Ler lista de estabelecimentos do config
+        estabelecimentos_config = config.get('dados', {}).get('estabelecimentos', [100])
+        if not isinstance(estabelecimentos_config, list):
+            estabelecimentos_config = [estabelecimentos_config]
+        estabelecimentos = [int(estab) for estab in estabelecimentos_config]
+        
+        # Filtrar por STATUS='ATIVO' e ESTAB na lista de estabelecimentos
+        if 'STATUS' in df_restritos.columns and 'ESTAB' in df_restritos.columns:
+            df_filtrado = df_restritos[
+                (df_restritos['STATUS'] == 'ATIVO') & 
+                (df_restritos['ESTAB'].isin(estabelecimentos))
+            ].copy()
+        elif 'ESTAB' in df_restritos.columns:
+            df_filtrado = df_restritos[df_restritos['ESTAB'].isin(estabelecimentos)].copy()
+        else:
+            df_filtrado = df_restritos.copy()
+        
+        if 'item' not in df_filtrado.columns:
+            return pd.DataFrame(columns=["item", "descricao_cadastro", "tipo_cadastro", "status_cadastro"])
+        
+        # Preparar DataFrame de saída com informações úteis
+        df_filtrado['item'] = pd.to_numeric(df_filtrado['item'], errors='coerce')
+        df_filtrado = df_filtrado[df_filtrado['item'].notna()].copy()
+        df_filtrado['item'] = df_filtrado['item'].astype(int)
+        
+        result = pd.DataFrame({'item': df_filtrado['item'].values})
+        
+        # Mapear colunas disponíveis
+        if 'DESCRIÇÃO' in df_filtrado.columns:
+            result['descricao_cadastro'] = df_filtrado['DESCRIÇÃO'].values
+        else:
+            result['descricao_cadastro'] = None
+            
+        if 'TIPO' in df_filtrado.columns:
+            result['tipo_cadastro'] = df_filtrado['TIPO'].values
+        else:
+            result['tipo_cadastro'] = None
+            
+        if 'STATUS' in df_filtrado.columns:
+            result['status_cadastro'] = df_filtrado['STATUS'].values
+        else:
+            result['status_cadastro'] = None
+        
+        return result.drop_duplicates('item', keep='first')
+    except Exception:
+        return pd.DataFrame(columns=["item", "descricao_cadastro", "tipo_cadastro", "status_cadastro"])
+
+
 def _carregar_demanda_historica_completa(caminho: Optional[Path] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Carrega demanda histórica completa a partir de demanda_historica_*.xlsx em resultados/.
@@ -1318,6 +1381,123 @@ def main():
     if sem_margem.sum() > 0:
         ovos_pos = comparacao.loc[sem_margem].apply(_ovos_pos_agg, axis=1)
         comparacao.loc[sem_margem, "margem_por_ovo"] = comparacao.loc[sem_margem, "margem_unitaria"] / ovos_pos
+
+    # Adicionar SKUs ativos do estabelecimento que não aparecem no output (sem produção, sem pedido, não otimizados)
+    # para garantir que o output contenha TODOS os SKUs ativos do estabelecimento
+    skus_ativos_completo = _carregar_skus_ativos_completo(config)
+    if len(skus_ativos_completo) > 0:
+        skus_no_output = set(comparacao['item'].astype(int).unique())
+        skus_ativos_set = set(skus_ativos_completo['item'].astype(int).unique())
+        skus_ausentes = skus_ativos_set - skus_no_output
+        
+        if len(skus_ausentes) > 0:
+            print(f"\n[INFO] Adicionando {len(skus_ausentes)} SKUs ativos que não apareceram no output:")
+            
+            # Carregar classes para mapear SKU -> classe
+            classes_path = _resolver_caminho(config, "classes", INPUT_PATH / "base_skus_classes.xlsx")
+            classe_por_item = {}
+            if classes_path.exists():
+                try:
+                    df_classes = pd.read_excel(classes_path)
+                    col_classe = _resolver_coluna_classe(df_classes)
+                    if col_classe and 'item' in df_classes.columns:
+                        df_classes['item'] = pd.to_numeric(df_classes['item'], errors='coerce')
+                        df_classes = df_classes[df_classes['item'].notna()]
+                        df_classes['item'] = df_classes['item'].astype(int)
+                        classe_por_item = df_classes.set_index('item')[col_classe].to_dict()
+                except Exception:
+                    pass
+            
+            # Criar linhas para SKUs ausentes
+            linhas_ausentes = []
+            for sku in sorted(skus_ausentes):
+                # Buscar informações do cadastro
+                info_cadastro = skus_ativos_completo[skus_ativos_completo['item'] == sku]
+                descricao_cadastro = info_cadastro['descricao_cadastro'].iloc[0] if len(info_cadastro) > 0 and pd.notna(info_cadastro['descricao_cadastro'].iloc[0]) else None
+                tipo_cadastro = info_cadastro['tipo_cadastro'].iloc[0] if len(info_cadastro) > 0 and pd.notna(info_cadastro['tipo_cadastro'].iloc[0]) else None
+                status_cadastro = info_cadastro['status_cadastro'].iloc[0] if len(info_cadastro) > 0 and pd.notna(info_cadastro['status_cadastro'].iloc[0]) else None
+                
+                # Buscar classe
+                classe = classe_por_item.get(sku, 'SEM_CLASSE')
+                
+                # Buscar embalagem da descrição
+                embalagem = None
+                if descricao_cadastro:
+                    embalagem = extrair_embalagem_descricao(descricao_cadastro)
+                
+                # Criar item_id
+                if embalagem:
+                    item_id = f"{sku}_{embalagem}"
+                else:
+                    item_id = str(sku)
+                
+                # Buscar preço e custo se disponíveis
+                preco = precos_por_item_externo.get(sku) if precos_por_item_externo else None
+                custo = custos_por_item_externo.get(sku) if custos_por_item_externo else None
+                margem = (preco - custo) if preco is not None and custo is not None else None
+                
+                # Buscar demanda histórica se disponível
+                limite_demanda = limite_demanda_por_item.get(sku)
+                tem_demanda = sku in skus_com_demanda or (limite_demanda is not None)
+                
+                # Calcular margem_por_ovo se possível
+                margem_ovo = None
+                if margem is not None and embalagem:
+                    ovos = extrair_ovos_por_caixa(embalagem)
+                    if ovos and ovos > 0:
+                        margem_ovo = margem / ovos
+                
+                linha = {
+                    'item_id': item_id,
+                    'item': sku,
+                    'descricao': descricao_cadastro,
+                    'embalagem': embalagem if embalagem else 'SEM_EMBALAGEM',
+                    'classe': classe,
+                    'quantidade_produzida': 0.0,
+                    'quantidade_alocada': 0.0,
+                    'quantidade_reservada': 0.0,
+                    'year_week': year_week,
+                    'data_producao': get_week_start_date(year_week),
+                    'diferenca_aloc_menos_prod': 0.0,
+                    'diferenca_absoluta': 0.0,
+                    'preco': preco,
+                    'custo_ytd': custo,
+                    'margem_unitaria': margem,
+                    'margem_por_ovo': margem_ovo,
+                    'tem_demanda_historica': tem_demanda,
+                    'demanda_max': limite_demanda,
+                    'limite_demanda_historica': limite_demanda,
+                    'tipo': 'cadastro',  # Novo tipo para indicar SKU apenas no cadastro
+                    'origem_dado': 'Somente cadastro',
+                    'tem_pedido': False,
+                    'pedido_ignorado': False,
+                    'sku_restrito': False,  # Está na lista de ativos, então não é restrito
+                    'custo_medio_classe': False,
+                }
+                linhas_ausentes.append(linha)
+                
+                # Log resumido
+                motivo = []
+                if classe == 'SEM_CLASSE':
+                    motivo.append('sem classe')
+                if tipo_cadastro:
+                    motivo.append(f'tipo={tipo_cadastro}')
+                if status_cadastro and status_cadastro != 'ATIVO':
+                    motivo.append(f'status={status_cadastro}')
+                motivo_str = f" ({', '.join(motivo)})" if motivo else ""
+                print(f"  - {sku}: {descricao_cadastro[:50] if descricao_cadastro else 'Sem descrição'}...{motivo_str}")
+            
+            # Adicionar linhas ao comparacao
+            df_ausentes = pd.DataFrame(linhas_ausentes)
+            # Garantir que todas as colunas existam em ambos os DataFrames
+            for col in comparacao.columns:
+                if col not in df_ausentes.columns:
+                    df_ausentes[col] = None
+            for col in df_ausentes.columns:
+                if col not in comparacao.columns:
+                    comparacao[col] = None
+            comparacao = pd.concat([comparacao, df_ausentes], ignore_index=True)
+            print(f"  Total: {len(skus_ausentes)} SKUs adicionados ao output")
 
     # Ordem de colunas para exportação: manter "embalagem" (valor único); não exportar "embalagens" (concatenação com | RESERVA)
     colunas_por_item = [c for c in ["item_id", "item", "descricao", "embalagem", "classe"] if c in comparacao.columns]

@@ -35,7 +35,7 @@ meta:
   versao_modelo: '1.0'
 modelo:
   atender_pedidos: true
-  considerar_demanda_historica: false
+  considerar_demanda_historica: true
   escoar_todo_estoque: true
   fator_expansao_demanda: 5
   fator_percentual_maximo: 1.2
