@@ -37,14 +37,14 @@ modelo:
   atender_pedidos: true
   considerar_demanda_historica: true
   escoar_todo_estoque: true
-  fator_expansao_demanda: 5
-  fator_percentual_maximo: 1.2
+  fator_demanda_maxima: 1.2
+  # fator_percentual_maximo: 1.2
   granularidade_demanda: S
-  limite_realocacao: 2.5
+  # limite_realocacao: 5
   maximizar_margem_absoluta: true
   percentil_demanda: 95
   periodo_historico_meses: 12  # não usado para janela; janela = dados.meses_janela_custo TODO: verificar
-  tipo_calculo_demanda: media
+  tipo_calculo_demanda: media 
   tipo_objetivo: maximizar_margem
   usar_apenas_excedente: true
   variaveis_continuas: true

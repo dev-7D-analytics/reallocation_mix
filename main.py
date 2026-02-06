@@ -93,21 +93,42 @@ def calcular_comparativo_baseline(
             qtd_producao = float(producao_por_classe[classe])
         
         # Buscar item_ids desta classe
-        item_ids_classe = df_base[df_base['classe'] == classe]
+        item_ids_classe = df_base[df_base['classe'] == classe].copy()
         
         if len(item_ids_classe) == 0:
             continue
         
-        # Média das margens/custos como baseline (distribuição uniforme)
-        margem_media = item_ids_classe['margem_unitaria'].mean()
-        custo_medio = item_ids_classe['custo_ytd'].mean() if 'custo_ytd' in item_ids_classe.columns else 0
+        # Baseline usando PROPORÇÃO HISTÓRICA REAL (sem fator)
+        # Fórmula: Σ (Volume_classe × proporção_sku × margem_por_ovo_sku)
+        # Isso representa a margem se continuássemos vendendo na mesma proporção histórica
         
-        # Converter ovos para caixas
-        qtd_ovos_por_caixa_media = item_ids_classe['qtd_ovos_por_caixa'].mean()
-        qtd_caixas = qtd_producao / qtd_ovos_por_caixa_media if qtd_ovos_por_caixa_media > 0 else 0
+        # Calcular margem e custo por ovo para cada SKU
+        item_ids_classe['margem_por_ovo'] = item_ids_classe['margem_unitaria'] / item_ids_classe['qtd_ovos_por_caixa']
+        item_ids_classe['custo_por_ovo'] = item_ids_classe['custo_ytd'] / item_ids_classe['qtd_ovos_por_caixa'] if 'custo_ytd' in item_ids_classe.columns else 0
         
-        margem_baseline += qtd_caixas * margem_media
-        custo_baseline += qtd_caixas * custo_medio
+        # Calcular proporção histórica de cada SKU (baseada no volume total vendido, sem fator)
+        if 'volume_historico_total' in item_ids_classe.columns:
+            vol_hist = item_ids_classe['volume_historico_total'].fillna(0)
+            total_vol_hist = vol_hist.sum()
+            if total_vol_hist > 0:
+                item_ids_classe['proporcao_historica'] = vol_hist / total_vol_hist
+            else:
+                # Fallback: distribuição uniforme se não houver histórico
+                item_ids_classe['proporcao_historica'] = 1.0 / len(item_ids_classe)
+        else:
+            # Fallback: distribuição uniforme se coluna não existir
+            item_ids_classe['proporcao_historica'] = 1.0 / len(item_ids_classe)
+        
+        # Calcular volume baseline por SKU (proporcional ao histórico)
+        item_ids_classe['volume_baseline'] = qtd_producao * item_ids_classe['proporcao_historica']
+        
+        # Calcular margem e custo baseline por SKU
+        item_ids_classe['margem_baseline_sku'] = item_ids_classe['volume_baseline'] * item_ids_classe['margem_por_ovo']
+        item_ids_classe['custo_baseline_sku'] = item_ids_classe['volume_baseline'] * item_ids_classe['custo_por_ovo']
+        
+        # Somar para o total da classe
+        margem_baseline += item_ids_classe['margem_baseline_sku'].sum()
+        custo_baseline += item_ids_classe['custo_baseline_sku'].sum()
     
     # Calcular ganhos
     ganho_margem = margem_otimizada - margem_baseline
@@ -121,8 +142,7 @@ def calcular_comparativo_baseline(
     logger.info("COMPARATIVO: BASELINE vs OTIMIZADO")
     logger.info("="*80)
     logger.info("  (Comparação justa: mesmo volume otimizável em ambos; reserva e OUTROS excluídos)")
-    if considerar_demanda:
-        logger.info("  (Baseline = mesmo volume alocado, distribuição uniforme por classe)")
+    logger.info("  (Baseline = distribuição proporcional ao histórico de vendas por SKU)")
     logger.info(f"  Margem Baseline (sem realocação): R$ {margem_baseline:,.2f}")
     logger.info(f"  Margem Otimizada (com realocação): R$ {margem_otimizada:,.2f}")
     logger.info(f"  GANHO MARGEM: R$ {ganho_margem:,.2f} ({ganho_margem_pct:.2f}%)")

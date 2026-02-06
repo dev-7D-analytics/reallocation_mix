@@ -564,8 +564,15 @@ class ETLPipeline:
         # Aplicar fator de expansão
         df_demanda['demanda_max'] = df_demanda['demanda_max'] * fator
         
+        # Calcular volume total histórico por SKU (SEM fator) para proporção do baseline
+        # Isso representa o volume REAL vendido no período, usado para calcular proporção
+        df_volume_total = df_agregado.groupby('item')['demanda_periodo'].sum().reset_index()
+        df_volume_total.columns = ['item', 'volume_historico_total']
+        df_demanda = df_demanda.merge(df_volume_total, on='item', how='left')
+        
         self.logger.info(f"  SKUs com demanda historica: {len(df_demanda)}")
         self.logger.info(f"  Limite demanda medio: {df_demanda['demanda_max'].mean():,.0f} unidades")
+        self.logger.info(f"  Volume historico total medio: {df_demanda['volume_historico_total'].mean():,.0f} unidades")
         
         return df_demanda
     
@@ -874,9 +881,16 @@ class ETLPipeline:
             demanda_dict = dados.demanda_historica.set_index('item')['demanda_max'].to_dict()
             df_base['tem_demanda_historica'] = df_base['item'].isin(demanda_dict.keys())
             df_base['limite_demanda_historica'] = df_base['item'].map(demanda_dict)
+            # Adicionar volume histórico total (sem fator) para cálculo de proporção no baseline
+            if 'volume_historico_total' in dados.demanda_historica.columns:
+                volume_dict = dados.demanda_historica.set_index('item')['volume_historico_total'].to_dict()
+                df_base['volume_historico_total'] = df_base['item'].map(volume_dict)
+            else:
+                df_base['volume_historico_total'] = np.nan
         else:
             df_base['tem_demanda_historica'] = False
             df_base['limite_demanda_historica'] = np.nan
+            df_base['volume_historico_total'] = np.nan
         
         # Calcular produção disponível para otimização
         usar_apenas_excedente = self.config.get('modelo', {}).get('usar_apenas_excedente', True)
