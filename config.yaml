@@ -1,58 +1,52 @@
-analise:
-  agrupar_por_embalagem: true
-  agrupar_por_sku: true
-  top_n_combinations: 20
+# ==============================================================================
+# CONFIGURAÇÃO DO MODELO DE OTIMIZAÇÃO DE MIX
+# ==============================================================================
+
+# --- Dados de entrada ---
 dados:
+  # Ano e mês de referência para custo, preço e demanda histórica
   ano_custo: 2025
   ano_preco: 2025
-  estab_custo: 100
-  estab_preco: 100
-  estabelecimentos:
+  mes_custo: 11                   # Mês final da janela de referência
+  mes_preco: 11                   # Mês final da janela de preços
+  meses_janela_custo: 6           # Janela em meses para cálculo de custo e demanda histórica
+  meses_janela_preco: 6           # Janela em meses para cálculo de preço médio
+  # Estabelecimentos
+  estab_custo: 100                # Estabelecimento para busca de custos
+  estab_preco: 100                # Estabelecimento para busca de preços
+  estabelecimentos:               # Lista de estabelecimentos a considerar
   - 100
-  # Período de referência (custo, preço e demanda histórica usam o mesmo critério)
-  mes_custo: 11
-  mes_preco: 11
-  meses_janela_custo: 6
-  meses_janela_preco: 6
-  percentil_inferior_preco: 1
-  percentil_superior_preco: 99
-  remover_outliers_preco: true
-  semana_ref: 2025-51
-  sku_minimo_transacoes: 1
-  tipo_estoque: DISPONIVEL PARA VENDA
-debug:
-  ativar: false
-  limitar_skus: null
-  salvar_modelo_lp: false
-  salvar_modelo_mps: false
-  seed_random: 42
-meta:
-  autor: 7D
-  changelog:
-  - '2025-12-08: Versão inicial - mix diário sem clientes'
-  data_criacao: '2025-12-08'
-  descricao: Modelo de otimização de mix diário (SKU x Embalagem) sem clientes
-  versao_modelo: '1.0'
+  # Filtros de preço
+  percentil_inferior_preco: 1     # Percentil inferior para remoção de outliers de preço
+  percentil_superior_preco: 99    # Percentil superior para remoção de outliers de preço
+  remover_outliers_preco: true    # Ativa remoção de outliers no cálculo de preço médio
+  # Outros filtros
+  semana_ref: 2025-51             # Semana de referência para dados de produção/estoque
+  sku_minimo_transacoes: 1        # Mínimo de transações para considerar um SKU
+  tipo_estoque: DISPONIVEL PARA VENDA  # Tipo de estoque a filtrar
+
+# --- Parâmetros do modelo de otimização ---
 modelo:
-  atender_pedidos: true
-  considerar_demanda_historica: true
-  escoar_todo_estoque: true
-  fator_demanda_maxima: 1.2
-  # fator_percentual_maximo: 1.2
-  granularidade_demanda: S
-  # limite_realocacao: 5
-  maximizar_margem_absoluta: true
-  percentil_demanda: 95
-  periodo_historico_meses: 12  # não usado para janela; janela = dados.meses_janela_custo TODO: verificar
-  tipo_calculo_demanda: media 
-  tipo_objetivo: maximizar_margem
-  usar_apenas_excedente: true
-  variaveis_continuas: true
+  # Pedidos e produção
+  atender_pedidos: true           # Reserva volume para pedidos garantidos antes de otimizar
+  usar_apenas_excedente: true     # Otimiza apenas o excedente (produção - pedidos)
+  # Demanda histórica (restrição de alocação máxima por SKU)
+  considerar_demanda_historica: true  # Ativa limite de alocação por SKU baseado no histórico
+  tipo_calculo_demanda: media     # Tipo de cálculo: media | maximo | percentil
+  fator_demanda_maxima: 1.2       # Multiplicador sobre a demanda calculada (1.2 = 120% da demanda)
+  percentil_demanda: 95           # Percentil a usar (só quando tipo_calculo_demanda = percentil)
+  granularidade_demanda: S        # Granularidade: S(emanal) | M(ensal) | D(iário)
+  # Função objetivo
+  tipo_objetivo: maximizar_margem # Objetivo: maximizar_margem | minimizar_custos
+  # Variáveis de decisão
+  variaveis_continuas: true       # true=NumVar (frações), false=IntVar (quantidades inteiras)
+
+# --- Regras de negócio ---
 negocio:
-  filtrar_granjas:
+  filtrar_granjas:                # Estabelecimentos a considerar na demanda histórica
   - '100'
-  filtrar_skus_margem_negativa: true
-  margem_minima_percentual: 0.0
+
+# --- Caminhos dos arquivos ---
 paths:
   classes: inputs/base_skus_classes.xlsx
   custos: inputs/MANTI-PRIC_Custos_12012026.parquet
@@ -65,12 +59,22 @@ paths:
   producao: inputs/producao_classe.csv
   producao_bruta: inputs/PRODUÇÃO DIA.xlsx
   skus_restritos: inputs/skus_restritos.xlsx
+
+# --- Configuração do solver (OR-Tools) ---
 solver:
-  dual_tolerance: 1.0e-07
-  gap_percentage: 0.001
-  num_threads: 4
-  primal_tolerance: 1.0e-07
-  solver_type: SCIP_MIXED_INTEGER_PROGRAMMING
-  time_limit_ms: 600000
-  time_limit_seconds: 600
-  verbose: true
+  solver_type: SCIP_MIXED_INTEGER_PROGRAMMING  # Tipo de solver (SCIP para inteiro/misto, GLOP para linear)
+  time_limit_ms: 600000           # Tempo máximo de resolução em milissegundos (600s = 10min)
+  num_threads: 4                  # Número de threads para resolução paralela
+  verbose: true                   # Exibe output detalhado do solver
+  gap_percentage: 0.001           # Gap de otimalidade (0.001 = 0.1%) - SCIP only
+  dual_tolerance: 1.0e-07         # Tolerância dual (precisão numérica) - SCIP only
+  primal_tolerance: 1.0e-07       # Tolerância primal (precisão numérica) - SCIP only
+
+# --- Metadados ---
+meta:
+  autor: 7D
+  versao_modelo: '1.0'
+  data_criacao: '2025-12-08'
+  descricao: Modelo de otimização de mix diário (SKU x Embalagem) sem clientes
+  changelog:
+  - '2025-12-08: Versão inicial - mix diário sem clientes'

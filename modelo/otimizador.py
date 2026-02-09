@@ -93,11 +93,43 @@ class Otimizador:
         self.logger.info("="*80)
         
         # Criar solver
-        solver_type = self.config.get('solver', {}).get('solver_type', 'GLOP_LINEAR_PROGRAMMING')
+        solver_cfg = self.config.get('solver', {})
+        solver_type = solver_cfg.get('solver_type', 'GLOP_LINEAR_PROGRAMMING')
         self.solver = pywraplp.Solver(
             'MixOtimizacao',
             getattr(pywraplp.Solver, solver_type)
         )
+        
+        # Configurar parâmetros do solver
+        time_limit = solver_cfg.get('time_limit_ms', 600000)
+        self.solver.SetTimeLimit(time_limit)
+        self.logger.info(f"  Solver: {solver_type}")
+        self.logger.info(f"  Time limit: {time_limit}ms")
+        
+        num_threads = solver_cfg.get('num_threads', 4)
+        self.solver.SetNumThreads(num_threads)
+        self.logger.info(f"  Threads: {num_threads}")
+        
+        if solver_cfg.get('verbose', False):
+            self.solver.EnableOutput()
+            self.logger.info(f"  Verbose: ativado")
+        
+        # Parâmetros específicos do solver (SCIP)
+        scip_params = []
+        gap = solver_cfg.get('gap_percentage', None)
+        if gap is not None:
+            scip_params.append(f"limits/gap = {gap}")
+        dual_tol = solver_cfg.get('dual_tolerance', None)
+        if dual_tol is not None:
+            scip_params.append(f"numerics/dualfeastol = {dual_tol}")
+        primal_tol = solver_cfg.get('primal_tolerance', None)
+        if primal_tol is not None:
+            scip_params.append(f"numerics/feastol = {primal_tol}")
+        
+        if scip_params and 'SCIP' in solver_type:
+            params_str = "\n".join(scip_params)
+            self.solver.SetSolverSpecificParametersAsString(params_str)
+            self.logger.info(f"  Parâmetros SCIP: {scip_params}")
         
         # Criar variáveis
         self._criar_variaveis()
@@ -115,6 +147,9 @@ class Otimizador:
         self.logger.info("\n[1/3] Criando variáveis de decisão...")
         
         self.variaveis = {}
+        variaveis_continuas = self.config.get('modelo', {}).get('variaveis_continuas', True)
+        tipo_var = "contínuas (NumVar)" if variaveis_continuas else "inteiras (IntVar)"
+        self.logger.info(f"  Tipo de variáveis: {tipo_var}")
         
         for idx, row in self.df_base.iterrows():
             item_id = row['item_id']
@@ -124,11 +159,18 @@ class Otimizador:
             producao_disponivel = row['producao_disponivel_otimizacao_classe']
             
             if producao_disponivel > 0:
-                self.variaveis[item_id] = self.solver.NumVar(
-                    0,
-                    producao_disponivel,
-                    var_name
-                )
+                if variaveis_continuas:
+                    self.variaveis[item_id] = self.solver.NumVar(
+                        0,
+                        producao_disponivel,
+                        var_name
+                    )
+                else:
+                    self.variaveis[item_id] = self.solver.IntVar(
+                        0,
+                        int(producao_disponivel),
+                        var_name
+                    )
         
         self.logger.info(f"  Variáveis criadas: {len(self.variaveis)}")
     
