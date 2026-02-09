@@ -83,6 +83,7 @@ def calcular_comparativo_baseline(
     
     margem_baseline = 0.0
     custo_baseline = 0.0
+    auditoria_classes = []  # Dados de auditoria por classe/SKU
     
     for classe in producao_por_classe.index:
         # Com demanda histórica: baseline = mesmo volume alocado (distribuição uniforme)
@@ -113,10 +114,8 @@ def calcular_comparativo_baseline(
             if total_vol_hist > 0:
                 item_ids_classe['proporcao_historica'] = vol_hist / total_vol_hist
             else:
-                # Fallback: distribuição uniforme se não houver histórico
                 item_ids_classe['proporcao_historica'] = 1.0 / len(item_ids_classe)
         else:
-            # Fallback: distribuição uniforme se coluna não existir
             item_ids_classe['proporcao_historica'] = 1.0 / len(item_ids_classe)
         
         # Calcular volume baseline por SKU (proporcional ao histórico)
@@ -129,6 +128,40 @@ def calcular_comparativo_baseline(
         # Somar para o total da classe
         margem_baseline += item_ids_classe['margem_baseline_sku'].sum()
         custo_baseline += item_ids_classe['custo_baseline_sku'].sum()
+        
+        # Coletar dados de auditoria por SKU
+        # Dados otimizados: buscar volume alocado por SKU no resultado
+        for _, row_base in item_ids_classe.iterrows():
+            item_id = row_base['item_id']
+            
+            # Buscar alocação otimizada para este item_id
+            mask_otim = (resultado['item_id'] == item_id)
+            if 'tipo' in resultado.columns:
+                mask_otim = mask_otim & (resultado['tipo'] != 'reserva') & (resultado['tipo'] != 'outros')
+            row_otim = resultado.loc[mask_otim]
+            vol_otim = float(row_otim['quantidade'].sum()) if len(row_otim) > 0 else 0.0
+            margem_otim_sku = float(row_otim['margem_total'].sum()) if len(row_otim) > 0 else 0.0
+            
+            auditoria_classes.append({
+                'classe': classe,
+                'item_id': item_id,
+                'item': int(row_base['item']),
+                'descricao': row_base.get('descricao', ''),
+                'embalagem': row_base.get('embalagem', ''),
+                'qtd_ovos_por_caixa': row_base['qtd_ovos_por_caixa'],
+                'preco': row_base['preco'],
+                'custo_ytd': row_base['custo_ytd'],
+                'margem_unitaria': row_base['margem_unitaria'],
+                'margem_por_ovo': row_base['margem_por_ovo'],
+                'limite_demanda_historica': row_base.get('limite_demanda_historica', None),
+                'volume_historico_total': row_base.get('volume_historico_total', 0),
+                'proporcao_historica': row_base['proporcao_historica'],
+                'volume_classe': qtd_producao,
+                'volume_baseline': row_base['volume_baseline'],
+                'margem_baseline': row_base['margem_baseline_sku'],
+                'volume_otimizado': vol_otim,
+                'margem_otimizada': margem_otim_sku,
+            })
     
     # Calcular ganhos
     ganho_margem = margem_otimizada - margem_baseline
@@ -150,6 +183,10 @@ def calcular_comparativo_baseline(
     logger.info(f"  Custo Otimizado (com realocação): R$ {custo_otimizado:,.2f}")
     logger.info(f"  Variação Custo: R$ {reducao_custo:,.2f} ({reducao_custo_pct:.2f}%)")
     
+    # Gerar arquivo de auditoria
+    if auditoria_classes:
+        _gerar_auditoria_baseline(auditoria_classes, config, logger)
+    
     return {
         'margem_baseline': margem_baseline,
         'margem_otimizada': margem_otimizada,
@@ -160,6 +197,111 @@ def calcular_comparativo_baseline(
         'reducao_custo': reducao_custo,
         'reducao_custo_pct': reducao_custo_pct
     }
+
+
+def _gerar_auditoria_baseline(
+    auditoria_classes: list,
+    config: dict,
+    logger: logging.Logger
+) -> None:
+    """
+    Gera arquivo Excel de auditoria do cálculo baseline vs otimizado.
+    
+    Abas:
+    - Detalhe por SKU: dados completos por SKU com baseline e otimizado
+    - Resumo por Classe: totais por classe com verificação de volumes
+    - Parâmetros: configuração usada no cálculo
+    """
+    from datetime import datetime
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_dir = Path('resultados')
+    output_dir.mkdir(exist_ok=True)
+    path = output_dir / f'auditoria_baseline_{timestamp}.xlsx'
+    
+    df_audit = pd.DataFrame(auditoria_classes)
+    
+    # === ABA 1: Detalhe por SKU ===
+    df_detalhe = df_audit[[
+        'classe', 'item_id', 'item', 'descricao', 'embalagem',
+        'qtd_ovos_por_caixa', 'preco', 'custo_ytd', 'margem_unitaria', 'margem_por_ovo',
+        'limite_demanda_historica', 'volume_historico_total', 'proporcao_historica',
+        'volume_classe',
+        'volume_baseline', 'margem_baseline',
+        'volume_otimizado', 'margem_otimizada',
+    ]].copy()
+    
+    # Adicionar colunas de verificação
+    df_detalhe['diferenca_volume'] = df_detalhe['volume_otimizado'] - df_detalhe['volume_baseline']
+    df_detalhe['diferenca_margem'] = df_detalhe['margem_otimizada'] - df_detalhe['margem_baseline']
+    
+    # Ordenar por classe e margem_por_ovo (descendente)
+    df_detalhe = df_detalhe.sort_values(['classe', 'margem_por_ovo'], ascending=[True, False])
+    
+    # === ABA 2: Resumo por Classe ===
+    resumo = df_audit.groupby('classe').agg(
+        volume_classe=('volume_classe', 'first'),
+        num_skus=('item_id', 'nunique'),
+        soma_volume_baseline=('volume_baseline', 'sum'),
+        soma_volume_otimizado=('volume_otimizado', 'sum'),
+        margem_baseline_classe=('margem_baseline', 'sum'),
+        margem_otimizada_classe=('margem_otimizada', 'sum'),
+    ).reset_index()
+    
+    # Verificações
+    resumo['volume_baseline_bate'] = (
+        (resumo['soma_volume_baseline'] - resumo['volume_classe']).abs() < 1.0
+    ).map({True: 'OK', False: 'ERRO'})
+    resumo['volume_otimizado_bate'] = (
+        (resumo['soma_volume_otimizado'] - resumo['volume_classe']).abs() < 1.0
+    ).map({True: 'OK', False: 'ERRO'})
+    resumo['ganho_absoluto'] = resumo['margem_otimizada_classe'] - resumo['margem_baseline_classe']
+    resumo['ganho_percentual'] = resumo.apply(
+        lambda r: (r['ganho_absoluto'] / r['margem_baseline_classe'] * 100) if r['margem_baseline_classe'] > 0 else 0,
+        axis=1
+    )
+    
+    # Linha de totais
+    totais = pd.DataFrame([{
+        'classe': 'TOTAL',
+        'volume_classe': resumo['volume_classe'].sum(),
+        'num_skus': resumo['num_skus'].sum(),
+        'soma_volume_baseline': resumo['soma_volume_baseline'].sum(),
+        'soma_volume_otimizado': resumo['soma_volume_otimizado'].sum(),
+        'margem_baseline_classe': resumo['margem_baseline_classe'].sum(),
+        'margem_otimizada_classe': resumo['margem_otimizada_classe'].sum(),
+        'volume_baseline_bate': '',
+        'volume_otimizado_bate': '',
+        'ganho_absoluto': resumo['ganho_absoluto'].sum(),
+        'ganho_percentual': (resumo['ganho_absoluto'].sum() / resumo['margem_baseline_classe'].sum() * 100)
+            if resumo['margem_baseline_classe'].sum() > 0 else 0,
+    }])
+    resumo = pd.concat([resumo, totais], ignore_index=True)
+    
+    # === ABA 3: Parâmetros ===
+    modelo_cfg = config.get('modelo', {})
+    dados_cfg = config.get('dados', {})
+    params = pd.DataFrame([
+        {'parametro': 'tipo_calculo_demanda', 'valor': modelo_cfg.get('tipo_calculo_demanda', 'maximo')},
+        {'parametro': 'fator_demanda_maxima', 'valor': modelo_cfg.get('fator_demanda_maxima', 1.2)},
+        {'parametro': 'considerar_demanda_historica', 'valor': modelo_cfg.get('considerar_demanda_historica', False)},
+        {'parametro': 'granularidade_demanda', 'valor': modelo_cfg.get('granularidade_demanda', 'S')},
+        {'parametro': 'percentil_demanda', 'valor': modelo_cfg.get('percentil_demanda', 95)},
+        {'parametro': 'variaveis_continuas', 'valor': modelo_cfg.get('variaveis_continuas', True)},
+        {'parametro': 'mes_referencia', 'valor': dados_cfg.get('mes_custo', 11)},
+        {'parametro': 'ano_referencia', 'valor': dados_cfg.get('ano_custo', 2025)},
+        {'parametro': 'meses_janela', 'valor': dados_cfg.get('meses_janela_custo', 6)},
+        {'parametro': 'metodo_baseline', 'valor': 'Proporção histórica real (volume vendido no período, sem fator)'},
+        {'parametro': 'data_geracao', 'valor': timestamp},
+    ])
+    
+    # === Salvar Excel ===
+    with pd.ExcelWriter(path, engine='openpyxl') as writer:
+        df_detalhe.to_excel(writer, sheet_name='Detalhe por SKU', index=False)
+        resumo.to_excel(writer, sheet_name='Resumo por Classe', index=False)
+        params.to_excel(writer, sheet_name='Parametros', index=False)
+    
+    logger.info(f"  Auditoria baseline salva em: {path}")
 
 
 def criar_aba_estatisticas(
