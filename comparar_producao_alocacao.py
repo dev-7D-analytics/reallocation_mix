@@ -436,22 +436,62 @@ def _carregar_custos(config: Dict) -> pd.DataFrame:
 
 
 def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -> Tuple[pd.DataFrame, str]:
-    """Read production data and return aggregation by item_id."""
+    """Read production data and return aggregation by item_id.
+    
+    Respeita granularidade_demanda do config:
+    - S (semanal): filtra por semana ISO (year_week)
+    - D (diário): filtra por data_ref (um dia)
+    - M (mensal): filtra por mês de data_ref
+    """
     if config:
         producao_bruta_path = _resolver_caminho(config, "producao_bruta", INPUT_PATH / "PRODUÇÃO DIA.xlsx")
     else:
         producao_bruta_path = INPUT_PATH / "PRODUÇÃO DIA.xlsx"
     excel_path = Path(producao_bruta_path)
     df_prod = pd.read_excel(excel_path, sheet_name=SHEET_NAME, skiprows=1)
+    df_prod["Data Trans"] = pd.to_datetime(df_prod["Data Trans"], errors="coerce")
 
-    df_prod["week"] = extract_week(df_prod, "Data Trans")
-    df_prod["year"] = extract_year(df_prod, "Data Trans")
-    df_prod["year_week"] = df_prod["year"].astype(str) + "-" + df_prod["week"].astype(str).str.zfill(2)
+    # Determinar granularidade
+    granularidade = config.get("modelo", {}).get("granularidade_demanda", "S").upper() if config else "S"
 
-    target_year_week = year_week or sorted(df_prod["year_week"].unique())[-1]
-    df_prod = df_prod[df_prod["year_week"] == target_year_week].copy()
-    if df_prod.empty:
-        raise ValueError(f"Nao encontrei registros para a semana {target_year_week} em {excel_path}")
+    if granularidade == "D":
+        # Diário: filtrar por data_ref
+        data_ref = config.get("dados", {}).get("data_ref") if config else None
+        if not data_ref:
+            raise ValueError("Para granularidade diária (D), é necessário definir 'data_ref' em dados no config.yaml")
+        data_ref = pd.to_datetime(data_ref)
+        df_prod = df_prod[df_prod["Data Trans"].dt.date == data_ref.date()].copy()
+        periodo_label = data_ref.strftime("%Y-%m-%d")
+        data_producao = data_ref
+        if df_prod.empty:
+            raise ValueError(f"Nao encontrei registros para o dia {periodo_label} em {excel_path}")
+
+    elif granularidade == "M":
+        # Mensal: filtrar por mês de data_ref
+        data_ref = config.get("dados", {}).get("data_ref") if config else None
+        if not data_ref:
+            raise ValueError("Para granularidade mensal (M), é necessário definir 'data_ref' em dados no config.yaml")
+        data_ref = pd.to_datetime(data_ref)
+        df_prod = df_prod[
+            (df_prod["Data Trans"].dt.year == data_ref.year) &
+            (df_prod["Data Trans"].dt.month == data_ref.month)
+        ].copy()
+        periodo_label = data_ref.strftime("%Y-%m")
+        data_producao = data_ref.replace(day=1)
+        if df_prod.empty:
+            raise ValueError(f"Nao encontrei registros para o mês {periodo_label} em {excel_path}")
+
+    else:
+        # Semanal (padrão): filtrar por semana ISO
+        df_prod["week"] = extract_week(df_prod, "Data Trans")
+        df_prod["year"] = extract_year(df_prod, "Data Trans")
+        df_prod["year_week"] = df_prod["year"].astype(str) + "-" + df_prod["week"].astype(str).str.zfill(2)
+        target_year_week = year_week or sorted(df_prod["year_week"].unique())[-1]
+        df_prod = df_prod[df_prod["year_week"] == target_year_week].copy()
+        periodo_label = target_year_week
+        data_producao = get_week_start_date(target_year_week)
+        if df_prod.empty:
+            raise ValueError(f"Nao encontrei registros para a semana {periodo_label} em {excel_path}")
 
     df_prod["embalagem"] = df_prod["Desc Item"].apply(extrair_embalagem_descricao)
     df_prod["qtd_embalagem"] = df_prod["embalagem"].apply(calcular_qtd_embalagem)
@@ -466,7 +506,7 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
     ].copy()
     df_prod["item"] = df_prod["item"].astype(int)
     df_prod["item_id"] = df_prod["item"].astype(str) + "_" + df_prod["embalagem"]
-    df_prod["data_producao"] = df_prod["year_week"].apply(get_week_start_date)
+    df_prod["data_producao"] = data_producao
 
     # Anexar classe do SKU
     if config:
@@ -487,10 +527,10 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
         .sum()
         .rename(columns={"quantidade": "quantidade_produzida"})
     )
-    prod_agg["year_week"] = target_year_week
-    prod_agg["data_producao"] = get_week_start_date(target_year_week)
+    prod_agg["periodo_label"] = periodo_label
+    prod_agg["data_producao"] = data_producao
 
-    return prod_agg, target_year_week
+    return prod_agg, periodo_label
 
 
 def carregar_alocacao(arquivo_resultado: Optional[str], sep: str = ",", decimal: str = ".") -> Tuple[pd.DataFrame, Path]:
@@ -534,7 +574,7 @@ def carregar_alocacao(arquivo_resultado: Optional[str], sep: str = ",", decimal:
     return aloc_agg, csv_path
 
 
-def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, year_week: str, config: Optional[Dict] = None) -> pd.DataFrame:
+def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, periodo_label: str, config: Optional[Dict] = None) -> pd.DataFrame:
     """Combine producao and alocacao by item_id to compare volumes."""
     comparacao = producao.merge(
         alocacao,
@@ -553,8 +593,14 @@ def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, year_we
         axis=1,
     )
 
-    comparacao["year_week"] = year_week
-    comparacao["data_producao"] = comparacao["data_producao"].fillna(get_week_start_date(year_week))
+    comparacao["periodo_label"] = periodo_label
+    if "data_producao" not in comparacao.columns or comparacao["data_producao"].isna().any():
+        # Preencher data_producao a partir do periodo_label da produção
+        if "data_producao" in producao.columns:
+            data_fill = producao["data_producao"].iloc[0] if len(producao) > 0 else pd.NaT
+        else:
+            data_fill = pd.NaT
+        comparacao["data_producao"] = comparacao["data_producao"].fillna(data_fill)
     
     # Adicionar descrição dos itens
     comparacao = _adicionar_descricao(comparacao, config)
@@ -710,7 +756,7 @@ def main():
     year_week = args.year_week or None
 
     config = _carregar_config()
-    producao, year_week = carregar_producao(year_week, config)
+    producao, periodo_label = carregar_producao(year_week, config)
     alocacao, caminho_resultado = carregar_alocacao(args.resultado, sep=args.sep, decimal=args.decimal)
     precos = _carregar_precos(config)
     custos = _carregar_custos(config)
@@ -764,7 +810,7 @@ def main():
     # Carregar demanda histórica completa (todos os SKUs com limite) do Excel demanda_historica_*.xlsx
     df_demanda_historica, df_param_demanda = _carregar_demanda_historica_completa(None)
 
-    comparacao = construir_comparacao(producao, alocacao, year_week, config)
+    comparacao = construir_comparacao(producao, alocacao, periodo_label, config)
     
     # PRIMEIRO: Tentar usar preços e custos do arquivo de resultado do modelo (mais completo)
     # Isso garante que item_ids com alocação tenham preços/custos mesmo que não estejam nos arquivos externos
@@ -1042,8 +1088,8 @@ def main():
                     'descricao': None,  # Será preenchido depois
                     'embalagem': None,
                     'classe': classe,
-                    'year_week': year_week,
-                    'data_producao': get_week_start_date(year_week),
+                    'periodo_label': periodo_label,
+                    'data_producao': producao['data_producao'].iloc[0] if len(producao) > 0 else pd.NaT,
                     'quantidade_produzida': 0,
                     'quantidade_alocada': 0,
                     'diferenca_aloc_menos_prod': 0,
@@ -1297,8 +1343,8 @@ def main():
         print(f"  Outros motivos: {len(pedidos_ignorados) - skus_sem_producao}")
 
     RESULTS_DIR.mkdir(exist_ok=True)
-    output_path_csv = RESULTS_DIR / f"comparacao_producao_alocacao_{year_week}.csv"
-    output_path_xlsx = RESULTS_DIR / f"comparacao_producao_alocacao_{year_week}.xlsx"
+    output_path_csv = RESULTS_DIR / f"comparacao_producao_alocacao_{periodo_label}.csv"
+    output_path_xlsx = RESULTS_DIR / f"comparacao_producao_alocacao_{periodo_label}.xlsx"
     
     # Reordenar colunas por categoria lógica para facilitar leitura
     # 1. Identificação | 2. Período | 3. Quantidades | 4. Financeiro unitário
@@ -1307,7 +1353,7 @@ def main():
         # === IDENTIFICAÇÃO ===
         'item_id', 'item', 'descricao', 'embalagem', 'classe',
         # === PERÍODO ===
-        'year_week', 'data_producao',
+        'periodo_label', 'data_producao',
         # === QUANTIDADES ===
         'quantidade_produzida', 'quantidade_alocada', 'quantidade_reservada', 'diferenca_aloc_menos_prod', 'diferenca_absoluta',
         # === FINANCEIRO UNITÁRIO ===
@@ -1456,8 +1502,8 @@ def main():
                     'quantidade_produzida': 0.0,
                     'quantidade_alocada': 0.0,
                     'quantidade_reservada': 0.0,
-                    'year_week': year_week,
-                    'data_producao': get_week_start_date(year_week),
+                    'periodo_label': periodo_label,
+                    'data_producao': producao['data_producao'].iloc[0] if len(producao) > 0 else pd.NaT,
                     'diferenca_aloc_menos_prod': 0.0,
                     'diferenca_absoluta': 0.0,
                     'preco': preco,
@@ -1537,8 +1583,8 @@ def main():
     if len(pedidos_ignorados) > 0:
         df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
         df_pedidos_ignorados = df_pedidos_ignorados.sort_values('quantidade_total_pedida', ascending=False)
-        output_pedidos_ignorados_csv = RESULTS_DIR / f"pedidos_ignorados_{year_week}.csv"
-        output_pedidos_ignorados_xlsx = RESULTS_DIR / f"pedidos_ignorados_{year_week}.xlsx"
+        output_pedidos_ignorados_csv = RESULTS_DIR / f"pedidos_ignorados_{periodo_label}.csv"
+        output_pedidos_ignorados_xlsx = RESULTS_DIR / f"pedidos_ignorados_{periodo_label}.xlsx"
         df_pedidos_ignorados.to_csv(output_pedidos_ignorados_csv, index=False, encoding="utf-8")
         try:
             df_pedidos_ignorados.to_excel(output_pedidos_ignorados_xlsx, index=False, engine='openpyxl')
@@ -1546,7 +1592,9 @@ def main():
             pass
 
     print("\n[OK] Comparacao concluida")
-    print(f"  Semana: {year_week}")
+    granularidade = config.get("modelo", {}).get("granularidade_demanda", "S").upper() if config else "S"
+    gran_desc = {"D": "Dia", "S": "Semana", "M": "Mês"}.get(granularidade, "Semana")
+    print(f"  {gran_desc}: {periodo_label}")
     print(f"  Producao total: {producao['quantidade_produzida'].sum():,.0f} unidades")
     print(f"  Alocacao total: {alocacao['quantidade_alocada'].sum():,.0f} unidades")
     if config:

@@ -85,6 +85,13 @@ def calcular_comparativo_baseline(
     custo_baseline = 0.0
     auditoria_classes = []  # Dados de auditoria por classe/SKU
     
+    # Calcular volume reservado (pedidos) por classe a partir do resultado
+    reserva_por_classe = {}
+    if 'tipo' in resultado.columns and 'classe' in resultado.columns:
+        df_reserva = resultado[resultado['tipo'] == 'reserva']
+        if len(df_reserva) > 0:
+            reserva_por_classe = df_reserva.groupby('classe')['quantidade'].sum().to_dict()
+    
     for classe in producao_por_classe.index:
         # Com demanda histórica: baseline = mesmo volume alocado (distribuição uniforme)
         # Sem demanda histórica: baseline = produção total da classe
@@ -153,6 +160,8 @@ def calcular_comparativo_baseline(
                 'custo_ytd': row_base['custo_ytd'],
                 'margem_unitaria': row_base['margem_unitaria'],
                 'margem_por_ovo': row_base['margem_por_ovo'],
+                'producao_total_classe': float(producao_por_classe[classe]),
+                'reserva_pedidos_classe': reserva_por_classe.get(classe, 0),
                 'limite_demanda_historica': row_base.get('limite_demanda_historica', None),
                 'volume_historico_total': row_base.get('volume_historico_total', 0),
                 'proporcao_historica': row_base['proporcao_historica'],
@@ -225,6 +234,7 @@ def _gerar_auditoria_baseline(
     df_detalhe = df_audit[[
         'classe', 'item_id', 'item', 'descricao', 'embalagem',
         'qtd_ovos_por_caixa', 'preco', 'custo_ytd', 'margem_unitaria', 'margem_por_ovo',
+        'producao_total_classe', 'reserva_pedidos_classe',
         'limite_demanda_historica', 'volume_historico_total', 'proporcao_historica',
         'volume_classe',
         'volume_baseline', 'margem_baseline',

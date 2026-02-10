@@ -63,22 +63,51 @@ def main():
     col_qtd = 'QUANTIDADE CORRIGIDA'
     
     # Converter data
-    # df_prod[col_data] = pd.to_datetime(df_prod[col_data], errors='coerce')
-    df_prod['week'] = extract_week(df_prod, col_data)
-    df_prod['year'] = extract_year(df_prod, col_data)
-    df_prod['year_week'] = df_prod['year'].astype(str) + '-' + df_prod['week'].astype(str).str.zfill(2)
+    df_prod[col_data] = pd.to_datetime(df_prod[col_data], errors='coerce')
     
-    # Filtrar por data (assumir que tudo esta disponivel para venda)
-    semana_ref = config['dados']['semana_ref']  # Usar semana escolhida pelo usuário para filtrar produção
-        
+    # Calcular embalagem e quantidade em ovos
     df_prod['embalagem'] = df_prod["Desc Item"].apply(extrair_embalagem_descricao)
     df_prod['qtd_embalagem'] = df_prod['embalagem'].apply(calcular_qtd_embalagem)
     df_prod['quantidade'] = df_prod[col_qtd] * df_prod['qtd_embalagem']
-    df_prod['monday_date'] = df_prod['year_week'].apply(get_week_start_date)
-
-    df_filtrado = df_prod[
-        (df_prod['year_week'] == semana_ref)
-    ].copy().reset_index(drop=True)
+    
+    # Filtrar por período conforme granularidade
+    granularidade = config.get('modelo', {}).get('granularidade_demanda', 'S').upper()
+    
+    if granularidade == 'D':
+        # Diário: filtrar por data específica
+        data_ref = config['dados'].get('data_ref')
+        if not data_ref:
+            raise ValueError("Para granularidade diária (D), é necessário definir 'data_ref' em dados no config.yaml")
+        data_ref = pd.to_datetime(data_ref)
+        df_filtrado = df_prod[df_prod[col_data].dt.date == data_ref.date()].copy().reset_index(drop=True)
+        periodo_desc = f"dia {data_ref.strftime('%Y-%m-%d')}"
+        data_producao = data_ref
+        
+    elif granularidade == 'M':
+        # Mensal: filtrar por mês da data de referência
+        data_ref = config['dados'].get('data_ref')
+        if not data_ref:
+            raise ValueError("Para granularidade mensal (M), é necessário definir 'data_ref' em dados no config.yaml")
+        data_ref = pd.to_datetime(data_ref)
+        df_filtrado = df_prod[
+            (df_prod[col_data].dt.year == data_ref.year) &
+            (df_prod[col_data].dt.month == data_ref.month)
+        ].copy().reset_index(drop=True)
+        periodo_desc = f"mês {data_ref.strftime('%Y-%m')}"
+        data_producao = data_ref.replace(day=1)
+        
+    else:
+        # Semanal (padrão): filtrar por semana ISO
+        semana_ref = config['dados']['semana_ref']
+        df_prod['week'] = extract_week(df_prod, col_data)
+        df_prod['year'] = extract_year(df_prod, col_data)
+        df_prod['year_week'] = df_prod['year'].astype(str) + '-' + df_prod['week'].astype(str).str.zfill(2)
+        df_filtrado = df_prod[df_prod['year_week'] == semana_ref].copy().reset_index(drop=True)
+        periodo_desc = f"semana {semana_ref}"
+        data_producao = get_week_start_date(semana_ref)
+    
+    print(f"  Granularidade: {granularidade} ({periodo_desc})")
+    print(f"  Registros no período: {len(df_filtrado)}")
 
     # Agregar por item
     df_estoque_agg = df_filtrado.groupby(col_item).agg({
@@ -131,7 +160,7 @@ def main():
         print(f"    {row['Classe_Produto']}: {row['quantidade']:,.0f} unidades")
     
     # 4. Adicionar data de producao
-    df_producao['data_producao'] = df_filtrado['monday_date'].iloc[0]
+    df_producao['data_producao'] = data_producao
     
     # Reordenar colunas
     df_producao = df_producao[['Classe_Produto', 'quantidade', 'data_producao']]
