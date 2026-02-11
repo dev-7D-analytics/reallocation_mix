@@ -130,6 +130,96 @@ def calcular_comparativo_baseline(
         # Calcular volume baseline por SKU (proporcional ao histórico)
         item_ids_classe['volume_baseline'] = qtd_producao * item_ids_classe['proporcao_historica']
         
+        # Guardar volume antes do cap para auditoria
+        item_ids_classe['volume_baseline_antes_cap'] = item_ids_classe['volume_baseline'].copy()
+        
+        # Cap do volume_baseline ao limite_demanda_historica (mesma restrição do otimizador)
+        # O otimizador aplica: Σ embalagens_do_item ≤ limite_demanda_historica
+        # O baseline deve respeitar a mesma restrição para comparação justa
+        if 'limite_demanda_historica' in item_ids_classe.columns:
+            volume_excedente_total = 0.0
+            itens_capados = set()
+            
+            # 1) Identificar itens que excedem o limite e capar
+            for item_val in item_ids_classe['item'].unique():
+                mask_item = item_ids_classe['item'] == item_val
+                rows_item = item_ids_classe.loc[mask_item]
+                limite = rows_item['limite_demanda_historica'].iloc[0]
+                
+                if pd.notna(limite) and limite > 0:
+                    vol_total_item = rows_item['volume_baseline'].sum()
+                    if vol_total_item > limite:
+                        # Escalar proporcionalmente para respeitar o limite
+                        fator_reducao = limite / vol_total_item
+                        excedente = vol_total_item - limite
+                        volume_excedente_total += excedente
+                        item_ids_classe.loc[mask_item, 'volume_baseline'] *= fator_reducao
+                        itens_capados.add(item_val)
+            
+            # 2) Redistribuir excedente iterativamente entre itens com folga
+            max_iteracoes = 10
+            for _ in range(max_iteracoes):
+                if volume_excedente_total < 0.01:
+                    break
+                
+                # Calcular capacidade restante por item (não capados ou com folga)
+                capacidade_restante = {}
+                for item_val in item_ids_classe['item'].unique():
+                    mask_item = item_ids_classe['item'] == item_val
+                    rows_item = item_ids_classe.loc[mask_item]
+                    limite = rows_item['limite_demanda_historica'].iloc[0]
+                    
+                    if pd.notna(limite) and limite > 0:
+                        vol_atual = rows_item['volume_baseline'].sum()
+                        folga = limite - vol_atual
+                        if folga > 0.01:
+                            capacidade_restante[item_val] = folga
+                    # Itens sem limite de demanda podem absorver qualquer volume
+                    elif pd.isna(limite) or limite == 0:
+                        # Sem limite = capacidade "infinita", usa proporcao para distribuir
+                        prop = rows_item['proporcao_historica'].sum()
+                        if prop > 0:
+                            capacidade_restante[item_val] = volume_excedente_total * prop
+                
+                if not capacidade_restante:
+                    break  # Nenhum item pode absorver mais
+                
+                cap_total = sum(capacidade_restante.values())
+                volume_a_distribuir = min(volume_excedente_total, cap_total)
+                
+                novo_excedente = 0.0
+                for item_val, folga in capacidade_restante.items():
+                    proporcao_folga = folga / cap_total
+                    adicional = volume_a_distribuir * proporcao_folga
+                    mask_item = item_ids_classe['item'] == item_val
+                    rows_item = item_ids_classe.loc[mask_item]
+                    vol_item = rows_item['volume_baseline'].sum()
+                    
+                    if vol_item > 0:
+                        fator_aumento = (vol_item + adicional) / vol_item
+                        item_ids_classe.loc[mask_item, 'volume_baseline'] *= fator_aumento
+                    else:
+                        # Distribuir proporcional às embalagens do item
+                        n_embs = mask_item.sum()
+                        if n_embs > 0:
+                            item_ids_classe.loc[mask_item, 'volume_baseline'] += adicional / n_embs
+                    
+                    # Verificar se redistribuição causou novo excedente
+                    limite_item = rows_item['limite_demanda_historica'].iloc[0]
+                    if pd.notna(limite_item) and limite_item > 0:
+                        vol_novo = item_ids_classe.loc[mask_item, 'volume_baseline'].sum()
+                        if vol_novo > limite_item:
+                            novo_exc = vol_novo - limite_item
+                            fator_correcao = limite_item / vol_novo
+                            item_ids_classe.loc[mask_item, 'volume_baseline'] *= fator_correcao
+                            novo_excedente += novo_exc
+                
+                volume_excedente_total = novo_excedente + max(0, volume_excedente_total - volume_a_distribuir)
+            
+            if volume_excedente_total > 0.01:
+                logger.warning(f"  Classe {classe}: {volume_excedente_total:.0f} ovos de excedente "
+                             f"baseline não redistribuídos (todos os itens no limite)")
+        
         # Calcular margem e custo baseline por SKU
         item_ids_classe['margem_baseline_sku'] = item_ids_classe['volume_baseline'] * item_ids_classe['margem_por_ovo']
         item_ids_classe['custo_baseline_sku'] = item_ids_classe['volume_baseline'] * item_ids_classe['custo_por_ovo']
@@ -177,6 +267,11 @@ def calcular_comparativo_baseline(
                 'margem_por_ovo': row_base['margem_por_ovo'],
                 # Pedidos: reserva por SKU e por classe
                 'reserva_pedido_sku': reserva_sku,
+                'quantidade_pedida_sku': 0,
+                'deficit_pedido_sku': 0,
+                'ordem_prioridade': None,
+                'prod_disponivel_antes': None,
+                'prod_disponivel_depois': None,
                 'reserva_pedidos_classe': reserva_por_classe.get(classe, 0),
                 # Classe: produção e volume otimizável
                 'producao_total_classe': float(producao_por_classe[classe]),
@@ -187,7 +282,9 @@ def calcular_comparativo_baseline(
                 'soma_vol_hist_classe': soma_vol_hist,
                 # Proporção (reprodução: volume_historico_total / soma_vol_hist_classe)
                 'proporcao_historica': row_base['proporcao_historica'],
-                # Baseline (reprodução: volume_classe × proporcao_historica)
+                # Baseline antes do cap (volume_classe × proporcao_historica, sem restrição)
+                'volume_baseline_antes_cap': row_base['volume_baseline_antes_cap'],
+                # Baseline (após cap ao limite_demanda_historica + redistribuição)
                 'volume_baseline': row_base['volume_baseline'],
                 'receita_baseline': row_base['volume_baseline'] * preco_por_ovo,
                 'custo_baseline': row_base['custo_baseline_sku'],
@@ -206,6 +303,8 @@ def calcular_comparativo_baseline(
         for _, row_res in df_reserva_audit.iterrows():
             classe_res = row_res.get('classe', '')
             vol_reserva = float(row_res['quantidade']) if pd.notna(row_res['quantidade']) else 0
+            qtd_pedida = float(row_res['quantidade_pedida']) if pd.notna(row_res.get('quantidade_pedida')) else vol_reserva
+            deficit = float(row_res['deficit_pedido']) if pd.notna(row_res.get('deficit_pedido')) else 0
             preco_res = float(row_res['preco']) if pd.notna(row_res.get('preco')) else 0
             custo_res = float(row_res['custo_ytd']) if pd.notna(row_res.get('custo_ytd')) else 0
             qtd_ovos = float(row_res.get('qtd_ovos_por_caixa', 360)) if pd.notna(row_res.get('qtd_ovos_por_caixa')) else 360
@@ -213,6 +312,11 @@ def calcular_comparativo_baseline(
             preco_ovo = preco_res / qtd_ovos if qtd_ovos > 0 else 0
             custo_ovo = custo_res / qtd_ovos if qtd_ovos > 0 else 0
             margem_ovo = preco_ovo - custo_ovo
+            
+            # Rastreabilidade da heurística de priorização
+            ordem_prior = int(row_res['ordem_prioridade']) if pd.notna(row_res.get('ordem_prioridade')) else None
+            prod_antes = float(row_res['prod_disponivel_antes']) if pd.notna(row_res.get('prod_disponivel_antes')) else None
+            prod_depois = float(row_res['prod_disponivel_depois']) if pd.notna(row_res.get('prod_disponivel_depois')) else None
             
             auditoria_classes.append({
                 'classe': classe_res,
@@ -228,6 +332,11 @@ def calcular_comparativo_baseline(
                 'custo_por_ovo': custo_ovo,
                 'margem_por_ovo': margem_ovo,
                 'reserva_pedido_sku': vol_reserva,
+                'quantidade_pedida_sku': qtd_pedida,
+                'deficit_pedido_sku': deficit,
+                'ordem_prioridade': ordem_prior,
+                'prod_disponivel_antes': prod_antes,
+                'prod_disponivel_depois': prod_depois,
                 'reserva_pedidos_classe': reserva_por_classe.get(classe_res, 0),
                 'producao_total_classe': float(producao_por_classe[classe_res]) if classe_res in producao_por_classe.index else 0,
                 'volume_classe': 0,  # não participa da otimização
@@ -235,6 +344,7 @@ def calcular_comparativo_baseline(
                 'volume_historico_total': 0,
                 'soma_vol_hist_classe': 0,
                 'proporcao_historica': 0,
+                'volume_baseline_antes_cap': 0,
                 'volume_baseline': 0,
                 'receita_baseline': 0,
                 'custo_baseline': 0,
@@ -312,18 +422,30 @@ def _gerar_auditoria_baseline(
         'qtd_ovos_por_caixa', 'preco', 'custo_ytd', 'margem_unitaria',
         # Intermediários por ovo (preco/qtd, custo/qtd, margem/qtd)
         'preco_por_ovo', 'custo_por_ovo', 'margem_por_ovo',
-        # Pedidos: reserva por SKU e por classe
-        'reserva_pedido_sku', 'reserva_pedidos_classe',
+        # Pedidos: reserva por SKU, pedido original, déficit, priorização
+        'reserva_pedido_sku', 'quantidade_pedida_sku', 'deficit_pedido_sku',
+        'ordem_prioridade', 'prod_disponivel_antes', 'prod_disponivel_depois',
+        'reserva_pedidos_classe',
         # Classe: produção e volume otimizável
         'producao_total_classe', 'volume_classe',
         # Demanda e proporção histórica
         'limite_demanda_historica', 'volume_historico_total', 'soma_vol_hist_classe',
         'proporcao_historica',
-        # Baseline: volume, receita, custo, margem
-        'volume_baseline', 'receita_baseline', 'custo_baseline', 'margem_baseline',
+        # Baseline: volume antes do cap, volume final, receita, custo, margem
+        'volume_baseline_antes_cap', 'volume_baseline', 'receita_baseline', 'custo_baseline', 'margem_baseline',
         # Otimizado: volume, receita, custo, margem
         'volume_otimizado', 'receita_otimizada', 'custo_otimizado', 'margem_otimizada',
     ]].copy()
+    
+    # Coluna de redistribuição do cap (volume_baseline - volume_baseline_antes_cap)
+    df_detalhe['volume_redistribuido'] = df_detalhe['volume_baseline'] - df_detalhe['volume_baseline_antes_cap']
+    
+    # Status do cap baseline
+    df_detalhe['status_cap_baseline'] = 'SEM_ALTERACAO'
+    df_detalhe.loc[df_detalhe['volume_redistribuido'] < -0.5, 'status_cap_baseline'] = 'CAPADO'
+    df_detalhe.loc[df_detalhe['volume_redistribuido'] > 0.5, 'status_cap_baseline'] = 'RECEBEU_REDISTRIB'
+    # Reservas não participam do cap
+    df_detalhe.loc[df_detalhe['tipo_sku'] == 'reserva', 'status_cap_baseline'] = ''
     
     # Colunas de diferença (otimizado - baseline)
     df_detalhe['diferenca_volume'] = df_detalhe['volume_otimizado'] - df_detalhe['volume_baseline']
@@ -717,20 +839,54 @@ def main():
             and 'item' in df_pedidos_garantidos.columns
             and 'classe' in df_pedidos_garantidos.columns
         )
-        # Carregar descrições dos itens para enriquecer reservas
+        capar_reserva = config.get('modelo', {}).get('capar_reserva_na_producao', False)
+        
+        # Carregar descrições e preços/custos dos itens para enriquecer reservas
         desc_map = {}
+        preco_map = {}
+        custo_map = {}
         path_fat = Path(config.get('paths', {}).get('faturamento', 'inputs/manti_fat_2025_full.parquet'))
         if path_fat.exists():
             try:
-                df_desc_reserva = pd.read_parquet(path_fat, columns=['item', 'Descrição do item'])
-                df_desc_reserva = df_desc_reserva.drop_duplicates(subset=['item'])
-                df_desc_reserva['item'] = pd.to_numeric(df_desc_reserva['item'], errors='coerce')
-                df_desc_reserva = df_desc_reserva[df_desc_reserva['item'].notna()]
+                df_enrich = pd.read_parquet(path_fat, columns=['item', 'Descrição do item', 'Quantidade', 'Receita Liquida'])
+                df_enrich['item'] = pd.to_numeric(df_enrich['item'], errors='coerce')
+                df_enrich = df_enrich[df_enrich['item'].notna()]
+                # Descrições
+                df_desc_reserva = df_enrich.drop_duplicates(subset=['item'])
                 desc_map = dict(zip(df_desc_reserva['item'].astype(int), df_desc_reserva['Descrição do item']))
+                # Preços (média ponderada)
+                df_enrich['Quantidade'] = pd.to_numeric(df_enrich['Quantidade'], errors='coerce')
+                df_enrich['Receita Liquida'] = pd.to_numeric(df_enrich['Receita Liquida'], errors='coerce')
+                df_preco = df_enrich[(df_enrich['Quantidade'] > 0) & (df_enrich['Receita Liquida'] > 0)]
+                preco_agg = df_preco.groupby('item').agg(rec=('Receita Liquida', 'sum'), qtd=('Quantidade', 'sum'))
+                preco_agg['preco'] = preco_agg['rec'] / preco_agg['qtd']
+                preco_map = preco_agg['preco'].to_dict()
+                preco_map = {int(k): v for k, v in preco_map.items()}
             except Exception:
                 pass
-        colunas_base = list(resultado.resultado.columns)
-        linhas_reserva = []
+        # Custos (PRIC)
+        path_custos = Path(config.get('paths', {}).get('custos', 'inputs/MANTI-PRIC_Custos_12012026.parquet'))
+        if path_custos.exists():
+            try:
+                df_custo_res = pd.read_parquet(path_custos, columns=['item', 'Estab', 'Custo Médio', 'Quantidade'])
+                df_custo_res['item'] = pd.to_numeric(df_custo_res['item'], errors='coerce')
+                df_custo_res['Custo Médio'] = pd.to_numeric(df_custo_res['Custo Médio'], errors='coerce')
+                df_custo_res['Quantidade'] = pd.to_numeric(df_custo_res['Quantidade'], errors='coerce')
+                estab_custo = str(config.get('dados', {}).get('estab_custo', 100))
+                df_custo_res = df_custo_res[
+                    (df_custo_res['Estab'].astype(str) == estab_custo) &
+                    (df_custo_res['Quantidade'] > 0) &
+                    (df_custo_res['Custo Médio'].notna())
+                ]
+                custo_agg = df_custo_res.groupby('item').agg(ct=('Custo Médio', 'sum'), qt=('Quantidade', 'sum'))
+                custo_agg['custo'] = custo_agg['ct'] / custo_agg['qt']
+                custo_map = custo_agg['custo'].to_dict()
+                custo_map = {int(k): v for k, v in custo_map.items()}
+            except Exception:
+                pass
+        
+        # Montar lista de pedidos por SKU (com classe e margem)
+        pedidos_info = []
         for item, qtd in resultado_etl.pedidos_garantidos_por_sku.items():
             if int(item) in itens_na_base or qtd <= 0:
                 continue
@@ -739,17 +895,104 @@ def main():
                 classe = row_pg['classe'].iloc[0] if len(row_pg) > 0 else 'OUTROS'
             else:
                 classe = 'OUTROS'
-            linhas_reserva.append({
-                'item_id': f"{item}_RESERVA",
+            preco = preco_map.get(int(item), None)
+            custo = custo_map.get(int(item), None)
+            margem = (preco - custo) if (preco is not None and custo is not None) else None
+            pedidos_info.append({
                 'item': int(item),
-                'descricao': desc_map.get(int(item), None),
-                'embalagem': 'RESERVA',
                 'classe': classe,
-                'quantidade': float(qtd),
+                'quantidade_pedida': float(qtd),
+                'preco': preco,
+                'custo_ytd': custo,
+                'margem_unitaria': margem,
+            })
+        
+        # Aplicar heurística de priorização por margem quando pedidos > produção
+        if capar_reserva and pedidos_info:
+            # Agrupar pedidos por classe
+            pedidos_por_classe = {}
+            for p in pedidos_info:
+                pedidos_por_classe.setdefault(p['classe'], []).append(p)
+            
+            producao_classes = resultado_etl.producao_por_classe
+            
+            for classe, skus_classe in pedidos_por_classe.items():
+                producao = float(producao_classes.get(classe, 0)) if classe in producao_classes.index else 0
+                total_pedidos = sum(s['quantidade_pedida'] for s in skus_classe)
+                
+                if total_pedidos <= producao:
+                    # Caso normal: pedidos cabem na produção → reserva total
+                    # Ordenar por margem mesmo sem deficit, para manter rastreabilidade da ordem
+                    skus_classe.sort(
+                        key=lambda x: x['margem_unitaria'] if x['margem_unitaria'] is not None else -float('inf'),
+                        reverse=True
+                    )
+                    restante = producao
+                    for idx, s in enumerate(skus_classe, 1):
+                        s['quantidade_reservada'] = s['quantidade_pedida']
+                        s['deficit_pedido'] = 0.0
+                        s['ordem_prioridade'] = idx
+                        s['prod_disponivel_antes'] = restante
+                        restante -= s['quantidade_pedida']
+                        s['prod_disponivel_depois'] = restante
+                else:
+                    # Pedidos excedem produção → priorizar por margem
+                    # Ordenar por margem (desc); SKUs sem margem ficam por último
+                    skus_classe.sort(
+                        key=lambda x: x['margem_unitaria'] if x['margem_unitaria'] is not None else -float('inf'),
+                        reverse=True
+                    )
+                    restante = producao
+                    for idx, s in enumerate(skus_classe, 1):
+                        s['ordem_prioridade'] = idx
+                        s['prod_disponivel_antes'] = restante
+                        if restante >= s['quantidade_pedida']:
+                            s['quantidade_reservada'] = s['quantidade_pedida']
+                            s['deficit_pedido'] = 0.0
+                            restante -= s['quantidade_pedida']
+                        elif restante > 0:
+                            s['quantidade_reservada'] = restante
+                            s['deficit_pedido'] = s['quantidade_pedida'] - restante
+                            restante = 0
+                        else:
+                            s['quantidade_reservada'] = 0.0
+                            s['deficit_pedido'] = s['quantidade_pedida']
+                        s['prod_disponivel_depois'] = restante
+                    
+                    deficit_classe = total_pedidos - producao
+                    logger.info(f"  [DEFICIT] Classe {classe}: pedidos={total_pedidos:,.0f} > produção={producao:,.0f} (déficit={deficit_classe:,.0f})")
+                    for s in skus_classe:
+                        if s['deficit_pedido'] > 0:
+                            logger.info(f"    SKU {s['item']}: pedido={s['quantidade_pedida']:,.0f}, reservado={s['quantidade_reservada']:,.0f}, déficit={s['deficit_pedido']:,.0f}")
+        else:
+            # Sem cap: comportamento original (reserva = pedido total)
+            for p in pedidos_info:
+                p['quantidade_reservada'] = p['quantidade_pedida']
+                p['deficit_pedido'] = 0.0
+                p['ordem_prioridade'] = None
+                p['prod_disponivel_antes'] = None
+                p['prod_disponivel_depois'] = None
+        
+        # Gerar linhas de reserva
+        colunas_base = list(resultado.resultado.columns)
+        linhas_reserva = []
+        for p in pedidos_info:
+            linhas_reserva.append({
+                'item_id': f"{p['item']}_RESERVA",
+                'item': p['item'],
+                'descricao': desc_map.get(p['item'], None),
+                'embalagem': 'RESERVA',
+                'classe': p['classe'],
+                'quantidade': p['quantidade_reservada'],
+                'quantidade_pedida': p['quantidade_pedida'],
+                'deficit_pedido': p['deficit_pedido'],
+                'ordem_prioridade': p.get('ordem_prioridade'),
+                'prod_disponivel_antes': p.get('prod_disponivel_antes'),
+                'prod_disponivel_depois': p.get('prod_disponivel_depois'),
                 'quantidade_caixas': 0.0,
-                'preco': None,
-                'custo_ytd': None,
-                'margem_unitaria': None,
+                'preco': p['preco'],
+                'custo_ytd': p['custo_ytd'],
+                'margem_unitaria': p['margem_unitaria'],
                 'margem_por_ovo': None,
                 'receita_total': 0.0,
                 'custo_total': 0.0,
@@ -763,12 +1006,20 @@ def main():
             })
         if linhas_reserva:
             df_reserva = pd.DataFrame(linhas_reserva)
+            # Garantir que colunas do resultado base existam no df_reserva
             for c in colunas_base:
                 if c not in df_reserva.columns:
                     df_reserva[c] = None
-            df_reserva = df_reserva[colunas_base]
+            # Preservar colunas extras que não existem no resultado base
+            colunas_extras_reserva = ['quantidade_pedida', 'deficit_pedido', 'ordem_prioridade', 'prod_disponivel_antes', 'prod_disponivel_depois']
+            colunas_finais = colunas_base + [c for c in colunas_extras_reserva if c in df_reserva.columns and c not in colunas_base]
+            df_reserva = df_reserva[[c for c in colunas_finais if c in df_reserva.columns]]
             resultado.resultado = pd.concat([resultado.resultado, df_reserva], ignore_index=True)
+            n_deficit = sum(1 for p in pedidos_info if p['deficit_pedido'] > 0)
+            total_deficit = sum(p['deficit_pedido'] for p in pedidos_info)
             logger.info(f"  Incluídas {len(df_reserva)} linhas de volume reservado (SKUs com pedido fora da base de otimização)")
+            if n_deficit > 0:
+                logger.info(f"  [ALERTA] {n_deficit} SKUs com déficit de atendimento (total: {total_deficit:,.0f} ovos)")
     
     # Acrescentar linhas da classe OUTROS (não otimizada): aparecem no output com alocação 0
     base_outros = getattr(resultado_etl, 'base_outros', None)

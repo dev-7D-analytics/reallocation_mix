@@ -31,12 +31,13 @@ modelo:
   # Pedidos e produção
   atender_pedidos: true           # Reserva volume para pedidos garantidos antes de otimizar
   usar_apenas_excedente: true     # Otimiza apenas o excedente (produção - pedidos)
+  capar_reserva_na_producao: true  # Limita reserva à produção, priorizando SKUs de maior margem
   # Demanda histórica (restrição de alocação máxima por SKU)
   considerar_demanda_historica: true  # Ativa limite de alocação por SKU baseado no histórico
   tipo_calculo_demanda: media     # Tipo de cálculo: media | maximo | percentil
   fator_demanda_maxima: 1.2       # Multiplicador sobre a demanda calculada (1.2 = 120% da demanda)
   percentil_demanda: 95           # Percentil a usar (só quando tipo_calculo_demanda = percentil)
-  granularidade_demanda: D        # Granularidade: S(emanal) | M(ensal) | D(iário)
+  granularidade_demanda: S        # Granularidade: S(emanal) | M(ensal) | D(iário)
   # Função objetivo
   tipo_objetivo: maximizar_margem # Objetivo: maximizar_margem | minimizar_custos
   # Variáveis de decisão
