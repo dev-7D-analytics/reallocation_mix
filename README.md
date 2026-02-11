@@ -1,67 +1,134 @@
-# Modelo de Otimização com Realocação entre SKUs (canônico)
+# Modelo de Otimizacao de Mix - Realocacao entre SKUs
 
-Este diretório usa o modelo `modelo_otimizacao_com_realocacao.py` (OR-Tools) como fonte única de verdade. O estoque é informado por **produção agregada por classe**, e SKUs da mesma classe compartilham esse volume, permitindo realocar para quem tem maior margem.
+Modelo de programacao linear (OR-Tools) que maximiza a margem de contribuicao
+realocando volume de producao entre SKUs da mesma classe biologica de ovos.
 
 ## O que o modelo faz
-- Carrega produção por classe (`producao_classe.csv`), mapeia `item -> classe`, preços por `item_id` (SKU + embalagem) e custos por `item_id` (já inclui embalagem).
-- Opcional: pedidos por SKU (atende antes de otimizar excedente) e demanda histórica para limitar alocação.
-- Cria um modelo linear/misto que impõe capacidade por classe e escolhe alocação por `item_id` maximizando margem ou minimizando custo.
-- Exporta CSV/Excel com alocações, resumos e estatísticas.
 
-## Entradas esperadas (veja `config.yaml`)
-- `paths.producao`: CSV com `Classe_Produto, quantidade` (produção total por classe).
-- `paths.classes`: Excel com `item, Classe_Produto` (classe biológica).
-- `paths.pedidos` (opcional): CSV com `item, quantidade_pedida` (agrega por SKU).
-- `paths.precos`: CSV com `item, embalagem, preco` **ou** `item_id, preco`. `item_id` = `item` + `embalagem`.
-- `paths.custos`: CSV `CUSTO ITEM.csv` com código e embalagem na descrição; o modelo extrai `item`, `embalagem`, `custo_ytd` e monta `item_id`.
-- `paths.faturamento` (opcional): Parquet para demanda histórica.
-- Saídas em `paths.output_dir` (padrão `resultados/`).
+1. **Pre-processamento (ETL)**: carrega producao por classe, classificacao de SKUs, precos, custos, pedidos de clientes e demanda historica.
+2. **Otimizacao**: formula e resolve um modelo linear/misto que aloca volume por `item_id` (SKU + embalagem) maximizando margem, respeitando capacidade por classe e limites de demanda historica.
+3. **Pos-processamento**: compara resultado otimizado vs baseline (distribuicao proporcional ao historico), gera auditoria detalhada e relatorios.
 
-## Como rodar (rápido)
+## Arquitetura
+
+```
+realocacao-git/
+├── config.yaml                          # Configuracao central (parametros, paths)
+├── main.py                              # Orquestrador: ETL -> Otimizacao -> Output
+├── executar_pipeline.sh                 # Shell script para rodar pipeline completo
+├── requirements.txt                     # Dependencias Python
+│
+├── etl/
+│   ├── __init__.py
+│   └── pipeline.py                      # Pre-processamento: carrega e prepara dados
+│
+├── modelo/
+│   ├── __init__.py
+│   └── otimizador.py                    # Solver: formulacao e resolucao do modelo
+│
+├── output/
+│   ├── __init__.py
+│   ├── comparativo.py                   # Comparativo baseline vs otimizado + auditoria
+│   └── resultados.py                    # Salvamento de resultados (CSV/Excel)
+│
+├── gerar_pedidos_clientes.py            # Gera pedidos_clientes.csv
+├── gerar_producao_classe.py             # Gera producao_classe.csv
+├── comparar_producao_alocacao.py        # Relatorio: producao real vs alocacao do modelo
+├── extrair_compatibilidade_embalagem.py # Extrai compatibilidade SKU-embalagem do faturamento
+├── extrair_precos_embalagem.py          # Extrai precos por embalagem
+│
+├── docs/
+│   └── formulacao_modelo.tex            # Formulacao matematica (LaTeX)
+│
+├── inputs/                              # Bases de dados (nao versionadas)
+└── resultados/                          # Outputs gerados (nao versionados)
+```
+
+## Fluxo de dependencias
+
+Quando uma base de dados e atualizada, os scripts abaixo precisam ser re-executados
+na ordem indicada:
+
+```
+[Bases brutas]
+     │
+     ├─ manti_fat_*.parquet ──► extrair_compatibilidade_embalagem.py
+     │                              │
+     │                              ▼
+     │                          extrair_precos_embalagem.py ──► inputs/precos_sku_embalagem.csv
+     │                              │
+     ├─ manti_fat_*.parquet ──► gerar_pedidos_clientes.py ───► inputs/pedidos_clientes.csv
+     │   skus_restritos.xlsx        │
+     │   ESTAB CORRIGIDO.xlsx       │
+     │                              │
+     ├─ PRODUÇÃO DIA.xlsx ────► gerar_producao_classe.py ───► inputs/producao_classe.csv
+     │   base_skus_classes.xlsx     │
+     │                              │
+     └──────────────────────────► main.py (ETL + Otimização + Output)
+                                    │
+                                    ▼
+                                comparar_producao_alocacao.py (relatório final)
+```
+
+### Mapa de impacto: base atualizada -> scripts a re-executar
+
+| Base de dados atualizada | Scripts a re-executar (na ordem) |
+|---|---|
+| `manti_fat_*.parquet` (faturamento) | `extrair_compatibilidade_embalagem.py` -> `extrair_precos_embalagem.py` -> `gerar_pedidos_clientes.py` -> `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `PRODUCAO DIA.xlsx` (producao diaria) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `MANTI-PRIC_Custos_*.parquet` (custos) | `extrair_precos_embalagem.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `base_skus_classes.xlsx` (classificacao) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `skus_restritos.xlsx` (SKUs permitidos) | `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `ESTAB CORRIGIDO.xlsx` (estab. corrigido) | `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `config.yaml` (parametros) | `main.py` -> `comparar_producao_alocacao.py` (e geradores de input se janela/granularidade mudaram) |
+
+## Entradas esperadas (configuradas em `config.yaml`)
+
+| Parametro | Arquivo | Descricao |
+|---|---|---|
+| `paths.producao` | `inputs/producao_classe.csv` | Producao total por classe (gerado por `gerar_producao_classe.py`) |
+| `paths.classes` | `inputs/base_skus_classes.xlsx` | Mapeamento item -> classe biologica |
+| `paths.pedidos` | `inputs/pedidos_clientes.csv` | Pedidos por SKU (gerado por `gerar_pedidos_clientes.py`) |
+| `paths.precos` | `inputs/precos_sku_embalagem.csv` | Precos por item_id (gerado por `extrair_precos_embalagem.py`) |
+| `paths.custos` | `inputs/MANTI-PRIC_Custos_*.parquet` | Custos por item (PRIC) |
+| `paths.faturamento` | `inputs/manti_fat_*.parquet` | Faturamento historico (para demanda e enriquecimento) |
+| `paths.producao_bruta` | `inputs/PRODUCAO DIA.xlsx` | Producao diaria bruta (aba CE0302) |
+| `paths.skus_restritos` | `inputs/skus_restritos.xlsx` | Filtro de SKUs ativos/permitidos |
+| `paths.estab_corrigido` | `inputs/ESTAB CORRIGIDO.xlsx` | Correcao de estabelecimento |
+
+## Como rodar
+
 ```bash
-cd reallocation_mix
-python modelo_otimizacao_com_realocacao.py
-```
-Saídas: `resultados/resultados_realocacao_<modo>_<timestamp>.csv/.xlsx` e resumos por classe.
+# Pipeline completo (gera inputs + otimiza + relatorio)
+./executar_pipeline.sh
 
-## Configuração relevante (`config.yaml`)
-- Objetivo: `modelo.tipo_objetivo` = `maximizar_margem` (padrão) ou `minimizar_custos`.
-- Pedidos e excedente: `modelo.atender_pedidos` (True prioriza pedidos) e `modelo.usar_apenas_excedente` (ajustado automaticamente quando atende pedidos).
-- Demanda histórica: `modelo.considerar_demanda_historica`, `granularidade_demanda` (M/S/D), `tipo_calculo_demanda` (`percentil` ou `maximo`) e fatores.
-- Solver: `solver.solver_type`, `time_limit_ms`, `num_threads`.
-- Caminhos: por padrão apontam para OneDrive (ajuste para seu ambiente).
-
-## Modos suportados
-- **Atender pedidos**: cria variáveis `y_pedido_item`, atende até min(pedido, produção da classe); otimiza excedente com `x_item_id`.
-- **Ignorar pedidos**: otimiza todo o volume da classe.
-- **Maximizar margem**: objetivo = margem pedidos + margem excedente.
-- **Minimizar custos**: objetivo = custo pedidos + custo excedente com “recompensa” pequena para evitar solução zero.
-- **Demanda histórica (opcional)**: limita `x_item_id` pelo histórico do SKU.
-
-## Estrutura principal
-```
-modelo_otimizacao_com_realocacao.py   # Modelo canônico
-config.yaml                           # Caminhos e parâmetros
-testar_modos_operacao.py              # Compara atender vs ignorar pedidos
-testar_modo2.py                       # Rodar modo ignorar pedidos
-testar_maximo_historico.py            # Teste demanda histórica (máximo)
-testar_granularidade_mensal.py        # Teste demanda histórica (mensal)
-analisar_potencial_ganho.py           # Resumo rápido do resultado canônico
-gerar_producao_classe.py              # Agrega estoque histórico em produção por classe
-extrair_precos_embalagem.py           # Gera preços por (item, embalagem) do faturamento
-extrair_compatibilidade_embalagem.py  # LEGADO (compatibilidade histórica; não usado no canônico)
+# Ou passo a passo:
+python extrair_compatibilidade_embalagem.py
+python extrair_precos_embalagem.py
+python gerar_pedidos_clientes.py
+python gerar_producao_classe.py
+python main.py
+python comparar_producao_alocacao.py
 ```
 
-## Outputs
-- CSV detalhado: alocação por `item_id`, receitas/custos/margem, tipo (`PEDIDO`, `EXCEDENTE` ou `ESTOQUE_TOTAL`).
-- Excel: abas Detalhado, Resumo por Classe, Estatísticas.
-- Resumos adicionais: `analise_potencial_classe.csv`, `analise_potencial_item_id.csv` (via `analisar_potencial_ganho.py`).
+## Outputs gerados
 
-## Troubleshooting rápido
-- Sem solução: cheque se `producao_classe.csv` tem classes que aparecem em `base_skus_classes.xlsx` e se há preços/custos > 0 para os `item_id`.
-- Margem zero/baixa: confirme se há variação de margem dentro da classe; ajuste `tipo_objetivo` ou verifique dados de preço/custo.
-- Demanda histórica bloqueando: desative `modelo.considerar_demanda_historica` ou revise percentil/fatores.
+| Arquivo | Descricao |
+|---|---|
+| `resultado_realocacao_completo_*.csv` | Alocacao detalhada por item_id |
+| `resultado_realocacao_completo_*.xlsx` | Excel com abas: Detalhado, Resumo por Classe, Estatisticas, Pedidos Ignorados |
+| `auditoria_baseline_*.xlsx` | Auditoria: Detalhe por SKU, Resumo por Classe, Parametros |
+| `demanda_historica_*.xlsx` | Limites de demanda historica calculados |
+| `comparacao_producao_alocacao_*.xlsx` | Comparacao producao real vs alocacao do modelo |
 
-## Diferenciação vs modelos legados
-- Canônico: `modelo_otimizacao_com_realocacao.py` (produção por classe, realocação entre SKUs da classe, item_id inclui embalagem).
-- Legado mix diário: `modelo_otimizacao_mix_diario.py` (estoque diário por SKU e compatibilidade/embalagem) – manter apenas para histórico; use o canônico.
+## Configuracao relevante (`config.yaml`)
+
+- **Objetivo**: `modelo.tipo_objetivo` = `maximizar_margem` (padrao)
+- **Pedidos**: `modelo.atender_pedidos` (True prioriza pedidos garantidos)
+- **Cap de reserva**: `modelo.capar_reserva_na_producao` (True limita reservas a producao disponivel, priorizando por margem)
+- **Demanda historica**: `modelo.considerar_demanda_historica`, `granularidade_demanda` (M/S/D), `tipo_calculo_demanda` (`percentil`, `maximo`, `media`)
+- **Solver**: `solver.solver_type`, `time_limit_ms`, `num_threads`
+
+## Autor
+
+Romulo Brito
