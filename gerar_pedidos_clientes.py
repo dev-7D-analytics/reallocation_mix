@@ -4,6 +4,11 @@ Gera dataset de pedidos baseado na demanda histórica de SKUs GRANEL/Exportaçã
 Este script cria "pedidos" para SKUs que não entram na otimização direta,
 mas que precisam ter volume reservado baseado na demanda histórica.
 
+A granularidade dos pedidos é controlada pelo parâmetro 'granularidade_demanda' no config.yaml:
+  - D (diário): média diária por item
+  - S (semanal): média semanal por item (padrão)
+  - M (mensal): média mensal por item
+
 Fluxo:
 1. Carregar skus_restritos.xlsx e filtrar: ESTAB=100, STATUS=ATIVO, TIPO∈[GRANEL, Exportação, MARCA PROPRIA]
 2. Carregar base de faturamento
@@ -11,8 +16,8 @@ Fluxo:
 4. Filtrar Estab_Corrigido = 100
 5. Filtrar apenas SKUs da lista do passo 1
 6. Converter quantidade para ovos (× 360)
-7. Agregar por item + semana
-8. Calcular média semanal por item
+7. Agregar por item + período (dia/semana/mês conforme granularidade)
+8. Calcular média por período por item
 9. Gerar arquivo com: Estabelecimento, item, quantidade
 """
 import pandas as pd
@@ -142,17 +147,36 @@ def aplicar_correcao_estabelecimento(df_fat: pd.DataFrame, config: dict) -> pd.D
     return df_fat
 
 
-def calcular_media_semanal_por_item(df_fat: pd.DataFrame, lista_skus: list, config: dict) -> pd.DataFrame:
+def calcular_media_por_periodo(df_fat: pd.DataFrame, lista_skus: list, config: dict) -> pd.DataFrame:
     """
-    Calcula a média semanal histórica por item para os SKUs especificados.
+    Calcula a média histórica por período por item para os SKUs especificados.
+    
+    A granularidade é definida por 'granularidade_demanda' no config.yaml:
+      - D: média diária (to_period('D'))
+      - S: média semanal (to_period('W'))  [padrão]
+      - M: média mensal (to_period('M'))
     
     Passos:
     1. Filtrar Estab_Corrigido = 100
     2. Filtrar apenas SKUs da lista
     3. Converter quantidade para ovos (× 360)
-    4. Agregar por item + semana
-    5. Calcular média semanal por item
+    4. Agregar por item + período
+    5. Calcular média por período por item
     """
+    # Determinar granularidade
+    granularidade = config.get('modelo', {}).get('granularidade_demanda', 'S').upper()
+    mapa_periodo = {
+        'D': ('D', 'dia', 'diária'),
+        'S': ('W', 'semana', 'semanal'),
+        'M': ('M', 'mês', 'mensal'),
+    }
+    if granularidade not in mapa_periodo:
+        print(f"  [AVISO] Granularidade '{granularidade}' não reconhecida, usando S (semanal)")
+        granularidade = 'S'
+    
+    freq_pandas, unidade, label_gran = mapa_periodo[granularidade]
+    print(f"  Granularidade: {granularidade} ({label_gran})")
+    
     # Detectar colunas
     col_item = 'item' if 'item' in df_fat.columns else None
     col_qtd = 'Quantidade' if 'Quantidade' in df_fat.columns else None
@@ -180,7 +204,7 @@ def calcular_media_semanal_por_item(df_fat: pd.DataFrame, lista_skus: list, conf
     # A base está normalizada para caixas de 360 ovos
     df['quantidade_ovos'] = df[col_qtd] * 360
     
-    # Converter data e criar período semanal
+    # Converter data e criar período
     df[col_data] = pd.to_datetime(df[col_data], errors='coerce')
     df = df[df[col_data].notna()]
     
@@ -191,27 +215,40 @@ def calcular_media_semanal_por_item(df_fat: pd.DataFrame, lista_skus: list, conf
     df = df[df[col_data] >= data_min]
     print(f"  Período considerado: {data_min.strftime('%Y-%m-%d')} a {data_max.strftime('%Y-%m-%d')}")
     
-    # Criar coluna de semana
-    df['semana'] = df[col_data].dt.to_period('W')
+    # Criar coluna de período conforme granularidade
+    df['periodo'] = df[col_data].dt.to_period(freq_pandas)
     
-    # Agregar por item + semana
-    df_semanal = df.groupby([col_item, 'semana'])['quantidade_ovos'].sum().reset_index()
-    df_semanal.columns = ['item', 'semana', 'quantidade_semanal']
+    # Calcular número TOTAL de períodos no intervalo (incluindo zeros)
+    # Isso garante que a média reflete o volume esperado por período,
+    # mesmo quando não há venda em todos os períodos
+    periodo_min = data_min.to_period(freq_pandas) if hasattr(data_min, 'to_period') else pd.Timestamp(data_min).to_period(freq_pandas)
+    periodo_max = data_max.to_period(freq_pandas) if hasattr(data_max, 'to_period') else pd.Timestamp(data_max).to_period(freq_pandas)
+    todos_periodos = pd.period_range(start=periodo_min, end=periodo_max, freq=freq_pandas)
+    num_total_periodos = len(todos_periodos)
+    num_periodos_com_venda = df['periodo'].nunique()
+    print(f"  Períodos no intervalo: {num_total_periodos} {unidade}(s) (com venda: {num_periodos_com_venda})")
     
-    # Calcular média semanal por item
-    df_media = df_semanal.groupby('item')['quantidade_semanal'].mean().reset_index()
-    df_media.columns = ['item', 'quantidade']
+    # Agregar volume total por item (soma de todo o período)
+    df_total = df.groupby(col_item)['quantidade_ovos'].sum().reset_index()
+    df_total.columns = ['item', 'quantidade_total']
+    
+    # Calcular média REAL: volume total / número total de períodos
+    # Inclui períodos sem venda como zero, evitando inflar a média
+    df_total['quantidade'] = df_total['quantidade_total'] / num_total_periodos
     
     # Arredondar para inteiro
-    df_media['quantidade'] = df_media['quantidade'].round().astype(int)
+    df_total['quantidade'] = df_total['quantidade'].round().astype(int)
     
     # Remover itens com quantidade muito baixa
-    df_media = df_media[df_media['quantidade'] > 0]
+    df_total = df_total[df_total['quantidade'] > 0]
+    
+    # Resultado final: item, quantidade
+    df_media = df_total[['item', 'quantidade']].copy()
     
     print(f"  SKUs com demanda histórica: {len(df_media)}")
-    print(f"  Média de quantidade por SKU: {df_media['quantidade'].mean():,.0f} ovos/semana")
+    print(f"  Média de quantidade por SKU: {df_media['quantidade'].mean():,.0f} ovos/{unidade}")
     
-    return df_media
+    return df_media, granularidade
 
 
 def main():
@@ -221,6 +258,12 @@ def main():
     
     # Carregar configuração
     config = carregar_config()
+    
+    # Exibir granularidade configurada
+    granularidade_cfg = config.get('modelo', {}).get('granularidade_demanda', 'S').upper()
+    labels = {'D': 'DIÁRIA', 'S': 'SEMANAL', 'M': 'MENSAL'}
+    unidades = {'D': 'dia', 'S': 'semana', 'M': 'mês'}
+    print(f"\n  Granularidade configurada: {granularidade_cfg} ({labels.get(granularidade_cfg, '?')})")
     
     # Caminhos
     path_fat = Path(config.get('paths', {}).get('faturamento', 'inputs/manti_fat_2025_full.parquet'))
@@ -259,14 +302,23 @@ def main():
     df_fat = aplicar_correcao_estabelecimento(df_fat, config)
     
     # =========================================================================
-    # PASSO 4: Calcular média semanal por item
+    # PASSO 4: Calcular média por período por item
     # =========================================================================
-    print("\n[4/4] Calculando média semanal histórica por SKU...")
-    df_pedidos = calcular_media_semanal_por_item(df_fat, lista_skus, config)
+    label_gran = labels.get(granularidade_cfg, 'SEMANAL')
+    print(f"\n[4/4] Calculando média {label_gran.lower()} histórica por SKU...")
+    resultado = calcular_media_por_periodo(df_fat, lista_skus, config)
+    
+    if resultado is None:
+        print("[AVISO] Nenhum pedido gerado")
+        return
+    
+    df_pedidos, granularidade_usada = resultado
     
     if len(df_pedidos) == 0:
         print("[AVISO] Nenhum pedido gerado")
         return
+    
+    unidade = unidades.get(granularidade_usada, 'semana')
     
     # Adicionar coluna de estabelecimento
     df_pedidos.insert(0, 'Estabelecimento', 100)
@@ -282,14 +334,14 @@ def main():
     df_pedidos.to_csv(output_path, index=False, encoding='utf-8')
     
     print("\n" + "="*80)
-    print("RESULTADO")
+    print(f"RESULTADO (granularidade: {label_gran})")
     print("="*80)
     print(f"\n[OK] Arquivo gerado: {output_path}")
     print(f"  Total de SKUs com pedido: {len(df_pedidos)}")
-    print(f"  Quantidade total: {df_pedidos['quantidade'].sum():,.0f} ovos")
-    print(f"  Média por SKU: {df_pedidos['quantidade'].mean():,.0f} ovos")
-    print(f"  Mínimo: {df_pedidos['quantidade'].min():,.0f} ovos")
-    print(f"  Máximo: {df_pedidos['quantidade'].max():,.0f} ovos")
+    print(f"  Quantidade total: {df_pedidos['quantidade'].sum():,.0f} ovos/{unidade}")
+    print(f"  Média por SKU: {df_pedidos['quantidade'].mean():,.0f} ovos/{unidade}")
+    print(f"  Mínimo: {df_pedidos['quantidade'].min():,.0f} ovos/{unidade}")
+    print(f"  Máximo: {df_pedidos['quantidade'].max():,.0f} ovos/{unidade}")
     
     # Mostrar os pedidos gerados
     print("\n" + "-"*80)

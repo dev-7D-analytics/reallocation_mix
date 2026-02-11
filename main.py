@@ -85,12 +85,14 @@ def calcular_comparativo_baseline(
     custo_baseline = 0.0
     auditoria_classes = []  # Dados de auditoria por classe/SKU
     
-    # Calcular volume reservado (pedidos) por classe a partir do resultado
+    # Calcular volume reservado (pedidos) por classe e por SKU a partir do resultado
     reserva_por_classe = {}
+    reserva_por_sku = {}
     if 'tipo' in resultado.columns and 'classe' in resultado.columns:
         df_reserva = resultado[resultado['tipo'] == 'reserva']
         if len(df_reserva) > 0:
             reserva_por_classe = df_reserva.groupby('classe')['quantidade'].sum().to_dict()
+            reserva_por_sku = df_reserva.groupby('item_id')['quantidade'].sum().to_dict()
     
     for classe in producao_por_classe.index:
         # Com demanda histórica: baseline = mesmo volume alocado (distribuição uniforme)
@@ -148,6 +150,16 @@ def calcular_comparativo_baseline(
             row_otim = resultado.loc[mask_otim]
             vol_otim = float(row_otim['quantidade'].sum()) if len(row_otim) > 0 else 0.0
             margem_otim_sku = float(row_otim['margem_total'].sum()) if len(row_otim) > 0 else 0.0
+            receita_otim_sku = float(row_otim['receita_total'].sum()) if len(row_otim) > 0 and 'receita_total' in row_otim.columns else 0.0
+            custo_otim_sku = float(row_otim['custo_total'].sum()) if len(row_otim) > 0 and 'custo_total' in row_otim.columns else 0.0
+            
+            # Buscar volume reservado (pedido) para este SKU específico
+            reserva_sku = reserva_por_sku.get(item_id, 0)
+            
+            # Intermediários para reprodução
+            preco_por_ovo = row_base['preco'] / row_base['qtd_ovos_por_caixa']
+            custo_por_ovo = row_base['custo_ytd'] / row_base['qtd_ovos_por_caixa'] if 'custo_ytd' in row_base and row_base['qtd_ovos_por_caixa'] > 0 else 0
+            soma_vol_hist = float(total_vol_hist) if total_vol_hist > 0 else 0
             
             auditoria_classes.append({
                 'classe': classe,
@@ -159,17 +171,79 @@ def calcular_comparativo_baseline(
                 'preco': row_base['preco'],
                 'custo_ytd': row_base['custo_ytd'],
                 'margem_unitaria': row_base['margem_unitaria'],
+                # Intermediários por ovo (reprodução: margem_unitaria / qtd_ovos_por_caixa)
+                'preco_por_ovo': preco_por_ovo,
+                'custo_por_ovo': custo_por_ovo,
                 'margem_por_ovo': row_base['margem_por_ovo'],
-                'producao_total_classe': float(producao_por_classe[classe]),
+                # Pedidos: reserva por SKU e por classe
+                'reserva_pedido_sku': reserva_sku,
                 'reserva_pedidos_classe': reserva_por_classe.get(classe, 0),
+                # Classe: produção e volume otimizável
+                'producao_total_classe': float(producao_por_classe[classe]),
+                'volume_classe': qtd_producao,
+                # Demanda histórica
                 'limite_demanda_historica': row_base.get('limite_demanda_historica', None),
                 'volume_historico_total': row_base.get('volume_historico_total', 0),
+                'soma_vol_hist_classe': soma_vol_hist,
+                # Proporção (reprodução: volume_historico_total / soma_vol_hist_classe)
                 'proporcao_historica': row_base['proporcao_historica'],
-                'volume_classe': qtd_producao,
+                # Baseline (reprodução: volume_classe × proporcao_historica)
                 'volume_baseline': row_base['volume_baseline'],
+                'receita_baseline': row_base['volume_baseline'] * preco_por_ovo,
+                'custo_baseline': row_base['custo_baseline_sku'],
                 'margem_baseline': row_base['margem_baseline_sku'],
+                # Otimizado (do resultado do solver)
                 'volume_otimizado': vol_otim,
+                'receita_otimizada': receita_otim_sku,
+                'custo_otimizado': custo_otim_sku,
                 'margem_otimizada': margem_otim_sku,
+                'tipo_sku': 'otimizacao',
+            })
+    
+    # Incluir SKUs de reserva (pedidos) na auditoria
+    if 'tipo' in resultado.columns:
+        df_reserva_audit = resultado[resultado['tipo'] == 'reserva'].copy()
+        for _, row_res in df_reserva_audit.iterrows():
+            classe_res = row_res.get('classe', '')
+            vol_reserva = float(row_res['quantidade']) if pd.notna(row_res['quantidade']) else 0
+            preco_res = float(row_res['preco']) if pd.notna(row_res.get('preco')) else 0
+            custo_res = float(row_res['custo_ytd']) if pd.notna(row_res.get('custo_ytd')) else 0
+            qtd_ovos = float(row_res.get('qtd_ovos_por_caixa', 360)) if pd.notna(row_res.get('qtd_ovos_por_caixa')) else 360
+            margem_unit = float(row_res.get('margem_unitaria', 0)) if pd.notna(row_res.get('margem_unitaria')) else 0
+            preco_ovo = preco_res / qtd_ovos if qtd_ovos > 0 else 0
+            custo_ovo = custo_res / qtd_ovos if qtd_ovos > 0 else 0
+            margem_ovo = preco_ovo - custo_ovo
+            
+            auditoria_classes.append({
+                'classe': classe_res,
+                'item_id': str(row_res.get('item', '')),
+                'item': int(row_res['item']) if pd.notna(row_res.get('item')) else 0,
+                'descricao': row_res.get('descricao', ''),
+                'embalagem': row_res.get('embalagem', ''),
+                'qtd_ovos_por_caixa': qtd_ovos,
+                'preco': preco_res,
+                'custo_ytd': custo_res,
+                'margem_unitaria': margem_unit,
+                'preco_por_ovo': preco_ovo,
+                'custo_por_ovo': custo_ovo,
+                'margem_por_ovo': margem_ovo,
+                'reserva_pedido_sku': vol_reserva,
+                'reserva_pedidos_classe': reserva_por_classe.get(classe_res, 0),
+                'producao_total_classe': float(producao_por_classe[classe_res]) if classe_res in producao_por_classe.index else 0,
+                'volume_classe': 0,  # não participa da otimização
+                'limite_demanda_historica': None,
+                'volume_historico_total': 0,
+                'soma_vol_hist_classe': 0,
+                'proporcao_historica': 0,
+                'volume_baseline': 0,
+                'receita_baseline': 0,
+                'custo_baseline': 0,
+                'margem_baseline': 0,
+                'volume_otimizado': 0,
+                'receita_otimizada': 0,
+                'custo_otimizado': 0,
+                'margem_otimizada': 0,
+                'tipo_sku': 'reserva',
             })
     
     # Calcular ganhos
@@ -232,17 +306,29 @@ def _gerar_auditoria_baseline(
     
     # === ABA 1: Detalhe por SKU ===
     df_detalhe = df_audit[[
-        'classe', 'item_id', 'item', 'descricao', 'embalagem',
-        'qtd_ovos_por_caixa', 'preco', 'custo_ytd', 'margem_unitaria', 'margem_por_ovo',
-        'producao_total_classe', 'reserva_pedidos_classe',
-        'limite_demanda_historica', 'volume_historico_total', 'proporcao_historica',
-        'volume_classe',
-        'volume_baseline', 'margem_baseline',
-        'volume_otimizado', 'margem_otimizada',
+        # Identificação
+        'classe', 'item_id', 'item', 'descricao', 'embalagem', 'tipo_sku',
+        # Dados unitários por caixa
+        'qtd_ovos_por_caixa', 'preco', 'custo_ytd', 'margem_unitaria',
+        # Intermediários por ovo (preco/qtd, custo/qtd, margem/qtd)
+        'preco_por_ovo', 'custo_por_ovo', 'margem_por_ovo',
+        # Pedidos: reserva por SKU e por classe
+        'reserva_pedido_sku', 'reserva_pedidos_classe',
+        # Classe: produção e volume otimizável
+        'producao_total_classe', 'volume_classe',
+        # Demanda e proporção histórica
+        'limite_demanda_historica', 'volume_historico_total', 'soma_vol_hist_classe',
+        'proporcao_historica',
+        # Baseline: volume, receita, custo, margem
+        'volume_baseline', 'receita_baseline', 'custo_baseline', 'margem_baseline',
+        # Otimizado: volume, receita, custo, margem
+        'volume_otimizado', 'receita_otimizada', 'custo_otimizado', 'margem_otimizada',
     ]].copy()
     
-    # Adicionar colunas de verificação
+    # Colunas de diferença (otimizado - baseline)
     df_detalhe['diferenca_volume'] = df_detalhe['volume_otimizado'] - df_detalhe['volume_baseline']
+    df_detalhe['diferenca_receita'] = df_detalhe['receita_otimizada'] - df_detalhe['receita_baseline']
+    df_detalhe['diferenca_custo'] = df_detalhe['custo_otimizado'] - df_detalhe['custo_baseline']
     df_detalhe['diferenca_margem'] = df_detalhe['margem_otimizada'] - df_detalhe['margem_baseline']
     
     # Ordenar por classe e margem_por_ovo (descendente)
@@ -250,21 +336,37 @@ def _gerar_auditoria_baseline(
     
     # === ABA 2: Resumo por Classe ===
     resumo = df_audit.groupby('classe').agg(
+        producao_total_classe=('producao_total_classe', 'first'),
+        reserva_pedidos_classe=('reserva_pedidos_classe', 'first'),
         volume_classe=('volume_classe', 'first'),
         num_skus=('item_id', 'nunique'),
+        # Baseline
         soma_volume_baseline=('volume_baseline', 'sum'),
-        soma_volume_otimizado=('volume_otimizado', 'sum'),
+        receita_baseline_classe=('receita_baseline', 'sum'),
+        custo_baseline_classe=('custo_baseline', 'sum'),
         margem_baseline_classe=('margem_baseline', 'sum'),
+        # Otimizado
+        soma_volume_otimizado=('volume_otimizado', 'sum'),
+        receita_otimizada_classe=('receita_otimizada', 'sum'),
+        custo_otimizado_classe=('custo_otimizado', 'sum'),
         margem_otimizada_classe=('margem_otimizada', 'sum'),
     ).reset_index()
     
-    # Verificações
+    # Verificações de volume
     resumo['volume_baseline_bate'] = (
         (resumo['soma_volume_baseline'] - resumo['volume_classe']).abs() < 1.0
     ).map({True: 'OK', False: 'ERRO'})
     resumo['volume_otimizado_bate'] = (
         (resumo['soma_volume_otimizado'] - resumo['volume_classe']).abs() < 1.0
     ).map({True: 'OK', False: 'ERRO'})
+    # Verificação margem = receita - custo
+    resumo['margem_base_bate'] = (
+        (resumo['margem_baseline_classe'] - (resumo['receita_baseline_classe'] - resumo['custo_baseline_classe'])).abs() < 1.0
+    ).map({True: 'OK', False: 'ERRO'})
+    resumo['margem_otim_bate'] = (
+        (resumo['margem_otimizada_classe'] - (resumo['receita_otimizada_classe'] - resumo['custo_otimizado_classe'])).abs() < 1.0
+    ).map({True: 'OK', False: 'ERRO'})
+    # Ganho
     resumo['ganho_absoluto'] = resumo['margem_otimizada_classe'] - resumo['margem_baseline_classe']
     resumo['ganho_percentual'] = resumo.apply(
         lambda r: (r['ganho_absoluto'] / r['margem_baseline_classe'] * 100) if r['margem_baseline_classe'] > 0 else 0,
@@ -272,20 +374,24 @@ def _gerar_auditoria_baseline(
     )
     
     # Linha de totais
-    totais = pd.DataFrame([{
-        'classe': 'TOTAL',
-        'volume_classe': resumo['volume_classe'].sum(),
-        'num_skus': resumo['num_skus'].sum(),
-        'soma_volume_baseline': resumo['soma_volume_baseline'].sum(),
-        'soma_volume_otimizado': resumo['soma_volume_otimizado'].sum(),
-        'margem_baseline_classe': resumo['margem_baseline_classe'].sum(),
-        'margem_otimizada_classe': resumo['margem_otimizada_classe'].sum(),
-        'volume_baseline_bate': '',
-        'volume_otimizado_bate': '',
-        'ganho_absoluto': resumo['ganho_absoluto'].sum(),
-        'ganho_percentual': (resumo['ganho_absoluto'].sum() / resumo['margem_baseline_classe'].sum() * 100)
-            if resumo['margem_baseline_classe'].sum() > 0 else 0,
-    }])
+    cols_soma = [
+        'producao_total_classe', 'reserva_pedidos_classe', 'volume_classe', 'num_skus',
+        'soma_volume_baseline', 'receita_baseline_classe', 'custo_baseline_classe', 'margem_baseline_classe',
+        'soma_volume_otimizado', 'receita_otimizada_classe', 'custo_otimizado_classe', 'margem_otimizada_classe',
+        'ganho_absoluto',
+    ]
+    totais_dict = {'classe': 'TOTAL'}
+    for c in cols_soma:
+        totais_dict[c] = resumo[c].sum()
+    totais_dict['volume_baseline_bate'] = ''
+    totais_dict['volume_otimizado_bate'] = ''
+    totais_dict['margem_base_bate'] = ''
+    totais_dict['margem_otim_bate'] = ''
+    totais_dict['ganho_percentual'] = (
+        (totais_dict['ganho_absoluto'] / totais_dict['margem_baseline_classe'] * 100)
+        if totais_dict['margem_baseline_classe'] > 0 else 0
+    )
+    totais = pd.DataFrame([totais_dict])
     resumo = pd.concat([resumo, totais], ignore_index=True)
     
     # === ABA 3: Parâmetros ===
@@ -611,6 +717,18 @@ def main():
             and 'item' in df_pedidos_garantidos.columns
             and 'classe' in df_pedidos_garantidos.columns
         )
+        # Carregar descrições dos itens para enriquecer reservas
+        desc_map = {}
+        path_fat = Path(config.get('paths', {}).get('faturamento', 'inputs/manti_fat_2025_full.parquet'))
+        if path_fat.exists():
+            try:
+                df_desc_reserva = pd.read_parquet(path_fat, columns=['item', 'Descrição do item'])
+                df_desc_reserva = df_desc_reserva.drop_duplicates(subset=['item'])
+                df_desc_reserva['item'] = pd.to_numeric(df_desc_reserva['item'], errors='coerce')
+                df_desc_reserva = df_desc_reserva[df_desc_reserva['item'].notna()]
+                desc_map = dict(zip(df_desc_reserva['item'].astype(int), df_desc_reserva['Descrição do item']))
+            except Exception:
+                pass
         colunas_base = list(resultado.resultado.columns)
         linhas_reserva = []
         for item, qtd in resultado_etl.pedidos_garantidos_por_sku.items():
@@ -624,7 +742,7 @@ def main():
             linhas_reserva.append({
                 'item_id': f"{item}_RESERVA",
                 'item': int(item),
-                'descricao': None,
+                'descricao': desc_map.get(int(item), None),
                 'embalagem': 'RESERVA',
                 'classe': classe,
                 'quantidade': float(qtd),
