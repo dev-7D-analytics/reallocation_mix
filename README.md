@@ -1,30 +1,30 @@
-# Modelo de Otimizacao de Mix - Realocacao entre SKUs
+# Modelo de Otimização de Mix - Realocação entre SKUs
 
-Modelo de programacao linear (OR-Tools) que maximiza a margem de contribuicao
-realocando volume de producao entre SKUs da mesma classe biologica de ovos.
+Modelo de programação linear (OR-Tools) que maximiza a margem de contribuição
+realocando volume de produção entre SKUs da mesma classe biológica de ovos.
 
 ## O que o modelo faz
 
-1. **Pre-processamento (ETL)**: carrega producao por classe, classificacao de SKUs, precos, custos, pedidos de clientes e demanda historica.
-2. **Otimizacao**: formula e resolve um modelo linear/misto que aloca volume por `item_id` (SKU + embalagem) maximizando margem, respeitando capacidade por classe e limites de demanda historica.
-3. **Pos-processamento**: compara resultado otimizado vs baseline (distribuicao proporcional ao historico), gera auditoria detalhada e relatorios.
+1. **Pré-processamento (ETL)**: carrega produção por classe, classificação de SKUs, preços, custos, pedidos de clientes e demanda histórica.
+2. **Otimização**: formula e resolve um modelo linear/misto que aloca volume por `item_id` (SKU + embalagem) maximizando margem, respeitando capacidade por classe e limites de demanda histórica.
+3. **Pós-processamento**: compara resultado otimizado vs baseline (distribuição proporcional ao histórico), gera auditoria detalhada e relatórios.
 
 ## Arquitetura
 
 ```
 realocacao-git/
-├── config.yaml                          # Configuracao central (parametros, paths)
-├── main.py                              # Orquestrador: ETL -> Otimizacao -> Output
+├── config.yaml                          # Configuração central (parâmetros, paths)
+├── main.py                              # Orquestrador: ETL -> Otimização -> Output
 ├── executar_pipeline.sh                 # Shell script para rodar pipeline completo
-├── requirements.txt                     # Dependencias Python
+├── requirements.txt                     # Dependências Python
 │
 ├── etl/
 │   ├── __init__.py
-│   └── pipeline.py                      # Pre-processamento: carrega e prepara dados
+│   └── pipeline.py                      # Pré-processamento: carrega e prepara dados
 │
 ├── modelo/
 │   ├── __init__.py
-│   └── otimizador.py                    # Solver: formulacao e resolucao do modelo
+│   └── otimizador.py                    # Solver: formulação e resolução do modelo
 │
 ├── output/
 │   ├── __init__.py
@@ -33,20 +33,20 @@ realocacao-git/
 │
 ├── gerar_pedidos_clientes.py            # Gera pedidos_clientes.csv
 ├── gerar_producao_classe.py             # Gera producao_classe.csv
-├── comparar_producao_alocacao.py        # Relatorio: producao real vs alocacao do modelo
+├── comparar_producao_alocacao.py        # Relatório: produção real vs alocação do modelo
 ├── extrair_compatibilidade_embalagem.py # Extrai compatibilidade SKU-embalagem do faturamento
-├── extrair_precos_embalagem.py          # Extrai precos por embalagem
+├── extrair_precos_embalagem.py          # Extrai preços por embalagem
 │
 ├── docs/
-│   └── formulacao_modelo.tex            # Formulacao matematica (LaTeX)
+│   └── formulacao_modelo.tex            # Formulação matemática (LaTeX)
 │
-├── inputs/                              # Bases de dados (nao versionadas)
-└── resultados/                          # Outputs gerados (nao versionados)
+├── inputs/                              # Bases de dados (não versionadas)
+└── resultados/                          # Outputs gerados (não versionados)
 ```
 
-## Fluxo de dependencias
+## Fluxo de dependências
 
-Quando uma base de dados e atualizada, os scripts abaixo precisam ser re-executados
+Quando uma base de dados é atualizada, os scripts abaixo precisam ser re-executados
 na ordem indicada:
 
 ```
@@ -75,58 +75,103 @@ na ordem indicada:
 | Base de dados atualizada | Scripts a re-executar (na ordem) |
 |---|---|
 | `manti_fat_*.parquet` (faturamento) | `extrair_compatibilidade_embalagem.py` -> `extrair_precos_embalagem.py` -> `gerar_pedidos_clientes.py` -> `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `PRODUCAO DIA.xlsx` (producao diaria) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `PRODUÇÃO DIA.xlsx` (produção diária) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `MANTI-PRIC_Custos_*.parquet` (custos) | `extrair_precos_embalagem.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `base_skus_classes.xlsx` (classificacao) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `base_skus_classes.xlsx` (classificação) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `skus_restritos.xlsx` (SKUs permitidos) | `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `ESTAB CORRIGIDO.xlsx` (estab. corrigido) | `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `config.yaml` (parametros) | `main.py` -> `comparar_producao_alocacao.py` (e geradores de input se janela/granularidade mudaram) |
+| `config.yaml` (parâmetros) | `main.py` -> `comparar_producao_alocacao.py` (e geradores de input se janela/granularidade mudaram) |
 
 ## Entradas esperadas (configuradas em `config.yaml`)
 
-| Parametro | Arquivo | Descricao |
+| Parâmetro | Arquivo | Descrição |
 |---|---|---|
-| `paths.producao` | `inputs/producao_classe.csv` | Producao total por classe (gerado por `gerar_producao_classe.py`) |
-| `paths.classes` | `inputs/base_skus_classes.xlsx` | Mapeamento item -> classe biologica |
+| `paths.producao` | `inputs/producao_classe.csv` | Produção total por classe (gerado por `gerar_producao_classe.py`) |
+| `paths.classes` | `inputs/base_skus_classes.xlsx` | Mapeamento item -> classe biológica |
 | `paths.pedidos` | `inputs/pedidos_clientes.csv` | Pedidos por SKU (gerado por `gerar_pedidos_clientes.py`) |
-| `paths.precos` | `inputs/precos_sku_embalagem.csv` | Precos por item_id (gerado por `extrair_precos_embalagem.py`) |
+| `paths.precos` | `inputs/precos_sku_embalagem.csv` | Preços por item_id (gerado por `extrair_precos_embalagem.py`) |
 | `paths.custos` | `inputs/MANTI-PRIC_Custos_*.parquet` | Custos por item (PRIC) |
-| `paths.faturamento` | `inputs/manti_fat_*.parquet` | Faturamento historico (para demanda e enriquecimento) |
-| `paths.producao_bruta` | `inputs/PRODUCAO DIA.xlsx` | Producao diaria bruta (aba CE0302) |
+| `paths.faturamento` | `inputs/manti_fat_*.parquet` | Faturamento histórico (para demanda e enriquecimento) |
+| `paths.producao_bruta` | `inputs/PRODUÇÃO DIA.xlsx` | Produção diária bruta (aba CE0302) |
 | `paths.skus_restritos` | `inputs/skus_restritos.xlsx` | Filtro de SKUs ativos/permitidos |
-| `paths.estab_corrigido` | `inputs/ESTAB CORRIGIDO.xlsx` | Correcao de estabelecimento |
+| `paths.estab_corrigido` | `inputs/ESTAB CORRIGIDO.xlsx` | Correção de estabelecimento |
 
-## Como rodar
+## Instalação e execução
+
+### Pré-requisitos
+
+- Python 3.9+
+
+### Setup (primeira vez)
 
 ```bash
-# Pipeline completo (gera inputs + otimiza + relatorio)
+# 1. Descompactar e entrar no diretório
+unzip reallocation_mix.zip
+cd reallocation_mix
+
+# 2. Criar ambiente virtual e instalar dependências
+python3 -m venv venv
+source venv/bin/activate        # Linux/Mac
+# venv\Scripts\activate         # Windows
+
+pip install -r requirements.txt
+```
+
+### Preparar inputs
+
+Colocar os seguintes arquivos na pasta `inputs/`:
+
+| Arquivo | Descrição | Obrigatório |
+|---|---|---|
+| `manti_fat_2025_full.parquet` | Faturamento histórico | Sim |
+| `PRODUÇÃO DIA.xlsx` | Produção diária (aba CE0302) | Sim |
+| `MANTI-PRIC_Custos_*.parquet` | Custos PRIC | Sim |
+| `base_skus_classes.xlsx` | Classificação SKU -> classe | Sim |
+| `skus_restritos.xlsx` | Filtro de SKUs ativos | Sim |
+| `ESTAB CORRIGIDO.xlsx` | Correção de estabelecimento | Sim |
+
+Se os nomes dos arquivos forem diferentes, ajustar a seção `paths:` do `config.yaml`.
+
+### Executar
+
+```bash
+# Ativar ambiente virtual (se não estiver ativo)
+source venv/bin/activate
+
+# Pipeline completo (6 passos: preparação + otimização + relatório)
 ./executar_pipeline.sh
 
+# Opções:
+#   ./executar_pipeline.sh --sem-preparacao   # Pula passos 1-4 (inputs já prontos)
+#   ./executar_pipeline.sh --sem-relatorio    # Pula passo 6 (sem relatório comparativo)
+
 # Ou passo a passo:
-python extrair_compatibilidade_embalagem.py
-python extrair_precos_embalagem.py
-python gerar_pedidos_clientes.py
-python gerar_producao_classe.py
-python main.py
-python comparar_producao_alocacao.py
+python3 extrair_compatibilidade_embalagem.py   # 1. Compatibilidade embalagem
+python3 extrair_precos_embalagem.py            # 2. Preços por SKU/embalagem
+python3 gerar_pedidos_clientes.py              # 3. Pedidos de clientes
+python3 gerar_producao_classe.py               # 4. Produção por classe
+python3 main.py                                # 5. ETL + Otimização + Output
+python3 comparar_producao_alocacao.py          # 6. Relatório comparativo
 ```
+
+Resultados gerados em `resultados/`.
 
 ## Outputs gerados
 
-| Arquivo | Descricao |
+| Arquivo | Descrição |
 |---|---|
-| `resultado_realocacao_completo_*.csv` | Alocacao detalhada por item_id |
-| `resultado_realocacao_completo_*.xlsx` | Excel com abas: Detalhado, Resumo por Classe, Estatisticas, Pedidos Ignorados |
-| `auditoria_baseline_*.xlsx` | Auditoria: Detalhe por SKU, Resumo por Classe, Parametros |
-| `demanda_historica_*.xlsx` | Limites de demanda historica calculados |
-| `comparacao_producao_alocacao_*.xlsx` | Comparacao producao real vs alocacao do modelo |
+| `resultado_realocacao_completo_*.csv` | Alocação detalhada por item_id |
+| `resultado_realocacao_completo_*.xlsx` | Excel com abas: Detalhado, Resumo por Classe, Estatísticas, Pedidos Ignorados |
+| `auditoria_baseline_*.xlsx` | Auditoria: Detalhe por SKU, Resumo por Classe, Parâmetros |
+| `demanda_historica_*.xlsx` | Limites de demanda histórica calculados |
+| `comparacao_producao_alocacao_*.xlsx` | Comparação produção real vs alocação do modelo |
 
-## Configuracao relevante (`config.yaml`)
+## Configuração relevante (`config.yaml`)
 
-- **Objetivo**: `modelo.tipo_objetivo` = `maximizar_margem` (padrao)
+- **Objetivo**: `modelo.tipo_objetivo` = `maximizar_margem` (padrão)
 - **Pedidos**: `modelo.atender_pedidos` (True prioriza pedidos garantidos)
-- **Cap de reserva**: `modelo.capar_reserva_na_producao` (True limita reservas a producao disponivel, priorizando por margem)
-- **Demanda historica**: `modelo.considerar_demanda_historica`, `granularidade_demanda` (M/S/D), `tipo_calculo_demanda` (`percentil`, `maximo`, `media`)
+- **Cap de reserva**: `modelo.capar_reserva_na_producao` (True limita reservas à produção disponível, priorizando por margem)
+- **Demanda histórica**: `modelo.considerar_demanda_historica`, `granularidade_demanda` (M/S/D), `tipo_calculo_demanda` (`percentil`, `maximo`, `media`)
 - **Solver**: `solver.solver_type`, `time_limit_ms`, `num_threads`
 
 ## Autor

@@ -4,15 +4,17 @@
 # ==============================================================================
 #
 # Ordem de execução:
-#   1. extrair_precos_embalagem.py   → inputs/precos_sku_embalagem.csv
-#   2. gerar_producao_classe.py      → inputs/producao_classe.csv
-#   3. main.py                       → ETL + Otimização + Baseline
-#   4. comparar_producao_alocacao.py → Relatório comparativo (opcional)
+#   1. extrair_compatibilidade_embalagem.py → inputs/compatibilidade_sku_embalagem.csv
+#   2. extrair_precos_embalagem.py          → inputs/precos_sku_embalagem.csv
+#   3. gerar_pedidos_clientes.py            → inputs/pedidos_clientes.csv
+#   4. gerar_producao_classe.py             → inputs/producao_classe.csv
+#   5. main.py                              → ETL + Otimização + Baseline
+#   6. comparar_producao_alocacao.py        → Relatório comparativo (opcional)
 #
 # Uso:
-#   ./executar_pipeline.sh           → Executa tudo (passos 1 a 4)
-#   ./executar_pipeline.sh --sem-preparacao  → Só otimização (passos 3 e 4)
-#   ./executar_pipeline.sh --sem-relatorio   → Sem relatório (passos 1 a 3)
+#   ./executar_pipeline.sh                  → Executa tudo (passos 1 a 6)
+#   ./executar_pipeline.sh --sem-preparacao → Só otimização (passos 5 e 6)
+#   ./executar_pipeline.sh --sem-relatorio  → Sem relatório (passos 1 a 5)
 #
 # ==============================================================================
 
@@ -39,8 +41,8 @@ for arg in "$@"; do
         --help|-h)
             echo "Uso: $0 [--sem-preparacao] [--sem-relatorio]"
             echo ""
-            echo "  --sem-preparacao   Pula extração de preços e produção (passos 1-2)"
-            echo "  --sem-relatorio    Pula geração do relatório comparativo (passo 4)"
+            echo "  --sem-preparacao   Pula preparação de inputs (passos 1-4)"
+            echo "  --sem-relatorio    Pula geração do relatório comparativo (passo 6)"
             exit 0
             ;;
         *)
@@ -56,11 +58,27 @@ echo -e "${BLUE}  PIPELINE DE OTIMIZAÇÃO DE MIX                             ${
 echo -e "${BLUE}============================================================${NC}"
 echo ""
 
+# Criar pasta inputs se não existir
+mkdir -p inputs resultados
+
 INICIO=$(date +%s)
 
-#  PASSO 1: Extrair preços 
+#  PREPARAÇÃO DE INPUTS (passos 1-4) 
 if [ "$SKIP_PREPARACAO" = false ]; then
-    echo -e "${YELLOW}[1/4] Extraindo preços por SKU/embalagem...${NC}"
+
+    #  PASSO 1: Extrair compatibilidade de embalagem 
+    echo -e "${YELLOW}[1/6] Extraindo compatibilidade SKU/embalagem...${NC}"
+    python3 extrair_compatibilidade_embalagem.py
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}[OK] Compatibilidade extraída → inputs/compatibilidade_sku_embalagem.csv${NC}"
+    else
+        echo -e "${RED}[ERRO] Falha na extração de compatibilidade${NC}"
+        exit 1
+    fi
+    echo ""
+
+    #  PASSO 2: Extrair preços por embalagem 
+    echo -e "${YELLOW}[2/6] Extraindo preços por SKU/embalagem...${NC}"
     python3 extrair_precos_embalagem.py
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}[OK] Preços extraídos → inputs/precos_sku_embalagem.csv${NC}"
@@ -70,8 +88,19 @@ if [ "$SKIP_PREPARACAO" = false ]; then
     fi
     echo ""
 
-    #  PASSO 2: Gerar produção por classe 
-    echo -e "${YELLOW}[2/4] Gerando produção por classe...${NC}"
+    #  PASSO 3: Gerar pedidos de clientes 
+    echo -e "${YELLOW}[3/6] Gerando pedidos de clientes...${NC}"
+    python3 gerar_pedidos_clientes.py
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}[OK] Pedidos gerados → inputs/pedidos_clientes.csv${NC}"
+    else
+        echo -e "${RED}[ERRO] Falha na geração de pedidos${NC}"
+        exit 1
+    fi
+    echo ""
+
+    #  PASSO 4: Gerar produção por classe 
+    echo -e "${YELLOW}[4/6] Gerando produção por classe...${NC}"
     python3 gerar_producao_classe.py
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}[OK] Produção gerada → inputs/producao_classe.csv${NC}"
@@ -80,14 +109,17 @@ if [ "$SKIP_PREPARACAO" = false ]; then
         exit 1
     fi
     echo ""
+
 else
-    echo -e "${YELLOW}[1/4] Extração de preços: PULADO (--sem-preparacao)${NC}"
-    echo -e "${YELLOW}[2/4] Geração de produção: PULADO (--sem-preparacao)${NC}"
+    echo -e "${YELLOW}[1/6] Extração de compatibilidade: PULADO (--sem-preparacao)${NC}"
+    echo -e "${YELLOW}[2/6] Extração de preços: PULADO (--sem-preparacao)${NC}"
+    echo -e "${YELLOW}[3/6] Geração de pedidos: PULADO (--sem-preparacao)${NC}"
+    echo -e "${YELLOW}[4/6] Geração de produção: PULADO (--sem-preparacao)${NC}"
     echo ""
 fi
 
-#  PASSO 3: ETL + Otimização 
-echo -e "${YELLOW}[3/4] Executando ETL + Otimização...${NC}"
+#  PASSO 5: ETL + Otimização 
+echo -e "${YELLOW}[5/6] Executando ETL + Otimização...${NC}"
 python3 main.py
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}[OK] Otimização concluída${NC}"
@@ -97,9 +129,9 @@ else
 fi
 echo ""
 
-#  PASSO 4: Relatório comparativo 
+#  PASSO 6: Relatório comparativo 
 if [ "$SKIP_RELATORIO" = false ]; then
-    echo -e "${YELLOW}[4/4] Gerando relatório comparativo...${NC}"
+    echo -e "${YELLOW}[6/6] Gerando relatório comparativo...${NC}"
     python3 comparar_producao_alocacao.py
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}[OK] Relatório gerado${NC}"
@@ -108,7 +140,7 @@ if [ "$SKIP_RELATORIO" = false ]; then
         exit 1
     fi
 else
-    echo -e "${YELLOW}[4/4] Relatório comparativo: PULADO (--sem-relatorio)${NC}"
+    echo -e "${YELLOW}[6/6] Relatório comparativo: PULADO (--sem-relatorio)${NC}"
 fi
 
 #  Resumo 
