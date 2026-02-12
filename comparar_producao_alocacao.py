@@ -812,6 +812,11 @@ def main():
 
     comparacao = construir_comparacao(producao, alocacao, periodo_label, config)
     
+    # Garantir tipos numéricos nas colunas-chave (compatibilidade pandas 2.x)
+    for col_num in ['preco', 'custo_ytd', 'margem_unitaria', 'margem_por_ovo', 'limite_demanda_historica']:
+        if col_num in comparacao.columns:
+            comparacao[col_num] = pd.to_numeric(comparacao[col_num], errors='coerce')
+    
     # PRIMEIRO: Tentar usar preços e custos do arquivo de resultado do modelo (mais completo)
     # Isso garante que item_ids com alocação tenham preços/custos mesmo que não estejam nos arquivos externos
     precos_resultado = None
@@ -1249,7 +1254,8 @@ def main():
         comparacao["margem_por_ovo"] = comparacao["item_id"].astype(str).map(margem_por_item_id)
     if len(margem_por_ovo_por_item) > 0:
         mask_sem = comparacao["margem_por_ovo"].isna()
-        comparacao.loc[mask_sem, "margem_por_ovo"] = comparacao.loc[mask_sem, "item"].map(margem_por_ovo_por_item)
+        comparacao['margem_por_ovo'] = comparacao['margem_por_ovo'].astype('float64')
+        comparacao.loc[mask_sem, "margem_por_ovo"] = comparacao.loc[mask_sem, "item"].map(margem_por_ovo_por_item).astype('float64')
     
     # Segundo: calcular margem_por_ovo para SKUs que não têm (baseado na embalagem ou descrição)
     # Função para extrair ovos por caixa da embalagem (ex: "CX 12 BJ 20 UN" = 240; "30 DZ" = 360)
@@ -1430,7 +1436,9 @@ def main():
     sem_margem = comparacao["margem_por_ovo"].isna() & comparacao["margem_unitaria"].notna()
     if sem_margem.sum() > 0:
         ovos_pos = comparacao.loc[sem_margem].apply(_ovos_pos_agg, axis=1)
-        comparacao.loc[sem_margem, "margem_por_ovo"] = comparacao.loc[sem_margem, "margem_unitaria"] / ovos_pos
+        comparacao['margem_por_ovo'] = comparacao['margem_por_ovo'].astype('float64')
+        valores = (comparacao.loc[sem_margem, "margem_unitaria"] / ovos_pos).astype('float64')
+        comparacao.loc[sem_margem, "margem_por_ovo"] = valores
 
     # Adicionar SKUs ativos do estabelecimento que não aparecem no output (sem produção, sem pedido, não otimizados)
     # para garantir que o output contenha TODOS os SKUs ativos do estabelecimento
