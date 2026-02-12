@@ -98,28 +98,63 @@ na ordem indicada:
 
 ## Instalação e execução
 
-### Pré-requisitos
+### 1. Instalar Python 3.9+
 
-- Python 3.9+
-
-### Setup (primeira vez)
+Verificar se já está instalado:
 
 ```bash
-# 1. Descompactar e entrar no diretório
+python3 --version
+```
+
+Se não estiver instalado:
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt update
+sudo apt install python3 python3-venv python3-pip
+```
+
+**Mac (com Homebrew):**
+```bash
+brew install python@3.11
+```
+
+**Windows:**
+- Baixar o instalador em https://www.python.org/downloads/
+- Na instalação, marcar a opção **"Add Python to PATH"**
+- Reiniciar o terminal após instalar
+
+### 2. Download e setup
+
+```bash
+# Descompactar o zip e entrar no diretório
 unzip reallocation_mix.zip
 cd reallocation_mix
 
-# 2. Criar ambiente virtual e instalar dependências
+# Criar ambiente virtual
 python3 -m venv venv
-source venv/bin/activate        # Linux/Mac
-# venv\Scripts\activate         # Windows
 
+# Ativar ambiente virtual
+source venv/bin/activate        # Linux/Mac
+# venv\Scripts\activate         # Windows (CMD)
+# venv\Scripts\Activate.ps1     # Windows (PowerShell)
+
+# Instalar dependências
 pip install -r requirements.txt
 ```
 
-### Preparar inputs
+Para verificar que tudo instalou corretamente:
+```bash
+python3 -c "import ortools; import pandas; print('OK - dependências instaladas')"
+```
 
-Colocar os seguintes arquivos na pasta `inputs/`:
+### 3. Preparar inputs
+
+Criar a pasta `inputs/` e colocar os seguintes arquivos:
+
+```bash
+mkdir -p inputs
+```
 
 | Arquivo | Descrição | Obrigatório |
 |---|---|---|
@@ -132,8 +167,9 @@ Colocar os seguintes arquivos na pasta `inputs/`:
 
 Se os nomes dos arquivos forem diferentes, ajustar a seção `paths:` do `config.yaml`.
 
-### Executar
+### 4. Executar
 
+**Linux/Mac:**
 ```bash
 # Ativar ambiente virtual (se não estiver ativo)
 source venv/bin/activate
@@ -144,8 +180,10 @@ source venv/bin/activate
 # Opções:
 #   ./executar_pipeline.sh --sem-preparacao   # Pula passos 1-4 (inputs já prontos)
 #   ./executar_pipeline.sh --sem-relatorio    # Pula passo 6 (sem relatório comparativo)
+```
 
-# Ou passo a passo:
+**Windows (ou passo a passo em qualquer SO):**
+```bash
 python3 extrair_compatibilidade_embalagem.py   # 1. Compatibilidade embalagem
 python3 extrair_precos_embalagem.py            # 2. Preços por SKU/embalagem
 python3 gerar_pedidos_clientes.py              # 3. Pedidos de clientes
@@ -154,7 +192,9 @@ python3 main.py                                # 5. ETL + Otimização + Output
 python3 comparar_producao_alocacao.py          # 6. Relatório comparativo
 ```
 
-Resultados gerados em `resultados/`.
+### 5. Resultados
+
+Arquivos gerados na pasta `resultados/`.
 
 ## Outputs gerados
 
