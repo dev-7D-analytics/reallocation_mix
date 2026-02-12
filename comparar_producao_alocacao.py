@@ -1557,6 +1557,19 @@ def main():
             comparacao = pd.concat([comparacao, df_ausentes], ignore_index=True)
             print(f"  Total: {len(skus_ausentes)} SKUs adicionados ao output")
 
+    # Converter quantidades de ovos para caixas de 360 ovos
+    OVOS_POR_CAIXA = 360
+    colunas_qtd_cx360 = {
+        "quantidade_produzida": "cx360_produzida",
+        "quantidade_alocada": "cx360_alocada",
+        "quantidade_reservada": "cx360_reservada",
+        "quantidade_total_pedida": "cx360_total_pedida",
+        "diferenca_aloc_menos_prod": "cx360_diferenca",
+    }
+    for col_origem, col_cx in colunas_qtd_cx360.items():
+        if col_origem in comparacao.columns:
+            comparacao[col_cx] = (comparacao[col_origem] / OVOS_POR_CAIXA).round(2)
+
     # Ordem de colunas para exportação: manter "embalagem" (valor único); não exportar "embalagens" (concatenação com | RESERVA)
     colunas_por_item = [c for c in ["item_id", "item", "descricao", "embalagem", "classe"] if c in comparacao.columns]
     colunas_por_item += [c for c in comparacao.columns if c not in colunas_por_item and c != "embalagens"]
