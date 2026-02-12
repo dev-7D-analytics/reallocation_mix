@@ -929,9 +929,10 @@ def main():
             precos_merge["item_id"] = precos_merge["item_id"].astype(str).str.strip()
             precos_merge = precos_merge.rename(columns={"preco": "preco_externo"})
             comparacao = comparacao.merge(precos_merge, on="item_id", how="left")
-            comparacao.loc[mask_sem_preco, 'preco'] = comparacao.loc[mask_sem_preco, 'preco'].fillna(
+            preco_fill = comparacao.loc[mask_sem_preco, 'preco'].fillna(
                 comparacao.loc[mask_sem_preco, 'preco_externo']
             )
+            comparacao.loc[mask_sem_preco, 'preco'] = preco_fill.infer_objects(copy=False)
             # Só marcar arquivo_externo onde ainda não tem origem (preservar item_id_produzido)
             mask_set = mask_sem_preco & comparacao["preco_externo"].notna() & comparacao["preco_origem"].isna()
             comparacao.loc[mask_set, "preco_origem"] = "arquivo_externo"
@@ -1006,9 +1007,10 @@ def main():
         mask_sem_custo = comparacao['custo_ytd'].isna()
         if mask_sem_custo.any():
             comparacao = comparacao.merge(custos[["item_id", "custo_ytd"]], on="item_id", how="left", suffixes=('', '_externo'))
-            comparacao.loc[mask_sem_custo, 'custo_ytd'] = comparacao.loc[mask_sem_custo, 'custo_ytd'].fillna(
+            custo_fill = comparacao.loc[mask_sem_custo, 'custo_ytd'].fillna(
                 comparacao.loc[mask_sem_custo, 'custo_ytd_externo']
             )
+            comparacao.loc[mask_sem_custo, 'custo_ytd'] = custo_fill.infer_objects(copy=False)
             # Só marcar arquivo_externo onde ainda não tem origem (preservar item_id_produzido)
             mask_set = mask_sem_custo & comparacao["custo_ytd_externo"].notna() & comparacao["custo_origem"].isna()
             comparacao.loc[mask_set, "custo_origem"] = "arquivo_externo"
@@ -1284,11 +1286,13 @@ def main():
                     return ovos
             return None
         ovos_por_caixa = comparacao.loc[sem_margem_ovo].apply(_ovos_para_linha, axis=1)
-        comparacao.loc[sem_margem_ovo, 'margem_por_ovo'] = comparacao.loc[sem_margem_ovo, 'margem_unitaria'] / ovos_por_caixa
+        # Garantir que a coluna aceita float (compatibilidade pandas 2.x)
+        comparacao['margem_por_ovo'] = comparacao['margem_por_ovo'].astype('float64')
+        comparacao.loc[sem_margem_ovo, 'margem_por_ovo'] = (comparacao.loc[sem_margem_ovo, 'margem_unitaria'] / ovos_por_caixa).astype('float64')
     
     # 6. custo_medio_classe: Custo foi calculado usando média da classe
     if len(custo_medio_classe_por_item_id) > 0:
-        comparacao["custo_medio_classe"] = comparacao["item_id"].map(custo_medio_classe_por_item_id).fillna(False)
+        comparacao["custo_medio_classe"] = comparacao["item_id"].map(custo_medio_classe_por_item_id).fillna(False).infer_objects(copy=False)
     else:
         comparacao["custo_medio_classe"] = False
     

@@ -196,9 +196,10 @@ def main():
     print("EXTRAÇÃO DE COMPATIBILIDADE SKU x EMBALAGEM")
     print("="*80)
     
-    # Carregar faturamento
+    # Carregar faturamento (do config.yaml ou fallback)
     print("\n[1/3] Carregando faturamento...")
-    path_fat = Path("../manti_fat_2024.parquet")
+    config = load_config()
+    path_fat = Path(config.get('paths', {}).get('faturamento', 'inputs/manti_fat_2025_full.parquet'))
     if not path_fat.exists():
         print(f"[ERRO] Arquivo não encontrado: {path_fat}")
         return
