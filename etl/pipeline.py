@@ -240,14 +240,19 @@ class ETLPipeline:
         return df_pedidos, pedidos_por_sku
     
     def _carregar_precos(self) -> pd.DataFrame:
-        """Carrega preços por item_id."""
+        """Carrega preços por item (SKU).
+        
+        O arquivo de preços precisa ter apenas as colunas 'item' e 'preco'.
+        A coluna 'embalagem' é opcional (backward-compatible); se presente,
+        será usada para criar 'item_id', mas o merge principal usa 'item'.
+        """
         self.logger.info("\n[4/8] Carregando precos...")
         
         path = Path(self.config['paths'].get('precos', 'inputs/precos.csv'))
         
         if not path.exists():
             self.logger.warning(f"  Arquivo de precos nao encontrado: {path}")
-            return pd.DataFrame(columns=['item_id', 'preco'])
+            return pd.DataFrame(columns=['item', 'preco'])
         
         # Suporta CSV e Parquet
         if path.suffix == '.parquet':
@@ -255,19 +260,25 @@ class ETLPipeline:
         else:
             df_precos = pd.read_csv(path)
         
-        # Padronizar para ter item_id e preco
-        if 'item_id' not in df_precos.columns:
-            # Tentar criar item_id a partir de item + embalagem
-            if 'item' in df_precos.columns and 'embalagem' in df_precos.columns:
-                df_precos['item_id'] = df_precos['item'].astype(str) + '_' + df_precos['embalagem']
+        # Garantir coluna 'item' numérica
+        if 'item' in df_precos.columns:
+            df_precos['item'] = pd.to_numeric(df_precos['item'], errors='coerce')
+            df_precos = df_precos[df_precos['item'].notna()].copy()
+            df_precos['item'] = df_precos['item'].astype(int)
         
+        # Criar item_id se embalagem estiver presente (backward-compatible)
+        if 'item' in df_precos.columns and 'embalagem' in df_precos.columns:
+            df_precos['item_id'] = df_precos['item'].astype(str) + '_' + df_precos['embalagem']
+        
+        # Detectar coluna de preço
         if 'preco' not in df_precos.columns:
             for col in df_precos.columns:
                 if 'preco' in col.lower() or 'price' in col.lower():
                     df_precos['preco'] = df_precos[col]
                     break
         
-        self.logger.info(f"  Itens unicos (item_id) com preco: {df_precos['item_id'].nunique() if 'item_id' in df_precos.columns else 0}")
+        n_skus = df_precos['item'].nunique() if 'item' in df_precos.columns else 0
+        self.logger.info(f"  SKUs com preco: {n_skus}")
         self.logger.info(f"  Preco medio: R$ {df_precos['preco'].mean():.2f}" if 'preco' in df_precos.columns else "  Preco: N/A")
         
         return df_precos
@@ -811,28 +822,28 @@ class ETLPipeline:
                     origem_counts = df_sem_custo['origem_custo'].value_counts()
                     self.logger.info(f"  Origem dos custos: {origem_counts.to_dict()}")
         
-        # Adicionar preços (merge left para manter todos os item_ids)
-        # Criar item_id no df_precos se não existir
-        if 'item_id' not in dados.precos.columns:
-            dados.precos['item_id'] = dados.precos['item'].astype(str) + '_' + dados.precos['embalagem']
-        
-        df_base = df_base.merge(
-            dados.precos[['item_id', 'preco']], 
-            on='item_id', 
-            how='left'
-        )
-        
-        # Rastrear origem do preço
+        # Adicionar preços (merge por item/SKU - não exige embalagem no arquivo de preços)
+        # Prioridade: 1) match por item_id (se disponível), 2) match por item (SKU)
         if 'origem_preco' not in df_base.columns:
             df_base['origem_preco'] = None
-        df_base.loc[df_base['preco'].notna(), 'origem_preco'] = 'preco_direto'
         
-        # Preencher preços faltantes com média do MESMO SKU (outras embalagens)
-        # Esta é a lógica do modelo original
-        preco_medio_sku = dados.precos.groupby('item')['preco'].mean()
-        mask_sem_preco_1 = df_base['preco'].isna()
-        df_base['preco'] = df_base['preco'].fillna(df_base['item'].map(preco_medio_sku))
-        df_base.loc[mask_sem_preco_1 & df_base['preco'].notna(), 'origem_preco'] = 'preco_medio_sku'
+        if 'item_id' in dados.precos.columns:
+            # Se arquivo de preços tem item_id (backward-compatible), tentar match exato primeiro
+            df_base = df_base.merge(
+                dados.precos[['item_id', 'preco']],
+                on='item_id',
+                how='left'
+            )
+            df_base.loc[df_base['preco'].notna(), 'origem_preco'] = 'preco_direto'
+        else:
+            df_base['preco'] = None
+        
+        # Preencher preços faltantes por item (SKU) - merge principal
+        if 'item' in dados.precos.columns:
+            preco_por_item = dados.precos.groupby('item')['preco'].mean()
+            mask_sem_preco_1 = df_base['preco'].isna()
+            df_base['preco'] = df_base['preco'].fillna(df_base['item'].map(preco_por_item))
+            df_base.loc[mask_sem_preco_1 & df_base['preco'].notna(), 'origem_preco'] = 'preco_por_item'
         
         # Se ainda não tiver preço, usar média GERAL (como o modelo original)
         preco_medio_geral = dados.precos['preco'].mean()
