@@ -33,6 +33,8 @@ realocacao-git/
 │
 ├── gerar_pedidos_clientes.py            # Gera pedidos_clientes.csv
 ├── gerar_producao_classe.py             # Gera producao_classe.csv
+├── gerar_custos_sku.py                  # Gera custos_sku.csv (editável)
+├── gerar_demanda_historica.py           # Gera demanda_historica.csv (editável)
 ├── comparar_producao_alocacao.py        # Relatório: produção real vs alocação do modelo
 ├── extrair_compatibilidade_embalagem.py # Extrai compatibilidade SKU-embalagem do faturamento
 ├── extrair_precos_embalagem.py          # Extrai preços por embalagem
@@ -55,32 +57,50 @@ na ordem indicada:
      ├─ manti_fat_*.parquet ──► extrair_compatibilidade_embalagem.py
      │                              │
      │                              ▼
-     │                          extrair_precos_embalagem.py ──► inputs/precos_sku_embalagem.csv
-     │                              │
-     ├─ manti_fat_*.parquet ──► gerar_pedidos_clientes.py ───► inputs/pedidos_clientes.csv
-     │   skus_restritos.xlsx        │
-     │   ESTAB CORRIGIDO.xlsx       │
-     │                              │
-     ├─ PRODUÇÃO DIA.xlsx ────► gerar_producao_classe.py ───► inputs/producao_classe.csv
-     │   base_skus_classes.xlsx     │
-     │                              │
+     │                          extrair_precos_embalagem.py ──► inputs/precos_sku_embalagem.csv  (editável)
+     │
+     ├─ MANTI-PRIC_Custos_* ──► gerar_custos_sku.py ──────► inputs/custos_sku.csv              (editável)
+     │
+     ├─ manti_fat_*.parquet ──► gerar_demanda_historica.py ► inputs/demanda_historica.csv        (editável)
+     │   ESTAB CORRIGIDO.xlsx
+     │
+     ├─ manti_fat_*.parquet ──► gerar_pedidos_clientes.py ─► inputs/pedidos_clientes.csv
+     │   skus_restritos.xlsx
+     │   ESTAB CORRIGIDO.xlsx
+     │
+     ├─ PRODUÇÃO DIA.xlsx ────► gerar_producao_classe.py ──► inputs/producao_classe.csv
+     │   base_skus_classes.xlsx
+     │
      └──────────────────────────► main.py (ETL + Otimização + Output)
                                     │
                                     ▼
                                 comparar_producao_alocacao.py (relatório final)
 ```
 
+### Inputs editáveis pelo usuário
+
+Após a geração automática, os seguintes CSVs podem ser editados manualmente antes de rodar `main.py`:
+
+| Arquivo | Colunas mínimas | O que o usuário pode fazer |
+|---|---|---|
+| `inputs/precos_sku_embalagem.csv` | `item`, `preco` | Alterar preço de um SKU, adicionar SKU novo |
+| `inputs/custos_sku.csv` | `item`, `custo_ytd` | Alterar custo de um SKU, adicionar SKU novo |
+| `inputs/demanda_historica.csv` | `item`, `demanda_max` | Alterar limite de demanda, adicionar/remover SKU |
+
+Os CSVs já saem com os cálculos aplicados (ex: fator multiplicativo na demanda, média ponderada no custo). O modelo lê diretamente desses arquivos.
+
 ### Mapa de impacto: base atualizada -> scripts a re-executar
 
 | Base de dados atualizada | Scripts a re-executar (na ordem) |
 |---|---|
-| `manti_fat_*.parquet` (faturamento) | `extrair_compatibilidade_embalagem.py` -> `extrair_precos_embalagem.py` -> `gerar_pedidos_clientes.py` -> `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `manti_fat_*.parquet` (faturamento) | `extrair_compatibilidade_embalagem.py` -> `extrair_precos_embalagem.py` -> `gerar_demanda_historica.py` -> `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `PRODUÇÃO DIA.xlsx` (produção diária) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `MANTI-PRIC_Custos_*.parquet` (custos) | `extrair_precos_embalagem.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `MANTI-PRIC_Custos_*.parquet` (custos) | `gerar_custos_sku.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `base_skus_classes.xlsx` (classificação) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `skus_restritos.xlsx` (SKUs permitidos) | `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `ESTAB CORRIGIDO.xlsx` (estab. corrigido) | `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `ESTAB CORRIGIDO.xlsx` (estab. corrigido) | `gerar_demanda_historica.py` -> `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `config.yaml` (parâmetros) | `main.py` -> `comparar_producao_alocacao.py` (e geradores de input se janela/granularidade mudaram) |
+| Edição manual de CSV (preço/custo/demanda) | `main.py` -> `comparar_producao_alocacao.py` |
 
 ## Entradas esperadas (configuradas em `config.yaml`)
 
@@ -89,9 +109,11 @@ na ordem indicada:
 | `paths.producao` | `inputs/producao_classe.csv` | Produção total por classe (gerado por `gerar_producao_classe.py`) |
 | `paths.classes` | `inputs/base_skus_classes.xlsx` | Mapeamento item -> classe biológica |
 | `paths.pedidos` | `inputs/pedidos_clientes.csv` | Pedidos por SKU (gerado por `gerar_pedidos_clientes.py`) |
-| `paths.precos` | `inputs/precos_sku_embalagem.csv` | Preços por item_id (gerado por `extrair_precos_embalagem.py`) |
-| `paths.custos` | `inputs/MANTI-PRIC_Custos_*.parquet` | Custos por item (PRIC) |
-| `paths.faturamento` | `inputs/manti_fat_*.parquet` | Faturamento histórico (para demanda e enriquecimento) |
+| `paths.precos` | `inputs/precos_sku_embalagem.csv` | Preços por SKU (gerado por `extrair_precos_embalagem.py`, editável) |
+| `paths.custos` | `inputs/MANTI-PRIC_Custos_*.parquet` | Custos brutos (Parquet original, usado por `gerar_custos_sku.py`) |
+| — | `inputs/custos_sku.csv` | Custos por SKU (gerado por `gerar_custos_sku.py`, editável) |
+| — | `inputs/demanda_historica.csv` | Limites de demanda (gerado por `gerar_demanda_historica.py`, editável) |
+| `paths.faturamento` | `inputs/manti_fat_*.parquet` | Faturamento histórico (para demanda, preços e enriquecimento) |
 | `paths.producao_bruta` | `inputs/PRODUÇÃO DIA.xlsx` | Produção diária bruta (aba CE0302) |
 | `paths.skus_restritos` | `inputs/skus_restritos.xlsx` | Filtro de SKUs ativos/permitidos |
 | `paths.estab_corrigido` | `inputs/ESTAB CORRIGIDO.xlsx` | Correção de estabelecimento |
@@ -174,23 +196,27 @@ Se os nomes dos arquivos forem diferentes, ajustar a seção `paths:` do `config
 # Ativar ambiente virtual (se não estiver ativo)
 source venv/bin/activate
 
-# Pipeline completo (6 passos: preparação + otimização + relatório)
+# Pipeline completo (8 passos: preparação + otimização + relatório)
 ./executar_pipeline.sh
 
 # Opções:
-#   ./executar_pipeline.sh --sem-preparacao   # Pula passos 1-4 (inputs já prontos)
-#   ./executar_pipeline.sh --sem-relatorio    # Pula passo 6 (sem relatório comparativo)
+#   ./executar_pipeline.sh --sem-preparacao   # Pula passos 1-6 (inputs já prontos)
+#   ./executar_pipeline.sh --sem-relatorio    # Pula passo 8 (sem relatório comparativo)
 ```
 
 **Windows (ou passo a passo em qualquer SO):**
 ```bash
-python3 extrair_compatibilidade_embalagem.py   # 1. Compatibilidade embalagem
-python3 extrair_precos_embalagem.py            # 2. Preços por SKU/embalagem
-python3 gerar_pedidos_clientes.py              # 3. Pedidos de clientes
-python3 gerar_producao_classe.py               # 4. Produção por classe
-python3 main.py                                # 5. ETL + Otimização + Output
-python3 comparar_producao_alocacao.py          # 6. Relatório comparativo
+python extrair_compatibilidade_embalagem.py    # 1. Compatibilidade embalagem
+python extrair_precos_embalagem.py             # 2. Preços por SKU/embalagem
+python gerar_custos_sku.py                     # 3. Custos por SKU
+python gerar_demanda_historica.py              # 4. Demanda histórica por SKU
+python gerar_pedidos_clientes.py               # 5. Pedidos de clientes
+python gerar_producao_classe.py                # 6. Produção por classe
+python main.py                                 # 7. ETL + Otimização + Output
+python comparar_producao_alocacao.py           # 8. Relatório comparativo
 ```
+
+> **Nota**: No Windows sem WSL, use `python` em vez de `python3`. Os CSVs gerados nos passos 2-4 podem ser editados manualmente antes de rodar o passo 7.
 
 ### 5. Resultados
 
