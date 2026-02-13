@@ -517,7 +517,14 @@ class ETLPipeline:
         return df_fat
     
     def _carregar_demanda_historica(self) -> pd.DataFrame:
-        """Carrega demanda histórica por SKU."""
+        """Carrega demanda histórica por SKU.
+        
+        Fonte primária: inputs/demanda_historica.csv (gerado por gerar_demanda_historica.py).
+        O CSV é editável pelo usuário e já contém o fator multiplicativo aplicado.
+        Colunas mínimas: item, demanda_max.
+        
+        Fallback: processa diretamente do Parquet de faturamento (lógica legada).
+        """
         self.logger.info("\n[6/8] Carregando demanda historica...")
         
         usar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
@@ -526,6 +533,40 @@ class ETLPipeline:
             self.logger.info("  Demanda historica: Desabilitada")
             return pd.DataFrame(columns=['item', 'demanda_max'])
         
+        # ── Fonte primária: CSV editável ────────────────────────────────────
+        csv_path = Path('inputs/demanda_historica.csv')
+        if csv_path.exists():
+            self.logger.info(f"  Lendo CSV editável: {csv_path}")
+            df_demanda = pd.read_csv(csv_path)
+            
+            # Validar colunas mínimas
+            if 'item' not in df_demanda.columns or 'demanda_max' not in df_demanda.columns:
+                self.logger.warning(f"  CSV inválido (colunas 'item' e 'demanda_max' obrigatórias). Tentando fallback.")
+            else:
+                df_demanda['item'] = pd.to_numeric(df_demanda['item'], errors='coerce')
+                df_demanda = df_demanda[df_demanda['item'].notna()].copy()
+                df_demanda['item'] = df_demanda['item'].astype(int)
+                df_demanda['demanda_max'] = pd.to_numeric(df_demanda['demanda_max'], errors='coerce').fillna(0)
+                
+                # Garantir coluna volume_historico_total (pode estar ausente se editado)
+                if 'volume_historico_total' not in df_demanda.columns:
+                    df_demanda['volume_historico_total'] = 0.0
+                else:
+                    df_demanda['volume_historico_total'] = pd.to_numeric(
+                        df_demanda['volume_historico_total'], errors='coerce'
+                    ).fillna(0)
+                
+                self.logger.info(f"  SKUs com demanda historica: {len(df_demanda)}")
+                self.logger.info(f"  Limite demanda medio: {df_demanda['demanda_max'].mean():,.0f} unidades")
+                self.logger.info(f"  (Fonte: CSV editável — fator já aplicado)")
+                return df_demanda
+        
+        # ── Fallback: processar do Parquet (lógica legada) ──────────────────
+        self.logger.info("  CSV não encontrado, processando do faturamento bruto...")
+        return self._carregar_demanda_historica_parquet()
+    
+    def _carregar_demanda_historica_parquet(self) -> pd.DataFrame:
+        """Fallback: processa demanda histórica diretamente do Parquet bruto (lógica legada)."""
         path = Path(self.config['paths'].get('faturamento', 'inputs/faturamento.parquet'))
         
         if not path.exists():
@@ -541,16 +582,15 @@ class ETLPipeline:
         col_item = 'item' if 'item' in df_fat.columns else None
         col_qtd = 'Quantidade' if 'Quantidade' in df_fat.columns else None
         col_data = 'Dt.Emissão' if 'Dt.Emissão' in df_fat.columns else None
-        col_desc = 'Descrição do item' if 'Descrição do item' in df_fat.columns else None
         
         if not all([col_item, col_qtd, col_data]):
             self.logger.warning("  Colunas necessárias não encontradas no faturamento")
             return pd.DataFrame(columns=['item', 'demanda_max'])
         
-        # Aplicar correção de estabelecimento (alguns clientes foram registrados no Estab errado)
+        # Aplicar correção de estabelecimento
         df_fat = self._aplicar_correcao_estabelecimento(df_fat)
         
-        # Filtrar estabelecimentos usando coluna corrigida
+        # Filtrar estabelecimentos
         estabs_manter = self.config.get('negocio', {}).get('filtrar_granjas', [])
         if estabs_manter and 'Estab_Corrigido' in df_fat.columns:
             antes = len(df_fat)
@@ -558,14 +598,10 @@ class ETLPipeline:
             self.logger.info(f"  Mantendo estabelecimentos (corrigido): {estabs_manter}")
             self.logger.info(f"  Registros após filtro: {len(df_fat)} de {antes}")
         
-        # A base de faturamento está normalizada para caixas de 360 ovos
-        # A coluna 'Quantidade' representa caixas equivalentes de 360 ovos
-        # Para obter quantidade em ovos: Quantidade × 360
-        # Nota: CONV. P OVO = Quantidade × 360 (verificado em 100% dos registros)
         self.logger.info(f"  Convertendo quantidade para ovos (Quantidade × 360)")
         df_fat[col_qtd] = df_fat[col_qtd] * 360
         
-        # Converter data e filtrar período (mesmo critério de custo/preço: mes_ref + janela)
+        # Converter data e filtrar período
         df_fat[col_data] = pd.to_datetime(df_fat[col_data], errors='coerce')
         df_fat = df_fat[df_fat[col_data].notna()]
         
@@ -589,7 +625,7 @@ class ETLPipeline:
         df_fat = df_fat.drop(columns=['_ano', '_mes', '_periodo'])
         self.logger.info(f"  Periodo demanda: janela de {meses_janela} meses ate {ano_ref}-{mes_ref:02d} -> {', '.join([f'{a}-{m:02d}' for a, m in periodos])}")
         
-        # Agregar por período (semanal por padrão)
+        # Agregar por período
         granularidade = self.config.get('modelo', {}).get('granularidade_demanda', 'S').upper()
         
         if granularidade == 'S':
@@ -599,36 +635,28 @@ class ETLPipeline:
         else:
             df_fat['periodo'] = df_fat[col_data].dt.date
         
-        # Calcular demanda por SKU agregada por período
         df_agregado = df_fat.groupby([col_item, 'periodo'])[col_qtd].sum().reset_index()
         df_agregado.columns = ['item', 'periodo', 'demanda_periodo']
         
-        # Tipo de cálculo: maximo, media ou percentil
         tipo_calculo = self.config.get('modelo', {}).get('tipo_calculo_demanda', 'maximo').lower()
         fator = self.config.get('modelo', {}).get('fator_demanda_maxima', 1.2)
         
         if tipo_calculo == 'media':
-            # Média dos períodos
             df_demanda = df_agregado.groupby('item')['demanda_periodo'].mean().reset_index()
             df_demanda.columns = ['item', 'demanda_max']
             self.logger.info(f"  Tipo de calculo: MEDIA dos periodos x {fator}")
         elif tipo_calculo == 'percentil':
-            # Percentil configurado
             percentil = self.config.get('modelo', {}).get('percentil_demanda', 95)
             df_demanda = df_agregado.groupby('item')['demanda_periodo'].quantile(percentil/100).reset_index()
             df_demanda.columns = ['item', 'demanda_max']
             self.logger.info(f"  Tipo de calculo: PERCENTIL {percentil} x {fator}")
         else:
-            # Máximo histórico (padrão)
             df_demanda = df_agregado.groupby('item')['demanda_periodo'].max().reset_index()
             df_demanda.columns = ['item', 'demanda_max']
             self.logger.info(f"  Tipo de calculo: MAXIMO historico x {fator}")
         
-        # Aplicar fator de expansão
         df_demanda['demanda_max'] = df_demanda['demanda_max'] * fator
         
-        # Calcular volume total histórico por SKU (SEM fator) para proporção do baseline
-        # Isso representa o volume REAL vendido no período, usado para calcular proporção
         df_volume_total = df_agregado.groupby('item')['demanda_periodo'].sum().reset_index()
         df_volume_total.columns = ['item', 'volume_historico_total']
         df_demanda = df_demanda.merge(df_volume_total, on='item', how='left')
@@ -636,6 +664,7 @@ class ETLPipeline:
         self.logger.info(f"  SKUs com demanda historica: {len(df_demanda)}")
         self.logger.info(f"  Limite demanda medio: {df_demanda['demanda_max'].mean():,.0f} unidades")
         self.logger.info(f"  Volume historico total medio: {df_demanda['volume_historico_total'].mean():,.0f} unidades")
+        self.logger.info(f"  (Fonte: Parquet bruto — fallback)")
         
         return df_demanda
     
