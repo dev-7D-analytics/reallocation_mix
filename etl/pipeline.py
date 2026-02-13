@@ -284,114 +284,166 @@ class ETLPipeline:
         return df_precos
     
     def _carregar_custos(self) -> pd.DataFrame:
-        """Carrega custos por item_id - otimizado para bases grandes."""
+        """Carrega custos por item (SKU).
+        
+        Lê o CSV pré-calculado (gerado por gerar_custos_sku.py).
+        O arquivo precisa ter ao menos 'item' e 'custo_ytd'.
+        A coluna 'embalagem' é opcional; se ausente, é recuperada do
+        arquivo de compatibilidade SKU/embalagem.
+        """
         self.logger.info("\n[5/8] Carregando custos...")
         
-        path = Path(self.config['paths'].get('custos', 'inputs/custos.parquet'))
+        # Prioridade: custos_calculados (CSV editável) > custos (Parquet bruto)
+        path_csv = Path(self.config['paths'].get('custos_calculados', 'inputs/custos_sku.csv'))
+        path_parquet = Path(self.config['paths'].get('custos', 'inputs/custos.parquet'))
         
-        if not path.exists():
-            raise FileNotFoundError(f"Arquivo de custos nao encontrado: {path}")
-        
-        # Importar função de extração de embalagem
-        from extrair_compatibilidade_embalagem import extrair_embalagem_descricao
-        
-        is_parquet = path.suffix == '.parquet'
-        
-        if is_parquet:
-            # Ler apenas colunas necessárias para economizar memória
-            colunas_necessarias = ['Estab', 'item', 'MÊS', 'ano', 'Custo Médio', 'Quantidade', 'UF', 'Descrição do item']
-            self.logger.info(f"  Lendo arquivo Parquet (apenas colunas necessarias)...")
-            
-            df_custo = pd.read_parquet(path, columns=colunas_necessarias, engine='pyarrow')
-            
-            # Aplicar filtros de estabelecimento e período
-            dados_config = self.config.get('dados', {})
-            mes_custo = dados_config.get('mes_custo', 11)
-            ano_custo = dados_config.get('ano_custo', 2025)
-            estab_custo = dados_config.get('estab_custo', 100)
-            meses_janela = dados_config.get('meses_janela_custo', 6)
-            
-            # Criar lista de períodos
-            periodos = []
-            for i in range(meses_janela):
-                mes = mes_custo - i
-                ano = ano_custo
-                while mes <= 0:
-                    mes += 12
-                    ano -= 1
-                periodos.append((ano, mes))
-            
-            self.logger.info(f"  Aplicando filtros: Estab={estab_custo}, janela de {meses_janela} meses...")
-            self.logger.info(f"  Períodos incluídos: {', '.join([f'{a}-{m:02d}' for a, m in periodos])}")
-            
-            # Filtrar por estabelecimento primeiro (mais eficiente)
-            df_custo = df_custo[df_custo['Estab'] == estab_custo].copy()
-            
-            # Filtrar por período usando vetorização
-            df_custo['_periodo'] = list(zip(df_custo['ano'], df_custo['MÊS']))
-            df_custo = df_custo[df_custo['_periodo'].isin(periodos)].copy()
-            df_custo = df_custo.drop(columns=['_periodo'])
-            
-            self.logger.info(f"  Registros após filtros de periodo: {len(df_custo):,}")
-            
-            # Filtrar exportação
-            antes_uf = len(df_custo)
-            df_custo = df_custo[df_custo['UF'] != 'EX'].copy()
-            if antes_uf - len(df_custo) > 0:
-                self.logger.info(f"  Registros de exportacao removidos: {antes_uf - len(df_custo):,}")
-            
-            # Converter tipos
-            df_custo['Custo Médio'] = pd.to_numeric(df_custo['Custo Médio'], errors='coerce')
-            df_custo['Quantidade'] = pd.to_numeric(df_custo['Quantidade'], errors='coerce')
-            
-            # Filtrar registros válidos
-            df_custo = df_custo[
-                (df_custo['Quantidade'] > 0) & 
-                (df_custo['Custo Médio'].notna())
-            ].copy()
-            
-            # Custo total para agregação ponderada (mesmo racional do original)
-            df_custo['custo_total'] = df_custo['Custo Médio']
-            
-            # Extrair embalagem
-            df_custo['embalagem'] = df_custo['Descrição do item'].apply(extrair_embalagem_descricao)
-            
-            # Criar item_id
-            df_custo['item'] = pd.to_numeric(df_custo['item'], errors='coerce')
-            df_custo = df_custo[df_custo['item'].notna() & df_custo['embalagem'].notna()].copy()
-            df_custo['item_id'] = df_custo['item'].astype(int).astype(str) + '_' + df_custo['embalagem']
-            
-            # Criar ano_mes para primeira agregação
-            df_custo['ano_mes'] = df_custo['ano'].astype(str) + '-' + df_custo['MÊS'].astype(str).str.zfill(2)
-            
-            # Agregar usando MÉDIA PONDERADA (mesma lógica do modelo original)
-            self.logger.info(f"  Agregando por item_id (média ponderada)...")
-            
-            # Primeira agregação: por (item, embalagem, ano_mes)
-            custos_mes = df_custo.groupby(['item', 'embalagem', 'ano_mes']).agg({
-                'Quantidade': 'sum',
-                'custo_total': 'sum'
-            }).reset_index()
-            
-            # Segunda agregação: por (item, embalagem) - soma total
-            df_custo_agg = custos_mes.groupby(['item', 'embalagem']).agg({
-                'Quantidade': 'sum',
-                'custo_total': 'sum'
-            }).reset_index()
-            
-            # Custo final = custo_total / volume_total (média ponderada)
-            df_custo_agg['custo_ytd'] = df_custo_agg['custo_total'] / df_custo_agg['Quantidade']
-            df_custo_agg['item_id'] = df_custo_agg['item'].astype(int).astype(str) + '_' + df_custo_agg['embalagem']
-            
-            df_custo = df_custo_agg[['item_id', 'item', 'embalagem', 'custo_ytd']]
+        if path_csv.exists():
+            path = path_csv
+        elif path_parquet.exists() and path_parquet.suffix == '.parquet':
+            self.logger.warning(f"  CSV de custos não encontrado ({path_csv}). Usando Parquet bruto.")
+            self.logger.warning(f"  Execute 'python gerar_custos_sku.py' para gerar o CSV editável.")
+            # Fallback: processar Parquet inline (lógica legada)
+            return self._carregar_custos_parquet(path_parquet)
         else:
-            df_custo = pd.read_csv(path)
+            raise FileNotFoundError(
+                f"Nenhum arquivo de custos encontrado.\n"
+                f"  Esperado CSV: {path_csv}\n"
+                f"  Ou Parquet: {path_parquet}\n"
+                f"  Execute 'python gerar_custos_sku.py' para gerar o CSV."
+            )
+        
+        self.logger.info(f"  Arquivo: {path}")
+        df_custo = pd.read_csv(path)
+        
+        # Garantir coluna 'item' numérica
+        df_custo['item'] = pd.to_numeric(df_custo['item'], errors='coerce')
+        df_custo = df_custo[df_custo['item'].notna()].copy()
+        df_custo['item'] = df_custo['item'].astype(int)
+        
+        # Detectar coluna de custo
+        if 'custo_ytd' not in df_custo.columns:
+            for col in df_custo.columns:
+                if 'custo' in col.lower() or 'cost' in col.lower():
+                    df_custo['custo_ytd'] = df_custo[col]
+                    break
         
         # Filtrar custos válidos
         df_custo = df_custo[
-            df_custo['custo_ytd'].notna() & 
+            df_custo['custo_ytd'].notna() &
             (df_custo['custo_ytd'] > 0)
         ].copy()
+        
+        # Se embalagem ausente, recuperar do arquivo de compatibilidade
+        if 'embalagem' not in df_custo.columns or df_custo['embalagem'].isna().all():
+            self.logger.info("  Embalagem não encontrada no CSV de custos. Recuperando da compatibilidade...")
+            path_compat = Path('inputs/compatibilidade_sku_embalagem.csv')
+            if path_compat.exists():
+                compat = pd.read_csv(path_compat)
+                compat['item'] = pd.to_numeric(compat['item'], errors='coerce').astype('Int64')
+                emb_map = compat.drop_duplicates('item').set_index('item')['embalagem'].to_dict()
+                df_custo['embalagem'] = df_custo['item'].map(emb_map)
+            else:
+                self.logger.warning(f"  Arquivo de compatibilidade não encontrado: {path_compat}")
+        
+        # Preencher embalagens faltantes de linhas editadas manualmente
+        if 'embalagem' in df_custo.columns:
+            sem_emb = df_custo['embalagem'].isna()
+            if sem_emb.any():
+                path_compat = Path('inputs/compatibilidade_sku_embalagem.csv')
+                if path_compat.exists():
+                    compat = pd.read_csv(path_compat)
+                    compat['item'] = pd.to_numeric(compat['item'], errors='coerce').astype('Int64')
+                    emb_map = compat.drop_duplicates('item').set_index('item')['embalagem'].to_dict()
+                    df_custo.loc[sem_emb, 'embalagem'] = df_custo.loc[sem_emb, 'item'].map(emb_map)
+                n_sem = df_custo['embalagem'].isna().sum()
+                if n_sem > 0:
+                    self.logger.warning(f"  {n_sem} SKUs sem embalagem (não encontrados na compatibilidade)")
+        
+        # Criar item_id
+        if 'embalagem' in df_custo.columns:
+            mask_com_emb = df_custo['embalagem'].notna()
+            df_custo.loc[mask_com_emb, 'item_id'] = (
+                df_custo.loc[mask_com_emb, 'item'].astype(str) + '_' + df_custo.loc[mask_com_emb, 'embalagem']
+            )
+        
+        if 'item_id' not in df_custo.columns:
+            df_custo['item_id'] = df_custo['item'].astype(str)
+        
+        n_skus = df_custo['item'].nunique()
+        self.logger.info(f"  SKUs com custo: {n_skus}")
+        self.logger.info(f"  Custo medio: R$ {df_custo['custo_ytd'].mean():.2f}")
+        
+        return df_custo
+    
+    def _carregar_custos_parquet(self, path: Path) -> pd.DataFrame:
+        """Fallback: processa custos diretamente do Parquet bruto (lógica legada).
+        
+        Usado apenas quando inputs/custos_sku.csv não existe.
+        Para gerar o CSV, execute: python gerar_custos_sku.py
+        """
+        from extrair_compatibilidade_embalagem import extrair_embalagem_descricao
+        
+        colunas_necessarias = ['Estab', 'item', 'MÊS', 'ano', 'Custo Médio', 'Quantidade', 'UF', 'Descrição do item']
+        self.logger.info(f"  Lendo arquivo Parquet (apenas colunas necessarias)...")
+        
+        df_custo = pd.read_parquet(path, columns=colunas_necessarias, engine='pyarrow')
+        
+        dados_config = self.config.get('dados', {})
+        mes_custo = dados_config.get('mes_custo', 11)
+        ano_custo = dados_config.get('ano_custo', 2025)
+        estab_custo = dados_config.get('estab_custo', 100)
+        meses_janela = dados_config.get('meses_janela_custo', 6)
+        
+        periodos = []
+        for i in range(meses_janela):
+            mes = mes_custo - i
+            ano = ano_custo
+            while mes <= 0:
+                mes += 12
+                ano -= 1
+            periodos.append((ano, mes))
+        
+        self.logger.info(f"  Aplicando filtros: Estab={estab_custo}, janela de {meses_janela} meses...")
+        self.logger.info(f"  Períodos incluídos: {', '.join([f'{a}-{m:02d}' for a, m in periodos])}")
+        
+        df_custo = df_custo[df_custo['Estab'] == estab_custo].copy()
+        df_custo['_periodo'] = list(zip(df_custo['ano'], df_custo['MÊS']))
+        df_custo = df_custo[df_custo['_periodo'].isin(periodos)].copy()
+        df_custo = df_custo.drop(columns=['_periodo'])
+        
+        self.logger.info(f"  Registros após filtros de periodo: {len(df_custo):,}")
+        
+        antes_uf = len(df_custo)
+        df_custo = df_custo[df_custo['UF'] != 'EX'].copy()
+        if antes_uf - len(df_custo) > 0:
+            self.logger.info(f"  Registros de exportacao removidos: {antes_uf - len(df_custo):,}")
+        
+        df_custo['Custo Médio'] = pd.to_numeric(df_custo['Custo Médio'], errors='coerce')
+        df_custo['Quantidade'] = pd.to_numeric(df_custo['Quantidade'], errors='coerce')
+        df_custo = df_custo[(df_custo['Quantidade'] > 0) & (df_custo['Custo Médio'].notna())].copy()
+        
+        df_custo['custo_total'] = df_custo['Custo Médio']
+        df_custo['embalagem'] = df_custo['Descrição do item'].apply(extrair_embalagem_descricao)
+        df_custo['item'] = pd.to_numeric(df_custo['item'], errors='coerce')
+        df_custo = df_custo[df_custo['item'].notna() & df_custo['embalagem'].notna()].copy()
+        df_custo['item_id'] = df_custo['item'].astype(int).astype(str) + '_' + df_custo['embalagem']
+        df_custo['ano_mes'] = df_custo['ano'].astype(str) + '-' + df_custo['MÊS'].astype(str).str.zfill(2)
+        
+        self.logger.info(f"  Agregando por item_id (média ponderada)...")
+        
+        custos_mes = df_custo.groupby(['item', 'embalagem', 'ano_mes']).agg({
+            'Quantidade': 'sum', 'custo_total': 'sum'
+        }).reset_index()
+        
+        df_custo_agg = custos_mes.groupby(['item', 'embalagem']).agg({
+            'Quantidade': 'sum', 'custo_total': 'sum'
+        }).reset_index()
+        
+        df_custo_agg['custo_ytd'] = df_custo_agg['custo_total'] / df_custo_agg['Quantidade']
+        df_custo_agg['item_id'] = df_custo_agg['item'].astype(int).astype(str) + '_' + df_custo_agg['embalagem']
+        
+        df_custo = df_custo_agg[['item_id', 'item', 'embalagem', 'custo_ytd']]
+        df_custo = df_custo[df_custo['custo_ytd'].notna() & (df_custo['custo_ytd'] > 0)].copy()
         
         self.logger.info(f"  Itens unicos (item_id) com custo: {df_custo['item_id'].nunique()}")
         self.logger.info(f"  Custo medio: R$ {df_custo['custo_ytd'].mean():.2f}")
