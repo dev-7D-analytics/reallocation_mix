@@ -31,13 +31,13 @@ realocacao-git/
 │   ├── comparativo.py                   # Comparativo baseline vs otimizado + auditoria
 │   └── resultados.py                    # Salvamento de resultados (CSV/Excel)
 │
-├── gerar_pedidos_clientes.py            # Gera pedidos_clientes.csv
-├── gerar_producao_classe.py             # Gera producao_classe.csv
+├── gerar_pedidos_clientes.py            # Gera pedidos_clientes.csv (editável)
+├── gerar_producao_classe.py             # Gera producao_classe.csv (editável)
 ├── gerar_custos_sku.py                  # Gera custos_sku.csv (editável)
 ├── gerar_demanda_historica.py           # Gera demanda_historica.csv (editável)
 ├── comparar_producao_alocacao.py        # Relatório: produção real vs alocação do modelo
 ├── extrair_compatibilidade_embalagem.py # Extrai compatibilidade SKU-embalagem do faturamento
-├── extrair_precos_embalagem.py          # Extrai preços por embalagem
+├── extrair_precos_embalagem.py          # Extrai preços por embalagem (editável)
 │
 ├── docs/
 │   └── formulacao_modelo.tex            # Formulação matemática (LaTeX)
@@ -57,18 +57,18 @@ na ordem indicada:
      ├─ manti_fat_*.parquet ──► extrair_compatibilidade_embalagem.py
      │                              │
      │                              ▼
-     │                          extrair_precos_embalagem.py ──► inputs/precos_sku_embalagem.csv  (editável)
+     │                          extrair_precos_embalagem.py ──► inputs/precos_sku_embalagem.csv (editável)
      │
-     ├─ MANTI-PRIC_Custos_* ──► gerar_custos_sku.py ──────► inputs/custos_sku.csv              (editável)
+     ├─ MANTI-PRIC_Custos_* ──► gerar_custos_sku.py ──────► inputs/custos_sku.csv   (editável)
      │
-     ├─ manti_fat_*.parquet ──► gerar_demanda_historica.py ► inputs/demanda_historica.csv        (editável)
+     ├─ manti_fat_*.parquet ──► gerar_demanda_historica.py ► inputs/demanda_historica.csv (editável)
      │   ESTAB CORRIGIDO.xlsx
      │
-     ├─ manti_fat_*.parquet ──► gerar_pedidos_clientes.py ─► inputs/pedidos_clientes.csv
+     ├─ manti_fat_*.parquet ──► gerar_pedidos_clientes.py ─► inputs/pedidos_clientes.csv (editável)
      │   skus_restritos.xlsx
      │   ESTAB CORRIGIDO.xlsx
      │
-     ├─ PRODUÇÃO DIA.xlsx ────► gerar_producao_classe.py ──► inputs/producao_classe.csv
+     ├─ PRODUÇÃO DIA.xlsx ────► gerar_producao_classe.py ──► inputs/producao_classe.csv (editável)
      │   base_skus_classes.xlsx
      │
      └──────────────────────────► main.py (ETL + Otimização + Output)
