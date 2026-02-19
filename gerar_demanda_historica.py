@@ -62,10 +62,9 @@ def _aplicar_correcao_estabelecimento(df: pd.DataFrame, config: Dict) -> pd.Data
         # Mapeamento Cliente -> Estab Padrao (mesma lógica do ETL)
         mapa_estab = dict(zip(df_correcao['Cliente'], df_correcao['Estab Padrao']))
         
-        # Se o cliente está no mapeamento, usa Estab Padrao; senão, mantém original
-        df['Estab_Corrigido'] = df.apply(
-            lambda row: mapa_estab.get(row[col_cliente], row['Estab']),
-            axis=1
+        # Se o cliente está no mapeamento, usa Estab Padrao; senão, mantém original (vetorizado)
+        df['Estab_Corrigido'] = (
+            df[col_cliente].map(mapa_estab).fillna(df['Estab'])
         )
         
         n_corrigidos = (df['Estab'] != df['Estab_Corrigido']).sum()
@@ -212,8 +211,8 @@ def main(argv=None):
         df_demanda.columns = ['item', 'demanda_base']
         desc_calculo = f"MÁXIMO × {fator}"
 
-    # Aplicar fator
-    df_demanda['demanda_max'] = df_demanda['demanda_base'] * fator
+    # Aplicar fator e garantir que não haja valores negativos
+    df_demanda['demanda_max'] = (df_demanda['demanda_base'] * fator).clip(lower=0)
 
     # Volume histórico total (sem fator, soma de todos os períodos)
     df_volume = df_agregado.groupby('item')['demanda_periodo'].sum().reset_index()

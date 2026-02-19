@@ -27,6 +27,7 @@ from typing import Dict, List, Any, Optional
 from etl.pipeline import ETLPipeline
 from modelo.otimizador import Otimizador
 from output import calcular_comparativo_baseline, salvar_resultados
+from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
 
 
 def carregar_config(config_path: str = 'config.yaml') -> dict:
@@ -223,35 +224,63 @@ def main():
                 p['prod_disponivel_antes'] = None
                 p['prod_disponivel_depois'] = None
         
-        # Gerar linhas de reserva
+        # Mapa item → qtd_ovos_por_caixa (extraído da descrição do faturamento)
+        qtd_ovos_map = {}
+        for item_int, desc in desc_map.items():
+            if desc:
+                emb = extrair_embalagem_descricao(str(desc))
+                if emb:
+                    qtd = calcular_qtd_embalagem(emb)
+                    if qtd and qtd > 0:
+                        qtd_ovos_map[item_int] = qtd
+        
+        # Gerar linhas de reserva com margens reais
         colunas_base = list(resultado.resultado.columns)
         linhas_reserva = []
         for p in pedidos_info:
+            qtd_ovos = qtd_ovos_map.get(p['item'], 360)
+            qty_reservada = p['quantidade_reservada']
+            preco_unit = p['preco']
+            custo_unit = p['custo_ytd']
+            
+            if preco_unit is not None and custo_unit is not None and qtd_ovos > 0:
+                margem_ovo = (preco_unit - custo_unit) / qtd_ovos
+                receita_total = (preco_unit / qtd_ovos) * qty_reservada
+                custo_total = (custo_unit / qtd_ovos) * qty_reservada
+                margem_total = receita_total - custo_total
+                quantidade_caixas = qty_reservada / qtd_ovos
+            else:
+                margem_ovo = None
+                receita_total = 0.0
+                custo_total = 0.0
+                margem_total = 0.0
+                quantidade_caixas = 0.0
+            
             linhas_reserva.append({
                 'item_id': f"{p['item']}_RESERVA",
                 'item': p['item'],
                 'descricao': desc_map.get(p['item'], None),
                 'embalagem': 'RESERVA',
                 'classe': p['classe'],
-                'quantidade': p['quantidade_reservada'],
+                'quantidade': qty_reservada,
                 'quantidade_pedida': p['quantidade_pedida'],
                 'deficit_pedido': p['deficit_pedido'],
                 'ordem_prioridade': p.get('ordem_prioridade'),
                 'prod_disponivel_antes': p.get('prod_disponivel_antes'),
                 'prod_disponivel_depois': p.get('prod_disponivel_depois'),
-                'quantidade_caixas': 0.0,
-                'preco': p['preco'],
-                'custo_ytd': p['custo_ytd'],
+                'quantidade_caixas': quantidade_caixas,
+                'preco': preco_unit,
+                'custo_ytd': custo_unit,
                 'margem_unitaria': p['margem_unitaria'],
-                'margem_por_ovo': None,
-                'receita_total': 0.0,
-                'custo_total': 0.0,
-                'margem_total': 0.0,
+                'margem_por_ovo': margem_ovo,
+                'receita_total': receita_total,
+                'custo_total': custo_total,
+                'margem_total': margem_total,
                 'limite_demanda_historica': None,
                 'producao_disponivel': 0.0,
                 'producao_total': 0.0,
                 'tem_demanda_historica': False,
-                'custo_medio_classe': False,
+                'usa_custo_medio_classe': False,
                 'tipo': 'reserva',
             })
         if linhas_reserva:
@@ -297,7 +326,7 @@ def main():
                 'producao_disponivel': row.get('producao_disponivel_otimizacao_classe', 0.0),
                 'producao_total': row.get('producao_total', 0.0),
                 'tem_demanda_historica': row.get('tem_demanda_historica', False),
-                'custo_medio_classe': row.get('custo_medio_classe', False),
+                'usa_custo_medio_classe': row.get('usa_custo_medio_classe', False),
                 'tipo': 'outros',
             })
         df_outros = pd.DataFrame(linhas_outros)

@@ -489,11 +489,10 @@ class ETLPipeline:
             # Criar dicionário de mapeamento Cliente -> Estab Padrao
             mapa_estab = dict(zip(df_correcao['Cliente'], df_correcao['Estab Padrao']))
             
-            # Criar coluna Estab_Corrigido
+            # Criar coluna Estab_Corrigido (vetorizado)
             # Se o cliente está no mapeamento, usa o Estab Padrao; senão, mantém o Estab original
-            df_fat['Estab_Corrigido'] = df_fat.apply(
-                lambda row: mapa_estab.get(row[col_cliente], row['Estab']),
-                axis=1
+            df_fat['Estab_Corrigido'] = (
+                df_fat[col_cliente].map(mapa_estab).fillna(df_fat['Estab'])
             )
             
             # Contar quantos registros foram corrigidos
@@ -546,7 +545,7 @@ class ETLPipeline:
                 df_demanda['item'] = pd.to_numeric(df_demanda['item'], errors='coerce')
                 df_demanda = df_demanda[df_demanda['item'].notna()].copy()
                 df_demanda['item'] = df_demanda['item'].astype(int)
-                df_demanda['demanda_max'] = pd.to_numeric(df_demanda['demanda_max'], errors='coerce').fillna(0)
+                df_demanda['demanda_max'] = pd.to_numeric(df_demanda['demanda_max'], errors='coerce').fillna(0).clip(lower=0)
                 
                 # Garantir coluna volume_historico_total (pode estar ausente se editado)
                 if 'volume_historico_total' not in df_demanda.columns:
@@ -638,7 +637,7 @@ class ETLPipeline:
         df_agregado = df_fat.groupby([col_item, 'periodo'])[col_qtd].sum().reset_index()
         df_agregado.columns = ['item', 'periodo', 'demanda_periodo']
         
-        tipo_calculo = self.config.get('modelo', {}).get('tipo_calculo_demanda', 'maximo').lower()
+        tipo_calculo = self.config.get('modelo', {}).get('tipo_calculo_demanda', 'media').lower()
         fator = self.config.get('modelo', {}).get('fator_demanda_maxima', 1.2)
         
         if tipo_calculo == 'media':
@@ -655,7 +654,7 @@ class ETLPipeline:
             df_demanda.columns = ['item', 'demanda_max']
             self.logger.info(f"  Tipo de calculo: MAXIMO historico x {fator}")
         
-        df_demanda['demanda_max'] = df_demanda['demanda_max'] * fator
+        df_demanda['demanda_max'] = (df_demanda['demanda_max'] * fator).clip(lower=0)
         
         df_volume_total = df_agregado.groupby('item')['demanda_periodo'].sum().reset_index()
         df_volume_total.columns = ['item', 'volume_historico_total']
@@ -755,7 +754,7 @@ class ETLPipeline:
             df_base = df_base[df_base['item'].isin(skus_producao)].copy()
         
         # Flag de custo médio
-        df_base['custo_medio_classe'] = False
+        df_base['usa_custo_medio_classe'] = False
         
         # Adicionar classe
         df_base = df_base.merge(dados.classes, on='item', how='inner')
@@ -878,7 +877,7 @@ class ETLPipeline:
                         'embalagem': embalagem,
                         'custo_ytd': custo_ref,
                         'classe': classe,
-                        'custo_medio_classe': True,
+                        'usa_custo_medio_classe': True,
                         'origem_custo': origem_custo,
                         'origem_embalagem': fonte  # preco, demanda, ou classe
                     })
@@ -1033,9 +1032,9 @@ class ETLPipeline:
         self.logger.info("=" * 80)
         
         # Origem dos custos
-        if 'custo_medio_classe' in df_base.columns:
-            custo_direto = (~df_base['custo_medio_classe'].fillna(False)).sum()
-            custo_classe = df_base['custo_medio_classe'].fillna(False).sum()
+        if 'usa_custo_medio_classe' in df_base.columns:
+            custo_direto = (~df_base['usa_custo_medio_classe'].fillna(False)).sum()
+            custo_classe = df_base['usa_custo_medio_classe'].fillna(False).sum()
             self.logger.info(f"CUSTOS:")
             self.logger.info(f"  - Custo direto (base de custos): {custo_direto} SKUs")
             self.logger.info(f"  - Custo médio da classe: {custo_classe} SKUs")

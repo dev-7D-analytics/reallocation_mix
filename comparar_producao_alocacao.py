@@ -773,10 +773,10 @@ def main():
     pedidos = _carregar_pedidos(config)
     skus_restritos = _carregar_skus_restritos(config)
     
-    # Tentar carregar demanda histórica, limite_demanda_historica, margem_por_ovo e custo_medio_classe do resultado do modelo
+    # Tentar carregar demanda histórica, limite_demanda_historica, margem_por_ovo e usa_custo_medio_classe do resultado do modelo
     # Usar o caminho já carregado em carregar_alocacao
     skus_com_demanda = set()
-    custo_medio_classe_por_item_id = {}  # item_id -> True/False
+    usa_custo_medio_classe_por_item_id = {}  # item_id -> True/False
     limite_demanda_por_item = {}  # item -> limite_demanda_historica
     margem_por_ovo_por_item = {}  # item -> margem_por_ovo (R$/ovo - métrica otimizada)
     df_demanda_historica = pd.DataFrame(columns=["item", "descricao", "classe", "demanda_max"])
@@ -800,10 +800,10 @@ def main():
             # Pegar o primeiro valor de margem_por_ovo para cada SKU
             margem_por_ovo_por_item = df_aloc_completo.groupby('item')['margem_por_ovo'].first().to_dict()
         
-        # Extrair custo_medio_classe por item_id
-        if 'custo_medio_classe' in df_aloc_completo.columns and 'item_id' in df_aloc_completo.columns:
+        # Extrair usa_custo_medio_classe por item_id
+        if 'usa_custo_medio_classe' in df_aloc_completo.columns and 'item_id' in df_aloc_completo.columns:
             df_aloc_completo['item_id'] = df_aloc_completo['item_id'].astype(str)
-            custo_medio_classe_por_item_id = df_aloc_completo.set_index('item_id')['custo_medio_classe'].to_dict()
+            usa_custo_medio_classe_por_item_id = df_aloc_completo.set_index('item_id')['usa_custo_medio_classe'].to_dict()
     except Exception:
         pass
 
@@ -1296,11 +1296,11 @@ def main():
         comparacao['margem_por_ovo'] = comparacao['margem_por_ovo'].astype('float64')
         comparacao.loc[sem_margem_ovo, 'margem_por_ovo'] = (comparacao.loc[sem_margem_ovo, 'margem_unitaria'] / ovos_por_caixa).astype('float64')
     
-    # 6. custo_medio_classe: Custo foi calculado usando média da classe
-    if len(custo_medio_classe_por_item_id) > 0:
-        comparacao["custo_medio_classe"] = comparacao["item_id"].map(custo_medio_classe_por_item_id).fillna(False).infer_objects(copy=False)
+    # 6. usa_custo_medio_classe: Custo foi calculado usando média da classe
+    if len(usa_custo_medio_classe_por_item_id) > 0:
+        comparacao["usa_custo_medio_classe"] = comparacao["item_id"].map(usa_custo_medio_classe_por_item_id).fillna(False).infer_objects(copy=False)
     else:
-        comparacao["custo_medio_classe"] = False
+        comparacao["usa_custo_medio_classe"] = False
     
     # Estatísticas de margem
     print("\n[INFO] Estatísticas de margem na comparação:")
@@ -1374,7 +1374,7 @@ def main():
         'tipo_calculo_demanda', 'granularidade_demanda',
         # === FLAGS / STATUS ===
         'tipo', 'origem_dado', 'tem_pedido', 'pedido_ignorado', 'sku_restrito',
-        'custo_medio_classe',
+        'usa_custo_medio_classe',
         # === ORIGENS DOS DADOS ===
         'preco_origem', 'custo_origem',
     ]
@@ -1530,7 +1530,7 @@ def main():
                     'tem_pedido': False,
                     'pedido_ignorado': False,
                     'sku_restrito': False,  # Está na lista de ativos, então não é restrito
-                    'custo_medio_classe': False,
+                    'usa_custo_medio_classe': False,
                 }
                 linhas_ausentes.append(linha)
                 

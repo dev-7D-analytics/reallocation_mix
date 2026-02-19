@@ -139,11 +139,15 @@ def main():
     # Merge com estoque
     df_estoque_com_classe = df_estoque_agg.merge(df_classes, on='item', how='left')
     
+    # Contagem ANTES do fillna (após fillna, isna() sempre retorna 0)
+    n_com_classe = df_estoque_com_classe['Classe_Produto'].notna().sum()
+    n_sem_classe = df_estoque_com_classe['Classe_Produto'].isna().sum()
+    
     # Atribuir classe OUTROS para SKUs sem classificacao
     df_estoque_com_classe['Classe_Produto'] = df_estoque_com_classe['Classe_Produto'].fillna('OUTROS')
     
-    print(f"  SKUs com classe: {df_estoque_com_classe['Classe_Produto'].notna().sum()}")
-    print(f"  SKUs sem classe (-> OUTROS): {df_estoque_com_classe['Classe_Produto'].isna().sum()}")
+    print(f"  SKUs com classe: {n_com_classe}")
+    print(f"  SKUs sem classe (-> OUTROS): {n_sem_classe}")
     print(f"  Classes unicas: {df_estoque_com_classe['Classe_Produto'].nunique()}")
     
     # 3. Agregar por classe

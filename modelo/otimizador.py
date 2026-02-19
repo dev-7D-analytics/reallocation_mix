@@ -151,24 +151,31 @@ class Otimizador:
         tipo_var = "contínuas (NumVar)" if variaveis_continuas else "inteiras (IntVar)"
         self.logger.info(f"  Tipo de variáveis: {tipo_var}")
         
+        usar_demanda = self.config.get('modelo', {}).get('considerar_demanda_historica', False)
+        
         for idx, row in self.df_base.iterrows():
             item_id = row['item_id']
             var_name = f"x_{item_id}"
             
-            # Limite superior: produção disponível da classe
-            producao_disponivel = row['producao_disponivel_otimizacao_classe']
+            # Limite superior: min(excedente da classe, demanda histórica do item)
+            upper_bound = row['producao_disponivel_otimizacao_classe']
             
-            if producao_disponivel > 0:
+            if usar_demanda:
+                limite = row.get('limite_demanda_historica')
+                if pd.notna(limite) and limite > 0:
+                    upper_bound = min(upper_bound, limite)
+            
+            if upper_bound > 0:
                 if variaveis_continuas:
                     self.variaveis[item_id] = self.solver.NumVar(
                         0,
-                        producao_disponivel,
+                        upper_bound,
                         var_name
                     )
                 else:
                     self.variaveis[item_id] = self.solver.IntVar(
                         0,
-                        int(producao_disponivel),
+                        int(upper_bound),
                         var_name
                     )
         
@@ -188,15 +195,9 @@ class Otimizador:
             producao_classe = self.producao_excedente.get(classe, 0)
             
             if producao_classe > 0:
-                vars_classe = [
-                    self.variaveis[item_id] / row['qtd_ovos_por_caixa'] * row['qtd_ovos_por_caixa']
-                    for item_id in item_ids_classe
-                    if item_id in self.variaveis
-                    for _, row in self.df_base[self.df_base['item_id'] == item_id].iterrows()
-                ]
+                tem_variaveis = any(iid in self.variaveis for iid in item_ids_classe)
                 
-                if vars_classe:
-                    # Restrição: soma das alocações (em ovos) <= produção da classe
+                if tem_variaveis:
                     constraint = self.solver.Constraint(0, producao_classe, f"classe_{classe}")
                     
                     for item_id in item_ids_classe:
@@ -344,7 +345,7 @@ class Otimizador:
                 'producao_disponivel': row['producao_disponivel_otimizacao_classe'],
                 'producao_total': row['producao_total'],
                 'tem_demanda_historica': row.get('tem_demanda_historica', False),
-                'custo_medio_classe': row.get('custo_medio_classe', False),
+                'usa_custo_medio_classe': row.get('usa_custo_medio_classe', False),
                 'tipo': 'otimizacao',
             })
         
