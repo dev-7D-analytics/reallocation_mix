@@ -1267,7 +1267,7 @@ def main():
         import re
         s = str(embalagem).strip()
         # Padrão: "CX X BJ Y UN" onde X = bandejas, Y = ovos por bandeja
-        match = re.search(r'CX\s*(\d+)\s*BJ\s*(\d+)', s, re.IGNORECASE)
+        match = re.search(r'CX\s*(?:C?/?\s*)?(\d+)\s*(?:BJ|BK)\s*(\d+)', s, re.IGNORECASE)
         if match:
             bandejas = int(match.group(1))
             ovos_por_bandeja = int(match.group(2))
@@ -1574,10 +1574,40 @@ def main():
         if col_origem in comparacao.columns:
             comparacao[col_cx] = (comparacao[col_origem] / OVOS_POR_CAIXA).round(2)
 
-    # Ordem de colunas para exportação: manter "embalagem" (valor único); não exportar "embalagens" (concatenação com | RESERVA)
-    colunas_por_item = [c for c in ["item_id", "item", "descricao", "embalagem", "classe"] if c in comparacao.columns]
-    colunas_por_item += [c for c in comparacao.columns if c not in colunas_por_item and c != "embalagens"]
-    comparacao = comparacao[[c for c in colunas_por_item if c in comparacao.columns]]
+    # Converter quantidades de ovos para caixas físicas reais (baseado na embalagem de cada SKU)
+    comparacao["ovos_por_caixa"] = comparacao["embalagem"].apply(extrair_ovos_por_caixa)
+    colunas_qtd_cxfisica = {
+        "quantidade_produzida": "cxfisica_produzida",
+        "quantidade_alocada": "cxfisica_alocada",
+        "quantidade_reservada": "cxfisica_reservada",
+        "diferenca_aloc_menos_prod": "cxfisica_diferenca",
+    }
+    for col_origem, col_cx in colunas_qtd_cxfisica.items():
+        if col_origem in comparacao.columns:
+            comparacao[col_cx] = (comparacao[col_origem] / comparacao["ovos_por_caixa"]).round(2)
+
+    n_com_ovos = comparacao["ovos_por_caixa"].notna().sum()
+    n_sem_ovos = comparacao["ovos_por_caixa"].isna().sum()
+    print(f"\n[INFO] Caixas físicas: {n_com_ovos} SKUs com embalagem parseada, {n_sem_ovos} sem (RESERVA/desconhecido)")
+
+    # Ordem de colunas para exportação: quantidades agrupadas (ovos, cx360, cxfisica)
+    colunas_ordenadas = [
+        "item_id", "item", "descricao", "embalagem", "ovos_por_caixa", "classe",
+        "quantidade_produzida", "quantidade_alocada", "quantidade_reservada",
+        "diferenca_aloc_menos_prod", "diferenca_absoluta",
+        "cx360_produzida", "cx360_alocada", "cx360_reservada", "cx360_diferenca",
+        "cxfisica_produzida", "cxfisica_alocada", "cxfisica_reservada", "cxfisica_diferenca",
+        "periodo_label", "data_producao",
+        "preco", "custo_ytd", "margem_unitaria", "margem_por_ovo",
+        "tem_demanda_historica", "demanda_max", "limite_demanda_historica",
+        "periodo_demanda_mes_ref", "periodo_demanda_ano_ref",
+        "periodo_demanda_janela_meses", "tipo_calculo_demanda", "granularidade_demanda",
+        "tipo", "origem_dado", "tem_pedido", "pedido_ignorado",
+        "sku_restrito", "usa_custo_medio_classe", "preco_origem", "custo_origem",
+    ]
+    colunas_final = [c for c in colunas_ordenadas if c in comparacao.columns]
+    colunas_final += [c for c in comparacao.columns if c not in colunas_final and c != "embalagens"]
+    comparacao = comparacao[colunas_final]
 
     # Salvar CSV (única tabela: uma linha por SKU, quantidade_reservada na coluna específica)
     comparacao.to_csv(output_path_csv, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
