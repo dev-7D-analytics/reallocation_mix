@@ -60,7 +60,29 @@ def criar_aba_estatisticas(
         estatisticas.append({'Categoria': 'COMPARATIVO', 'Métrica': 'Custo Otimizado', 'Valor': f'R$ {comparativo["custo_otimizado"]:,.2f}', 'Unidade': 'R$'})
         estatisticas.append({'Categoria': 'COMPARATIVO', 'Métrica': 'Variação Custo (R$)', 'Valor': f'R$ {comparativo["reducao_custo"]:,.2f}', 'Unidade': 'R$'})
         estatisticas.append({'Categoria': 'COMPARATIVO', 'Métrica': 'Variação Custo (%)', 'Valor': f'{comparativo["reducao_custo_pct"]:.2f}', 'Unidade': '%'})
-    
+
+        # 3b. PEDIDOS RESERVADOS
+        if comparativo.get('reserva_n_skus', 0) > 0:
+            cat = 'PEDIDOS RESERVADOS'
+            rv = comparativo
+            taxa = (rv['reserva_volume_atendido'] / rv['reserva_volume_pedido'] * 100) if rv['reserva_volume_pedido'] > 0 else 0
+            estatisticas.append({'Categoria': cat, 'Métrica': 'SKUs com Pedidos', 'Valor': f'{rv["reserva_n_skus"]}', 'Unidade': 'SKUs'})
+            estatisticas.append({'Categoria': cat, 'Métrica': 'Volume Total Pedido', 'Valor': f'{rv["reserva_volume_pedido"]:,.0f}', 'Unidade': 'ovos'})
+            estatisticas.append({'Categoria': cat, 'Métrica': 'Volume Atendido', 'Valor': f'{rv["reserva_volume_atendido"]:,.0f}', 'Unidade': 'ovos'})
+            estatisticas.append({'Categoria': cat, 'Métrica': 'Deficit (Não Atendido)', 'Valor': f'{rv["reserva_deficit"]:,.0f}', 'Unidade': 'ovos'})
+            estatisticas.append({'Categoria': cat, 'Métrica': 'Taxa de Atendimento', 'Valor': f'{taxa:.1f}', 'Unidade': '%'})
+            estatisticas.append({'Categoria': cat, 'Métrica': 'Margem COM Priorização', 'Valor': f'R$ {rv["reserva_margem"]:,.2f}', 'Unidade': 'R$'})
+            estatisticas.append({'Categoria': cat, 'Métrica': 'Margem SEM Priorização', 'Valor': f'R$ {rv["reserva_margem_sem_priorizacao"]:,.2f}', 'Unidade': 'R$'})
+            estatisticas.append({'Categoria': cat, 'Métrica': 'Ganho da Priorização', 'Valor': f'R$ {rv["ganho_priorizacao"]:,.2f}', 'Unidade': 'R$'})
+
+        # 3c. RESULTADO CONSOLIDADO
+        if 'margem_total_modelo' in comparativo:
+            cat = 'CONSOLIDADO'
+            estatisticas.append({'Categoria': cat, 'Métrica': 'Margem Total do Modelo', 'Valor': f'R$ {comparativo["margem_total_modelo"]:,.2f}', 'Unidade': 'R$'})
+            estatisticas.append({'Categoria': cat, 'Métrica': '  Margem Otimização (solver)', 'Valor': f'R$ {comparativo["margem_otimizada"]:,.2f}', 'Unidade': 'R$'})
+            estatisticas.append({'Categoria': cat, 'Métrica': '  Margem Reservas (pedidos)', 'Valor': f'R$ {comparativo.get("reserva_margem", 0):,.2f}', 'Unidade': 'R$'})
+            estatisticas.append({'Categoria': cat, 'Métrica': 'Custo Total do Modelo', 'Valor': f'R$ {comparativo["custo_total_modelo"]:,.2f}', 'Unidade': 'R$'})
+
     # 4. TOP CLASSES
     if len(resumo_classe) > 0:
         top_classes = resumo_classe.nlargest(5, 'margem_total')

@@ -34,22 +34,45 @@ def calcular_comparativo_baseline(
     if resultado is None or len(resultado) == 0:
         return {}
     
-    # Métricas otimizadas (do resultado)
-    margem_otimizada = resultado['margem_total'].sum()
-    custo_otimizado = resultado['custo_total'].sum() if 'custo_total' in resultado.columns else 0
-    
+    # Separar resultado por tipo: otimizável vs reserva
+    if 'tipo' in resultado.columns:
+        mask_otimizavel = (resultado['tipo'] != 'reserva') & (resultado['tipo'] != 'outros')
+        df_otimizavel = resultado.loc[mask_otimizavel]
+        df_reserva_resultado = resultado[resultado['tipo'] == 'reserva']
+    else:
+        df_otimizavel = resultado
+        df_reserva_resultado = pd.DataFrame()
+
+    # Métricas otimizadas: APENAS volume otimizável (excluir reserva e OUTROS)
+    margem_otimizada = df_otimizavel['margem_total'].sum() if len(df_otimizavel) > 0 else 0
+    custo_otimizado = df_otimizavel['custo_total'].sum() if len(df_otimizavel) > 0 and 'custo_total' in df_otimizavel.columns else 0
+
+    # Métricas de reserva (pedidos garantidos) - reportadas separadamente
+    reserva_volume = df_reserva_resultado['quantidade'].sum() if len(df_reserva_resultado) > 0 else 0
+    reserva_margem = df_reserva_resultado['margem_total'].sum() if len(df_reserva_resultado) > 0 else 0
+    reserva_receita = df_reserva_resultado['receita_total'].sum() if len(df_reserva_resultado) > 0 and 'receita_total' in df_reserva_resultado.columns else 0
+    reserva_custo = df_reserva_resultado['custo_total'].sum() if len(df_reserva_resultado) > 0 and 'custo_total' in df_reserva_resultado.columns else 0
+    reserva_n_skus = len(df_reserva_resultado)
+    reserva_deficit = df_reserva_resultado['deficit_pedido'].sum() if len(df_reserva_resultado) > 0 and 'deficit_pedido' in df_reserva_resultado.columns else 0
+    reserva_volume_pedido = reserva_volume + reserva_deficit
+
+    # Margem reserva SEM priorização: todos os pedidos com mesma taxa de atendimento
+    reserva_margem_sem_priorizacao = 0.0
+    if reserva_volume_pedido > 0 and len(df_reserva_resultado) > 0 and 'margem_por_ovo' in df_reserva_resultado.columns:
+        taxa_atendimento = reserva_volume / reserva_volume_pedido if reserva_volume_pedido > 0 else 0
+        qtd_pedida = df_reserva_resultado['quantidade'] + df_reserva_resultado.get('deficit_pedido', pd.Series(0, index=df_reserva_resultado.index)).fillna(0)
+        reserva_margem_sem_priorizacao = (qtd_pedida * taxa_atendimento * df_reserva_resultado['margem_por_ovo']).sum()
+    ganho_priorizacao = reserva_margem - reserva_margem_sem_priorizacao
+
     # Determinar se usa demanda histórica
     considerar_demanda = config.get('modelo', {}).get('considerar_demanda_historica', False)
-    
-    # Volume alocado por classe: apenas volume otimizável (excluir reserva e OUTROS) para comparação justa
-    # com a margem otimizada, que também não inclui margem de reserva nem de OUTROS
+
+    # Volume alocado por classe (apenas otimizável)
     if 'classe' in resultado.columns:
-        if 'tipo' in resultado.columns:
-            mask_otimizavel = (resultado['tipo'] != 'reserva') & (resultado['tipo'] != 'outros')
-            df_otimizavel = resultado.loc[mask_otimizavel]
-            qtd_alocada_por_classe = df_otimizavel.groupby('classe')['quantidade'].sum() if len(df_otimizavel) > 0 else None
+        if len(df_otimizavel) > 0:
+            qtd_alocada_por_classe = df_otimizavel.groupby('classe')['quantidade'].sum()
         else:
-            qtd_alocada_por_classe = resultado.groupby('classe')['quantidade'].sum()
+            qtd_alocada_por_classe = None
     else:
         qtd_alocada_por_classe = None
     
@@ -60,11 +83,9 @@ def calcular_comparativo_baseline(
     # Calcular volume reservado (pedidos) por classe e por SKU a partir do resultado
     reserva_por_classe = {}
     reserva_por_sku = {}
-    if 'tipo' in resultado.columns and 'classe' in resultado.columns:
-        df_reserva = resultado[resultado['tipo'] == 'reserva']
-        if len(df_reserva) > 0:
-            reserva_por_classe = df_reserva.groupby('classe')['quantidade'].sum().to_dict()
-            reserva_por_sku = df_reserva.groupby('item_id')['quantidade'].sum().to_dict()
+    if len(df_reserva_resultado) > 0 and 'classe' in df_reserva_resultado.columns:
+        reserva_por_classe = df_reserva_resultado.groupby('classe')['quantidade'].sum().to_dict()
+        reserva_por_sku = df_reserva_resultado.groupby('item_id')['quantidade'].sum().to_dict()
     
     for classe in producao_por_classe.index:
         # Com demanda histórica: baseline = mesmo volume alocado (distribuição uniforme)
@@ -335,19 +356,49 @@ def calcular_comparativo_baseline(
     reducao_custo = custo_baseline - custo_otimizado
     reducao_custo_pct = (reducao_custo / custo_baseline * 100) if custo_baseline > 0 else 0
     
+    # Totais consolidados (otimização + reserva)
+    margem_total_modelo = margem_otimizada + reserva_margem
+    custo_total_modelo = custo_otimizado + reserva_custo
+
     # Log do comparativo
     logger.info("\n" + "="*80)
-    logger.info("COMPARATIVO: BASELINE vs OTIMIZADO")
+    logger.info("COMPARATIVO: BASELINE vs OTIMIZADO (apenas volume otimizável)")
     logger.info("="*80)
-    logger.info("  (Comparação justa: mesmo volume otimizável em ambos; reserva e OUTROS excluídos)")
+    logger.info("  (Comparação justa: mesmo volume em ambos; reserva e OUTROS excluídos)")
     logger.info("  (Baseline = distribuição proporcional ao histórico de vendas por SKU)")
-    logger.info(f"  Margem Baseline (sem realocação): R$ {margem_baseline:,.2f}")
-    logger.info(f"  Margem Otimizada (com realocação): R$ {margem_otimizada:,.2f}")
-    logger.info(f"  GANHO MARGEM: R$ {ganho_margem:,.2f} ({ganho_margem_pct:.2f}%)")
-    logger.info(f"  Custo Baseline (sem realocação): R$ {custo_baseline:,.2f}")
-    logger.info(f"  Custo Otimizado (com realocação): R$ {custo_otimizado:,.2f}")
+    logger.info(f"  Margem Baseline (proporcional histórico): R$ {margem_baseline:,.2f}")
+    logger.info(f"  Margem Otimizada (solver):               R$ {margem_otimizada:,.2f}")
+    logger.info(f"  GANHO MARGEM OTIMIZAÇÃO: R$ {ganho_margem:,.2f} ({ganho_margem_pct:.2f}%)")
+    logger.info(f"  Custo Baseline:   R$ {custo_baseline:,.2f}")
+    logger.info(f"  Custo Otimizado:  R$ {custo_otimizado:,.2f}")
     logger.info(f"  Variação Custo: R$ {reducao_custo:,.2f} ({reducao_custo_pct:.2f}%)")
-    
+
+    logger.info("")
+    logger.info("-"*80)
+    logger.info("PEDIDOS RESERVADOS (garantidos antes da otimização)")
+    logger.info("-"*80)
+    logger.info(f"  SKUs com pedidos reservados: {reserva_n_skus}")
+    logger.info(f"  Volume total pedido:   {reserva_volume_pedido:>14,.0f} ovos")
+    logger.info(f"  Volume atendido:       {reserva_volume:>14,.0f} ovos")
+    logger.info(f"  Deficit (não atendido): {reserva_deficit:>14,.0f} ovos")
+    taxa_str = f"{(reserva_volume / reserva_volume_pedido * 100):.1f}%" if reserva_volume_pedido > 0 else "N/A"
+    logger.info(f"  Taxa de atendimento: {taxa_str}")
+    logger.info(f"  Receita reservas:  R$ {reserva_receita:>14,.2f}")
+    logger.info(f"  Custo reservas:    R$ {reserva_custo:>14,.2f}")
+    logger.info(f"  Margem reservas (COM priorização por margem):  R$ {reserva_margem:>14,.2f}")
+    logger.info(f"  Margem reservas (SEM priorização, proporcional): R$ {reserva_margem_sem_priorizacao:>14,.2f}")
+    logger.info(f"  GANHO DA PRIORIZAÇÃO: R$ {ganho_priorizacao:,.2f}")
+
+    logger.info("")
+    logger.info("-"*80)
+    logger.info("RESULTADO CONSOLIDADO (otimização + reservas)")
+    logger.info("-"*80)
+    logger.info(f"  Margem total do modelo: R$ {margem_total_modelo:,.2f}")
+    logger.info(f"    Margem otimização:  R$ {margem_otimizada:,.2f}")
+    logger.info(f"    Margem reservas:    R$ {reserva_margem:,.2f}")
+    logger.info(f"  Custo total do modelo:  R$ {custo_total_modelo:,.2f}")
+    logger.info("="*80)
+
     # Gerar arquivo de auditoria
     if auditoria_classes:
         _gerar_auditoria_baseline(auditoria_classes, config, logger)
@@ -360,7 +411,16 @@ def calcular_comparativo_baseline(
         'custo_baseline': custo_baseline,
         'custo_otimizado': custo_otimizado,
         'reducao_custo': reducao_custo,
-        'reducao_custo_pct': reducao_custo_pct
+        'reducao_custo_pct': reducao_custo_pct,
+        'reserva_volume_pedido': reserva_volume_pedido,
+        'reserva_volume_atendido': reserva_volume,
+        'reserva_deficit': reserva_deficit,
+        'reserva_n_skus': reserva_n_skus,
+        'reserva_margem': reserva_margem,
+        'reserva_margem_sem_priorizacao': reserva_margem_sem_priorizacao,
+        'ganho_priorizacao': ganho_priorizacao,
+        'margem_total_modelo': margem_total_modelo,
+        'custo_total_modelo': custo_total_modelo,
     }
 
 
