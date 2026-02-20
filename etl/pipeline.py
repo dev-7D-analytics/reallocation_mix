@@ -94,6 +94,14 @@ class ETLPipeline:
         self.logger.info("ETAPA 1: CARREGAMENTO DE DADOS (ETL)")
         self.logger.info("="*80)
         
+        dados_cfg = self.config.get('dados', {})
+        modelo_cfg = self.config.get('modelo', {})
+        self.logger.info(f"  Parâmetros: semana_ref={dados_cfg.get('semana_ref')}, "
+                         f"mes_custo={dados_cfg.get('mes_custo')}, "
+                         f"ano_custo={dados_cfg.get('ano_custo')}, "
+                         f"janela={dados_cfg.get('meses_janela_custo')}m, "
+                         f"demanda={modelo_cfg.get('tipo_calculo_demanda','media')}×{modelo_cfg.get('fator_demanda_maxima',1.2)}")
+        
         # 1. Carregar dados brutos
         dados = self._carregar_todos_dados()
         self._dados = dados
@@ -141,18 +149,30 @@ class ETLPipeline:
         if 'Classe_Produto' not in df_producao.columns or 'quantidade' not in df_producao.columns:
             raise ValueError("Arquivo de producao deve conter 'Classe_Produto' e 'quantidade'")
         
+        # Log referência temporal (do CSV e do config)
+        semana_ref = self.config.get('dados', {}).get('semana_ref', 'N/A')
+        granularidade = self.config.get('modelo', {}).get('granularidade_demanda', 'S').upper()
+        if 'data_producao' in df_producao.columns and len(df_producao) > 0:
+            data_csv = df_producao['data_producao'].iloc[0]
+            self.logger.info(f"  Referência: semana_ref={semana_ref}, data_producao={data_csv} (granularidade={granularidade})")
+        else:
+            self.logger.info(f"  Referência: semana_ref={semana_ref} (granularidade={granularidade})")
+            if len(df_producao) == 0:
+                self.logger.warning(f"  [ALERTA] Nenhum dado de produção encontrado para semana_ref={semana_ref}!")
+        
         # Agregar por classe (soma se houver duplicatas)
         df_producao_agg = df_producao.groupby('Classe_Produto')['quantidade'].sum().reset_index()
         df_producao_agg.columns = ['classe', 'producao_total']
         df_producao_agg = df_producao_agg[df_producao_agg['producao_total'] > 0]
         
         self.logger.info(f"  Classes com producao: {len(df_producao_agg)}")
-        self.logger.info(f"  Producao total: {df_producao_agg['producao_total'].sum():,.0f} unidades")
+        self.logger.info(f"  Producao total: {df_producao_agg['producao_total'].sum():,.0f} unidades" if len(df_producao_agg) > 0 else "  Producao total: 0 unidades")
         
         # Log distribuição
-        self.logger.info("\n  Distribuicao por classe (top 10):")
-        for _, row in df_producao_agg.nlargest(10, 'producao_total').iterrows():
-            self.logger.info(f"    {row['classe']}: {row['producao_total']:,.0f} unidades")
+        if len(df_producao_agg) > 0:
+            self.logger.info("\n  Distribuicao por classe (top 10):")
+            for _, row in df_producao_agg.nlargest(10, 'producao_total').iterrows():
+                self.logger.info(f"    {row['classe']}: {row['producao_total']:,.0f} unidades")
         
         return df_producao_agg
     
@@ -493,6 +513,7 @@ class ETLPipeline:
             # Se o cliente está no mapeamento, usa o Estab Padrao; senão, mantém o Estab original
             df_fat['Estab_Corrigido'] = (
                 df_fat[col_cliente].map(mapa_estab).fillna(df_fat['Estab'])
+                .astype(int)
             )
             
             # Contar quantos registros foram corrigidos

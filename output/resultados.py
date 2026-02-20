@@ -253,6 +253,8 @@ def salvar_demanda_historica(resultado_etl, config: dict, logger: logging.Logger
         {'parametro': 'considerar_demanda_historica', 'valor': modelo_cfg.get('considerar_demanda_historica', False)},
         {'parametro': 'tipo_calculo_demanda', 'valor': modelo_cfg.get('tipo_calculo_demanda', 'maximo')},
         {'parametro': 'fator_demanda_maxima', 'valor': modelo_cfg.get('fator_demanda_maxima', 1.2)},
+        {'parametro': 'semana_ref', 'valor': dados_cfg.get('semana_ref', 'N/A')},
+        {'parametro': 'data_ref', 'valor': dados_cfg.get('data_ref', 'N/A')},
         {'parametro': 'periodo_demanda_mes_ref', 'valor': dados_cfg.get('mes_custo', 11)},
         {'parametro': 'periodo_demanda_ano_ref', 'valor': dados_cfg.get('ano_custo', 2025)},
         {'parametro': 'periodo_demanda_janela_meses', 'valor': dados_cfg.get('meses_janela_custo', 6)},

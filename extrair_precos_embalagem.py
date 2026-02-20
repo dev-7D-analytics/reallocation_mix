@@ -146,41 +146,47 @@ def main(argv=None):
             print(f"  Removidos {removidos_estab:,} registros de outros estabelecimentos")
     
     # Filtro por mês/ano com janela de tempo
-    if args.mes and args.ano:
+    # Se não veio via CLI, ler do config.yaml (mesmos params que custos/demanda)
+    dados_config = config.get('dados', {})
+    mes_filtro = args.mes or dados_config.get('mes_preco', dados_config.get('mes_custo'))
+    ano_filtro = args.ano or dados_config.get('ano_preco', dados_config.get('ano_custo'))
+    meses_janela = args.meses_janela if args.mes else dados_config.get('meses_janela_preco', dados_config.get('meses_janela_custo', 6))
+
+    if mes_filtro and ano_filtro:
         if 'MÊS' not in df_custo.columns or 'ano' not in df_custo.columns:
             print("[ERRO] Colunas 'MÊS' ou 'ano' não encontradas no dataset de custos.")
             print(f"  Colunas disponíveis: {list(df_custo.columns)}")
             return
         
-        if args.meses_janela > 1:
-            # Criar lista de (ano, mês) para a janela
+        if meses_janela > 1:
             periodos = []
-            for i in range(args.meses_janela):
-                mes = args.mes - i
-                ano = args.ano
+            for i in range(meses_janela):
+                mes = mes_filtro - i
+                ano = ano_filtro
                 while mes <= 0:
                     mes += 12
                     ano -= 1
                 periodos.append((ano, mes))
             
-            print(f"  Aplicando janela de {args.meses_janela} meses a partir de {args.ano}-{args.mes:02d}...")
+            print(f"  Aplicando janela de {meses_janela} meses a partir de {ano_filtro}-{mes_filtro:02d}...")
             print(f"  Períodos incluídos: {', '.join([f'{a}-{m:02d}' for a, m in periodos])}")
             
-            # Filtrar por período
-            mask_periodo = df_custo.apply(lambda row: (row['ano'], row['MÊS']) in periodos, axis=1)
-            df_custo = df_custo[mask_periodo].copy()
-            filtros_aplicados.append(f"janela={args.meses_janela}meses")
-            print(f"  Registros após filtro de período: {len(df_custo):,}")
+            periodos_set = set(periodos)
+            antes_periodo = len(df_custo)
+            df_custo['_periodo'] = list(zip(df_custo['ano'], df_custo['MÊS']))
+            df_custo = df_custo[df_custo['_periodo'].isin(periodos_set)].drop(columns=['_periodo']).copy()
+            filtros_aplicados.append(f"janela={meses_janela}meses")
+            print(f"  Registros após filtro de período: {len(df_custo):,} (removidos {antes_periodo - len(df_custo):,})")
         else:
-            # Comportamento original: apenas 1 mês
-            df_custo = df_custo[df_custo['MÊS'] == args.mes].copy()
-            filtros_aplicados.append(f"MÊS={args.mes}")
-            print(f"  Filtro Mês: {args.mes} -> {len(df_custo):,} registros")
+            df_custo = df_custo[df_custo['MÊS'] == mes_filtro].copy()
+            filtros_aplicados.append(f"MÊS={mes_filtro}")
+            print(f"  Filtro Mês: {mes_filtro} -> {len(df_custo):,} registros")
             
-            if args.ano:
-                df_custo = df_custo[df_custo['ano'] == args.ano].copy()
-                filtros_aplicados.append(f"ano={args.ano}")
-                print(f"  Filtro Ano: {args.ano} -> {len(df_custo):,} registros")
+            df_custo = df_custo[df_custo['ano'] == ano_filtro].copy()
+            filtros_aplicados.append(f"ano={ano_filtro}")
+            print(f"  Filtro Ano: {ano_filtro} -> {len(df_custo):,} registros")
+    else:
+        print("  [AVISO] Sem filtro de período (mes/ano não definidos no CLI nem no config.yaml)")
     
     if len(df_custo) == 0:
         print("  [ALERTA] Nenhum registro encontrado após os filtros. Encerrando.")

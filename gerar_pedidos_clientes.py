@@ -131,10 +131,9 @@ def aplicar_correcao_estabelecimento(df_fat: pd.DataFrame, config: dict) -> pd.D
         # Criar mapeamento
         mapa_estab = dict(zip(df_correcao['Cliente'], df_correcao['Estab Padrao']))
         
-        # Aplicar correção
-        df_fat['Estab_Corrigido'] = df_fat.apply(
-            lambda row: mapa_estab.get(row[col_cliente], row['Estab']),
-            axis=1
+        # Aplicar correção (vetorizado em vez de apply row-by-row)
+        df_fat['Estab_Corrigido'] = (
+            df_fat[col_cliente].map(mapa_estab).fillna(df_fat['Estab']).astype(int)
         )
         
         registros_corrigidos = (df_fat['Estab'] != df_fat['Estab_Corrigido']).sum()
@@ -292,7 +291,11 @@ def main():
         print(f"[ERRO] Arquivo não encontrado: {path_fat}")
         return
     
-    df_fat = pd.read_parquet(path_fat)
+    colunas_necessarias = ['Estab', 'Cod.Emitente', 'item', 'Quantidade', 'Dt.Emissão']
+    try:
+        df_fat = pd.read_parquet(path_fat, columns=colunas_necessarias)
+    except Exception:
+        df_fat = pd.read_parquet(path_fat)
     print(f"  Registros: {len(df_fat):,}")
     
     # =========================================================================

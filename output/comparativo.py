@@ -496,6 +496,8 @@ def _gerar_auditoria_baseline(
         {'parametro': 'granularidade_demanda', 'valor': modelo_cfg.get('granularidade_demanda', 'S')},
         {'parametro': 'percentil_demanda', 'valor': modelo_cfg.get('percentil_demanda', 95)},
         {'parametro': 'variaveis_continuas', 'valor': modelo_cfg.get('variaveis_continuas', True)},
+        {'parametro': 'semana_ref', 'valor': dados_cfg.get('semana_ref', 'N/A')},
+        {'parametro': 'data_ref', 'valor': dados_cfg.get('data_ref', 'N/A')},
         {'parametro': 'mes_referencia', 'valor': dados_cfg.get('mes_custo', 11)},
         {'parametro': 'ano_referencia', 'valor': dados_cfg.get('ano_custo', 2025)},
         {'parametro': 'meses_janela', 'valor': dados_cfg.get('meses_janela_custo', 6)},

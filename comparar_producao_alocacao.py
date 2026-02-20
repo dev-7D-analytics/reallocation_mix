@@ -15,7 +15,7 @@ from extrair_compatibilidade_embalagem import (
 INPUT_PATH = Path("inputs")
 SHEET_NAME = "CE0302"
 RESULTS_DIR = Path("resultados")
-DEFAULT_YEAR_WEEK = "2025-51"
+DEFAULT_YEAR_WEEK = None
 CONFIG_PATH = Path("config.yaml")
 DEFAULT_PRECOS_PATH = INPUT_PATH / "precos_sku_embalagem.csv"
 DEFAULT_CUSTOS_PATH = INPUT_PATH / "CUSTO ITEM.csv"
@@ -283,7 +283,7 @@ def _carregar_custos(config: Dict) -> pd.DataFrame:
         mes_custo = dados_config.get('mes_custo', 11)  # Mês de referência
         ano_custo = dados_config.get('ano_custo', 2025)  # Ano de referência
         estab_custo = dados_config.get('estab_custo', 100)  # Default: 100
-        meses_janela = dados_config.get('meses_janela_custo', 1)  # Janela de meses (últimos N meses)
+        meses_janela = dados_config.get('meses_janela_custo', 6)  # Janela de meses (últimos N meses)
         
         # Calcular range de meses (filtro vetorizado para evitar apply em 150k+ linhas)
         if meses_janela > 1:
@@ -734,7 +734,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--year-week",
         default=DEFAULT_YEAR_WEEK,
-        help="Ano-semana ISO (ex.: 2025-51). Se vazio, usa a ultima semana disponivel.",
+        help="Ano-semana ISO (ex.: 2026-07). Se vazio, usa semana_ref do config.yaml ou a última semana disponível.",
     )
     parser.add_argument(
         "--resultado",
@@ -756,6 +756,8 @@ def main():
     year_week = args.year_week or None
 
     config = _carregar_config()
+    if year_week is None and config:
+        year_week = config.get("dados", {}).get("semana_ref")
     producao, periodo_label = carregar_producao(year_week, config)
     alocacao, caminho_resultado = carregar_alocacao(args.resultado, sep=args.sep, decimal=args.decimal)
     precos = _carregar_precos(config)
@@ -1353,8 +1355,10 @@ def main():
         print(f"  Outros motivos: {len(pedidos_ignorados) - skus_sem_producao}")
 
     RESULTS_DIR.mkdir(exist_ok=True)
-    output_path_csv = RESULTS_DIR / f"comparacao_producao_alocacao_{periodo_label}.csv"
-    output_path_xlsx = RESULTS_DIR / f"comparacao_producao_alocacao_{periodo_label}.xlsx"
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path_csv = RESULTS_DIR / f"comparacao_producao_alocacao_{periodo_label}_{timestamp}.csv"
+    output_path_xlsx = RESULTS_DIR / f"comparacao_producao_alocacao_{periodo_label}_{timestamp}.xlsx"
     
     # Reordenar colunas por categoria lógica para facilitar leitura
     # 1. Identificação | 2. Período | 3. Quantidades | 4. Financeiro unitário
@@ -1608,8 +1612,8 @@ def main():
     if len(pedidos_ignorados) > 0:
         df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
         df_pedidos_ignorados = df_pedidos_ignorados.sort_values('quantidade_total_pedida', ascending=False)
-        output_pedidos_ignorados_csv = RESULTS_DIR / f"pedidos_ignorados_{periodo_label}.csv"
-        output_pedidos_ignorados_xlsx = RESULTS_DIR / f"pedidos_ignorados_{periodo_label}.xlsx"
+        output_pedidos_ignorados_csv = RESULTS_DIR / f"pedidos_ignorados_{periodo_label}_{timestamp}.csv"
+        output_pedidos_ignorados_xlsx = RESULTS_DIR / f"pedidos_ignorados_{periodo_label}_{timestamp}.xlsx"
         df_pedidos_ignorados.to_csv(output_pedidos_ignorados_csv, index=False, encoding="utf-8")
         try:
             df_pedidos_ignorados.to_excel(output_pedidos_ignorados_xlsx, index=False, engine='openpyxl')

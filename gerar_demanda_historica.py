@@ -65,6 +65,7 @@ def _aplicar_correcao_estabelecimento(df: pd.DataFrame, config: Dict) -> pd.Data
         # Se o cliente está no mapeamento, usa Estab Padrao; senão, mantém original (vetorizado)
         df['Estab_Corrigido'] = (
             df[col_cliente].map(mapa_estab).fillna(df['Estab'])
+            .astype(int)
         )
         
         n_corrigidos = (df['Estab'] != df['Estab_Corrigido']).sum()

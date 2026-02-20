@@ -5,10 +5,10 @@
 # --- Dados de entrada ---
 dados:
   # Ano e mês de referência para custo, preço e demanda histórica
-  ano_custo: 2025
-  ano_preco: 2025
-  mes_custo: 11                   # Mês final da janela de referência
-  mes_preco: 11                   # Mês final da janela de preços
+  ano_custo: 2026
+  ano_preco: 2026
+  mes_custo: 2                    # Mês final da janela de referência
+  mes_preco: 2                    # Mês final da janela de preços
   meses_janela_custo: 6           # Janela em meses para cálculo de custo e demanda histórica
   meses_janela_preco: 6           # Janela em meses para cálculo de preço médio
   # Estabelecimentos
@@ -21,8 +21,8 @@ dados:
   percentil_superior_preco: 99    # Percentil superior para remoção de outliers de preço
   remover_outliers_preco: true    # Ativa remoção de outliers no cálculo de preço médio
   # Outros filtros
-  semana_ref: 2025-51             # Semana de referência para produção (usado quando granularidade = S)
-  data_ref: '2025-12-15'          # Data de referência para produção (usado quando granularidade = D ou M)
+  semana_ref: 2026-07             # Semana de referência para produção (usado quando granularidade = S)
+  data_ref: '2026-02-11'          # Data de referência para produção (usado quando granularidade = D ou M)
   sku_minimo_transacoes: 1        # Mínimo de transações para considerar um SKU
   tipo_estoque: DISPONIVEL PARA VENDA  # Tipo de estoque a filtrar
 
@@ -34,7 +34,7 @@ modelo:
   capar_reserva_na_producao: true  # Limita reserva à produção, priorizando SKUs de maior margem
   # Demanda histórica (restrição de alocação máxima por SKU)
   considerar_demanda_historica: true  # Ativa limite de alocação por SKU baseado no histórico
-  tipo_calculo_demanda: media     # Tipo de cálculo: media | maximo | percentil
+  tipo_calculo_demanda: maximo    # Tipo de cálculo: media | maximo | percentil
   fator_demanda_maxima: 1.2       # Multiplicador sobre a demanda calculada (1.2 = 120% da demanda)
   percentil_demanda: 95           # Percentil a usar (só quando tipo_calculo_demanda = percentil)
   granularidade_demanda: S        # Granularidade: S(emanal) | M(ensal) | D(iário)
@@ -51,9 +51,9 @@ negocio:
 # --- Caminhos dos arquivos ---
 paths:
   classes: inputs/base_skus_classes.xlsx
-  custos: inputs/MANTI-PRIC_Custos_12012026.parquet
+  custos: inputs/MANTI-PRIC_Custos.parquet
   estab_corrigido: inputs/ESTAB CORRIGIDO.xlsx
-  faturamento: inputs/manti_fat_2025_full.parquet
+  faturamento: inputs/manti_fat_.parquet
   logs_dir: logs
   output_dir: resultados
   pedidos: inputs/pedidos_clientes.csv
