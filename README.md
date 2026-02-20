@@ -15,7 +15,8 @@ realocando volume de produção entre SKUs da mesma classe biológica de ovos.
 realocacao-git/
 ├── config.yaml                          # Configuração central (parâmetros, paths)
 ├── main.py                              # Orquestrador: ETL -> Otimização -> Output
-├── executar_pipeline.sh                 # Shell script para rodar pipeline completo
+├── executar_pipeline.sh                 # Shell script para rodar pipeline completo (Linux/Mac)
+├── executar_pipeline.bat                # Batch script para rodar pipeline completo (Windows)
 ├── requirements.txt                     # Dependências Python
 │
 ├── etl/
@@ -191,7 +192,8 @@ Se os nomes dos arquivos forem diferentes, ajustar a seção `paths:` do `config
 
 ### 4. Executar
 
-**Linux/Mac:**
+#### Linux / Mac
+
 ```bash
 # Ativar ambiente virtual (se não estiver ativo)
 source venv/bin/activate
@@ -200,11 +202,28 @@ source venv/bin/activate
 ./executar_pipeline.sh
 
 # Opções:
-#   ./executar_pipeline.sh --sem-preparacao   # Pula passos 1-6 (inputs já prontos)
-#   ./executar_pipeline.sh --sem-relatorio    # Pula passo 8 (sem relatório comparativo)
+./executar_pipeline.sh --sem-preparacao   # Pula passos 1-6 (inputs já prontos)
+./executar_pipeline.sh --sem-relatorio    # Pula passo 8 (sem relatório comparativo)
 ```
 
-**Windows (ou passo a passo em qualquer SO):**
+#### Windows (CMD ou PowerShell)
+
+```cmd
+REM Ativar ambiente virtual
+venv\Scripts\activate
+
+REM Pipeline completo (8 passos)
+executar_pipeline.bat
+
+REM Opções:
+executar_pipeline.bat --sem-preparacao   &REM Pula passos 1-6 (inputs já prontos)
+executar_pipeline.bat --sem-relatorio    &REM Pula passo 8 (sem relatório comparativo)
+```
+
+#### Passo a passo manual (qualquer SO)
+
+Se preferir rodar cada etapa separadamente:
+
 ```bash
 python extrair_compatibilidade_embalagem.py    # 1. Compatibilidade embalagem
 python extrair_precos_embalagem.py             # 2. Preços por SKU/embalagem
@@ -216,7 +235,7 @@ python main.py                                 # 7. ETL + Otimização + Output
 python comparar_producao_alocacao.py           # 8. Relatório comparativo
 ```
 
-> **Nota**: No Windows sem WSL, use `python` em vez de `python3`. Os CSVs gerados nos passos 2-4 podem ser editados manualmente antes de rodar o passo 7.
+> **Nota**: No Windows use `python` em vez de `python3`. No Linux/Mac use `python3` ou `python` (depende da instalação). Os CSVs gerados nos passos 2-6 podem ser editados manualmente antes de rodar o passo 7.
 
 ### 5. Resultados
 
