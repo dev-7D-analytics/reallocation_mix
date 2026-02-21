@@ -62,6 +62,13 @@ def main():
     col_data = 'Data Trans'
     col_qtd = 'QUANTIDADE CORRIGIDA'
     
+    # Filtrar por estabelecimentos configurados
+    estabelecimentos = config['dados'].get('estabelecimentos', [100])
+    if 'Est' in df_prod.columns and estabelecimentos:
+        total_antes = len(df_prod)
+        df_prod = df_prod[df_prod['Est'].isin(estabelecimentos)].copy()
+        print(f"  Filtro estabelecimentos {estabelecimentos}: {total_antes} -> {len(df_prod)} registros")
+    
     # Converter data
     df_prod[col_data] = pd.to_datetime(df_prod[col_data], errors='coerce')
     
@@ -117,7 +124,26 @@ def main():
     df_estoque_agg = df_estoque_agg[df_estoque_agg['quantidade'] > 0]
     
     print(f"  SKUs com produção: {len(df_estoque_agg)}")
-    print(f"  Produção total: {df_estoque_agg['quantidade'].sum():,.0f} unidades")
+    print(f"  Produção total (antes filtro ativos): {df_estoque_agg['quantidade'].sum():,.0f} unidades")
+    
+    # Filtrar apenas SKUs ativos no estabelecimento
+    path_skus_restritos = Path(config['paths'].get('skus_restritos', 'inputs/skus_restritos.xlsx'))
+    if path_skus_restritos.exists():
+        df_skus = pd.read_excel(path_skus_restritos)
+        if 'STATUS' in df_skus.columns and 'ESTAB' in df_skus.columns:
+            df_ativos = df_skus[
+                (df_skus['STATUS'] == 'ATIVO') &
+                (df_skus['ESTAB'].isin(estabelecimentos))
+            ]
+            skus_ativos = set(df_ativos['item'].astype(int).tolist())
+            total_antes = len(df_estoque_agg)
+            prod_antes = df_estoque_agg['quantidade'].sum()
+            df_estoque_agg = df_estoque_agg[df_estoque_agg['item'].isin(skus_ativos)]
+            prod_depois = df_estoque_agg['quantidade'].sum()
+            print(f"  Filtro SKUs ativos: {total_antes} -> {len(df_estoque_agg)} SKUs")
+            print(f"  Produção removida (SKUs inativos): {prod_antes - prod_depois:,.0f} unidades")
+    
+    print(f"  Produção total (final): {df_estoque_agg['quantidade'].sum():,.0f} unidades")
     
     # 2. Carregar classes
     print("\n[2/3] Carregando classificacao de SKUs...")

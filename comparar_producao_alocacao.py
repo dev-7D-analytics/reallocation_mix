@@ -451,6 +451,14 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
     df_prod = pd.read_excel(excel_path, sheet_name=SHEET_NAME, skiprows=1)
     df_prod["Data Trans"] = pd.to_datetime(df_prod["Data Trans"], errors="coerce")
 
+    # Filtrar por estabelecimentos configurados
+    if config and "Est" in df_prod.columns:
+        estabelecimentos = config.get("dados", {}).get("estabelecimentos", [100])
+        if estabelecimentos:
+            total_antes = len(df_prod)
+            df_prod = df_prod[df_prod["Est"].isin(estabelecimentos)].copy()
+            print(f"  Filtro estabelecimentos {estabelecimentos}: {total_antes} -> {len(df_prod)} registros")
+
     # Determinar granularidade
     granularidade = config.get("modelo", {}).get("granularidade_demanda", "S").upper() if config else "S"
 
@@ -505,6 +513,24 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
         & (df_prod["quantidade"] > 0)
     ].copy()
     df_prod["item"] = df_prod["item"].astype(int)
+
+    # Filtrar apenas SKUs ativos no estabelecimento
+    if config:
+        skus_restritos_path = Path(config.get("paths", {}).get("skus_restritos", "inputs/skus_restritos.xlsx"))
+        if skus_restritos_path.exists():
+            df_skus = pd.read_excel(skus_restritos_path)
+            if "STATUS" in df_skus.columns and "ESTAB" in df_skus.columns:
+                estabelecimentos = config.get("dados", {}).get("estabelecimentos", [100])
+                df_ativos = df_skus[
+                    (df_skus["STATUS"] == "ATIVO") &
+                    (df_skus["ESTAB"].isin(estabelecimentos))
+                ]
+                skus_ativos = set(df_ativos["item"].astype(int).tolist())
+                total_antes = len(df_prod)
+                prod_antes = df_prod["quantidade"].sum()
+                df_prod = df_prod[df_prod["item"].isin(skus_ativos)]
+                print(f"  Filtro SKUs ativos: {total_antes} -> {len(df_prod)} registros ({prod_antes - df_prod['quantidade'].sum():,.0f} ovos removidos)")
+
     df_prod["item_id"] = df_prod["item"].astype(str) + "_" + df_prod["embalagem"]
     df_prod["data_producao"] = data_producao
 
