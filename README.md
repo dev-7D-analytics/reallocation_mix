@@ -32,7 +32,7 @@ realocacao-git/
 │   ├── comparativo.py                   # Comparativo baseline vs otimizado + auditoria
 │   └── resultados.py                    # Salvamento de resultados (CSV/Excel)
 │
-├── gerar_pedidos_clientes.py            # Gera pedidos_clientes.csv (editável)
+├── gerar_pedidos_clientes.py            # Gera pedidos_clientes.csv a partir da CARTEIRA_VENDIDA.xlsx
 ├── gerar_producao_classe.py             # Gera producao_classe.csv (editável)
 ├── gerar_custos_sku.py                  # Gera custos_sku.csv (editável)
 ├── gerar_demanda_historica.py           # Gera demanda_historica.csv (editável)
@@ -65,9 +65,8 @@ na ordem indicada:
      ├─ manti_fat_*.parquet ──► gerar_demanda_historica.py ► inputs/demanda_historica.csv (editável)
      │   ESTAB CORRIGIDO.xlsx
      │
-     ├─ manti_fat_*.parquet ──► gerar_pedidos_clientes.py ─► inputs/pedidos_clientes.csv (editável)
+     ├─ CARTEIRA_VENDIDA.xlsx ► gerar_pedidos_clientes.py ─► inputs/pedidos_clientes.csv (editável)
      │   skus_restritos.xlsx
-     │   ESTAB CORRIGIDO.xlsx
      │
      ├─ PRODUÇÃO DIA.xlsx ────► gerar_producao_classe.py ──► inputs/producao_classe.csv (editável)
      │   base_skus_classes.xlsx
@@ -87,6 +86,7 @@ Após a geração automática, os seguintes CSVs podem ser editados manualmente 
 | `inputs/precos_sku_embalagem.csv` | `item`, `preco` | Alterar preço de um SKU, adicionar SKU novo |
 | `inputs/custos_sku.csv` | `item`, `custo_ytd` | Alterar custo de um SKU, adicionar SKU novo |
 | `inputs/demanda_historica.csv` | `item`, `demanda_max` | Alterar limite de demanda, adicionar/remover SKU |
+| `inputs/pedidos_clientes.csv` | `item`, `quantidade`, `preco_pedido`, `data_entrega_min/max` | Alterar volume ou preço de pedido, ajustar datas |
 
 Os CSVs já saem com os cálculos aplicados (ex: fator multiplicativo na demanda, média ponderada no custo). O modelo lê diretamente desses arquivos.
 
@@ -94,12 +94,13 @@ Os CSVs já saem com os cálculos aplicados (ex: fator multiplicativo na demanda
 
 | Base de dados atualizada | Scripts a re-executar (na ordem) |
 |---|---|
-| `manti_fat_*.parquet` (faturamento) | `extrair_compatibilidade_embalagem.py` -> `extrair_precos_embalagem.py` -> `gerar_demanda_historica.py` -> `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `manti_fat_*.parquet` (faturamento) | `extrair_compatibilidade_embalagem.py` -> `extrair_precos_embalagem.py` -> `gerar_demanda_historica.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `CARTEIRA_VENDIDA.xlsx` (carteira vendida) | `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `PRODUÇÃO DIA.xlsx` (produção diária) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `MANTI-PRIC_Custos_*.parquet` (custos) | `gerar_custos_sku.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `base_skus_classes.xlsx` (classificação) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `skus_restritos.xlsx` (SKUs permitidos) | `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `ESTAB CORRIGIDO.xlsx` (estab. corrigido) | `gerar_demanda_historica.py` -> `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `skus_restritos.xlsx` (SKUs permitidos) | `gerar_pedidos_clientes.py` -> `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
+| `ESTAB CORRIGIDO.xlsx` (estab. corrigido) | `gerar_demanda_historica.py` -> `main.py` -> `comparar_producao_alocacao.py` |
 | `config.yaml` (parâmetros) | `main.py` -> `comparar_producao_alocacao.py` (e geradores de input se janela/granularidade mudaram) |
 | Edição manual de CSV (preço/custo/demanda) | `main.py` -> `comparar_producao_alocacao.py` |
 
@@ -109,7 +110,8 @@ Os CSVs já saem com os cálculos aplicados (ex: fator multiplicativo na demanda
 |---|---|---|
 | `paths.producao` | `inputs/producao_classe.csv` | Produção total por classe (gerado por `gerar_producao_classe.py`) |
 | `paths.classes` | `inputs/base_skus_classes.xlsx` | Mapeamento item -> classe biológica |
-| `paths.pedidos` | `inputs/pedidos_clientes.csv` | Pedidos por SKU (gerado por `gerar_pedidos_clientes.py`) |
+| `paths.carteira_vendida` | `inputs/CARTEIRA_VENDIDA.xlsx` | Carteira de pedidos vendidos (TOTVS), usada por `gerar_pedidos_clientes.py` |
+| `paths.pedidos` | `inputs/pedidos_clientes.csv` | Pedidos por SKU (gerado por `gerar_pedidos_clientes.py` a partir da carteira vendida) |
 | `paths.precos` | `inputs/precos_sku_embalagem.csv` | Preços por SKU (gerado por `extrair_precos_embalagem.py`, editável) |
 | `paths.custos` | `inputs/MANTI-PRIC_Custos_*.parquet` | Custos brutos (Parquet original, usado por `gerar_custos_sku.py`) |
 | — | `inputs/custos_sku.csv` | Custos por SKU (gerado por `gerar_custos_sku.py`, editável) |
@@ -184,6 +186,7 @@ mkdir -p inputs
 | `manti_fat_2025_full.parquet` | Faturamento histórico | Sim |
 | `PRODUÇÃO DIA.xlsx` | Produção diária (aba CE0302) | Sim |
 | `MANTI-PRIC_Custos_*.parquet` | Custos PRIC | Sim |
+| `CARTEIRA_VENDIDA.xlsx` | Carteira de pedidos vendidos (TOTVS) | Sim |
 | `base_skus_classes.xlsx` | Classificação SKU -> classe | Sim |
 | `skus_restritos.xlsx` | Filtro de SKUs ativos | Sim |
 | `ESTAB CORRIGIDO.xlsx` | Correção de estabelecimento | Sim |
