@@ -47,4 +47,5 @@ Thumbs.db
 # Arquivos de teste e análise
 teste_*.log
 execucao_*.log
+validar_resultados.py
 
