@@ -99,7 +99,7 @@ def _carregar_precos(config: Dict) -> pd.DataFrame:
 
 
 def _carregar_pedidos(config: Dict) -> pd.DataFrame:
-    """Carrega pedidos por SKU."""
+    """Carrega pedidos por SKU com campos enriquecidos (preco_pedido, data_entrega)."""
     path = _resolver_caminho(config, "pedidos", INPUT_PATH / "pedidos_clientes.csv")
     if not path.exists():
         return pd.DataFrame(columns=["item", "quantidade_total_pedida"])
@@ -107,13 +107,15 @@ def _carregar_pedidos(config: Dict) -> pd.DataFrame:
     try:
         df_pedidos = pd.read_csv(path)
         
-        # Detectar coluna de quantidade (pode ser 'quantidade_pedida' ou 'quantidade')
+        # Detectar coluna de quantidade
         col_qtd = None
         for col in df_pedidos.columns:
             col_lower = col.lower()
-            if 'quantidade' in col_lower or 'qtd' in col_lower:
+            if col_lower == 'quantidade':
                 col_qtd = col
                 break
+            if 'quantidade' in col_lower or 'qtd' in col_lower:
+                col_qtd = col
         
         if 'item' not in df_pedidos.columns or col_qtd is None:
             return pd.DataFrame(columns=["item", "quantidade_total_pedida"])
@@ -123,10 +125,16 @@ def _carregar_pedidos(config: Dict) -> pd.DataFrame:
         df_pedidos['item'] = df_pedidos['item'].astype(int)
         df_pedidos = df_pedidos[df_pedidos[col_qtd] > 0].copy()
         
-        # Agregar pedidos por SKU
-        pedidos_por_sku = df_pedidos.groupby('item')[col_qtd].sum().reset_index()
-        pedidos_por_sku.columns = ['item', 'quantidade_total_pedida']
-        return pedidos_por_sku
+        # Construir resultado com campos extras se disponíveis
+        result = df_pedidos[['item', col_qtd]].copy()
+        result.columns = ['item', 'quantidade_total_pedida']
+        
+        for col_extra in ['preco_pedido', 'data_entrega_min', 'data_entrega_max',
+                          'n_pedidos', 'n_clientes', 'qt_pedida_caixas']:
+            if col_extra in df_pedidos.columns:
+                result[col_extra] = df_pedidos[col_extra].values
+        
+        return result
     except Exception:
         return pd.DataFrame(columns=["item", "quantidade_total_pedida"])
 
@@ -1203,6 +1211,13 @@ def main():
         pedidos_dict = pedidos.set_index('item')['quantidade_total_pedida'].to_dict()
         comparacao["tem_pedido"] = comparacao["item"].isin(skus_com_pedido)
         comparacao["quantidade_reservada"] = comparacao["item"].map(pedidos_dict).fillna(0)
+        
+        # Campos enriquecidos da carteira vendida
+        pedidos_idx = pedidos.set_index('item')
+        for col_extra in ['preco_pedido', 'data_entrega_min', 'data_entrega_max',
+                          'n_pedidos', 'n_clientes', 'qt_pedida_caixas']:
+            if col_extra in pedidos_idx.columns:
+                comparacao[col_extra] = comparacao["item"].map(pedidos_idx[col_extra].to_dict())
     else:
         comparacao["tem_pedido"] = False
         comparacao["quantidade_reservada"] = 0
@@ -1402,6 +1417,9 @@ def main():
         'tem_demanda_historica', 'demanda_max', 'limite_demanda_historica',
         'periodo_demanda_mes_ref', 'periodo_demanda_ano_ref', 'periodo_demanda_janela_meses',
         'tipo_calculo_demanda', 'granularidade_demanda',
+        # === PEDIDOS (CARTEIRA VENDIDA) ===
+        'preco_pedido', 'data_entrega_min', 'data_entrega_max',
+        'n_pedidos', 'n_clientes', 'qt_pedida_caixas',
         # === FLAGS / STATUS ===
         'tipo', 'origem_dado', 'tem_pedido', 'pedido_ignorado', 'sku_restrito',
         'usa_custo_medio_classe',

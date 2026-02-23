@@ -136,6 +136,21 @@ def main():
             except Exception:
                 pass
         
+        # Carregar campos extras de pedidos (data_entrega, preco_pedido) se disponíveis
+        data_entrega_map = {}
+        preco_pedido_map = {}
+        pedidos_path = Path(config.get('paths', {}).get('pedidos', 'inputs/pedidos_clientes.csv'))
+        if pedidos_path.exists():
+            try:
+                df_ped_extra = pd.read_csv(pedidos_path)
+                df_ped_extra['item'] = pd.to_numeric(df_ped_extra['item'], errors='coerce').astype('Int64')
+                if 'data_entrega_min' in df_ped_extra.columns:
+                    data_entrega_map = dict(zip(df_ped_extra['item'], df_ped_extra['data_entrega_min']))
+                if 'preco_pedido' in df_ped_extra.columns:
+                    preco_pedido_map = dict(zip(df_ped_extra['item'], df_ped_extra['preco_pedido']))
+            except Exception:
+                pass
+        
         # Montar lista de pedidos por SKU (com classe e margem)
         pedidos_info = []
         for item, qtd in resultado_etl.pedidos_garantidos_por_sku.items():
@@ -156,6 +171,8 @@ def main():
                 'preco': preco,
                 'custo_ytd': custo,
                 'margem_unitaria': margem,
+                'data_entrega': data_entrega_map.get(int(item), None),
+                'preco_pedido': preco_pedido_map.get(int(item), None),
             })
         
         # Aplicar heurística de priorização por margem quando pedidos > produção
@@ -282,6 +299,8 @@ def main():
                 'tem_demanda_historica': False,
                 'usa_custo_medio_classe': False,
                 'tipo': 'reserva',
+                'data_entrega': p.get('data_entrega'),
+                'preco_pedido': p.get('preco_pedido'),
             })
         if linhas_reserva:
             df_reserva = pd.DataFrame(linhas_reserva)

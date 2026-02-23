@@ -56,6 +56,7 @@ paths:
   faturamento: inputs/manti_fat_.parquet
   logs_dir: logs
   output_dir: resultados
+  carteira_vendida: inputs/CARTEIRA_VENDIDA.xlsx
   pedidos: inputs/pedidos_clientes.csv
   precos: inputs/precos_sku_embalagem.csv
   producao: inputs/producao_classe.csv

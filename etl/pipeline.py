@@ -249,8 +249,19 @@ class ETLPipeline:
         df_pedidos['item'] = df_pedidos['item'].astype(int)
         
         # Agregar por SKU
-        pedidos_por_sku = df_pedidos.groupby('item')['quantidade_pedida'].sum().reset_index()
-        pedidos_por_sku.columns = ['item', 'quantidade_total_pedida']
+        agg_dict = {'quantidade_pedida': 'sum'}
+        for col_extra in ['data_entrega_min', 'data_entrega_max', 'preco_pedido',
+                          'n_pedidos', 'n_clientes', 'qt_pedida_caixas']:
+            if col_extra in df_pedidos.columns:
+                if 'min' in col_extra:
+                    agg_dict[col_extra] = 'min'
+                elif 'max' in col_extra:
+                    agg_dict[col_extra] = 'max'
+                else:
+                    agg_dict[col_extra] = 'first'
+        
+        pedidos_por_sku = df_pedidos.groupby('item').agg(agg_dict).reset_index()
+        pedidos_por_sku = pedidos_por_sku.rename(columns={'quantidade_pedida': 'quantidade_total_pedida'})
         
         self.logger.info(f"  Pedidos carregados: {len(df_pedidos):,}")
         self.logger.info(f"  Clientes unicos: {df_pedidos['cod_cliente'].nunique() if 'cod_cliente' in df_pedidos.columns else 0}")
