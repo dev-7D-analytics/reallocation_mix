@@ -511,7 +511,7 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
 
     df_prod["embalagem"] = df_prod["Desc Item"].apply(extrair_embalagem_descricao)
     df_prod["qtd_embalagem"] = df_prod["embalagem"].apply(calcular_qtd_embalagem)
-    df_prod["quantidade"] = df_prod["QUANTIDADE CORRIGIDA"] * df_prod["qtd_embalagem"]
+    df_prod["quantidade"] = df_prod["Quantidade"] * df_prod["qtd_embalagem"]
 
     df_prod["item"] = pd.to_numeric(df_prod["Cod Item"], errors="coerce")
     df_prod = df_prod[

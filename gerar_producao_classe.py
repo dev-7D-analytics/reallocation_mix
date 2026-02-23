@@ -60,7 +60,7 @@ def main():
     # Detectar colunas
     col_item = 'Cod Item' if 'Cod Item' in df_prod.columns else 'CODIGO ITEM'
     col_data = 'Data Trans'
-    col_qtd = 'QUANTIDADE CORRIGIDA'
+    col_qtd = 'Quantidade'
     
     # Filtrar por estabelecimentos configurados
     estabelecimentos = config['dados'].get('estabelecimentos', [100])

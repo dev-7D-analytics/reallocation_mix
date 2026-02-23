@@ -1143,7 +1143,7 @@ class ETLPipeline:
             # Extrair embalagem e calcular quantidade (mesma lógica da comparação)
             df['embalagem'] = df['Desc Item'].apply(extrair_embalagem_descricao)
             df['qtd_embalagem'] = df['embalagem'].apply(calcular_qtd_embalagem)
-            df['quantidade'] = df['QUANTIDADE CORRIGIDA'] * df['qtd_embalagem']
+            df['quantidade'] = df['Quantidade'] * df['qtd_embalagem']
             
             # Filtrar apenas SKUs com embalagem válida e quantidade > 0
             df = df[
