@@ -72,6 +72,18 @@ def main():
     # Converter data
     df_prod[col_data] = pd.to_datetime(df_prod[col_data], errors='coerce')
     
+    # Ajuste de sinal para estorno de produção:
+    # ACA = produção positiva; EAC = estorno (deve ser negativo)
+    col_esp = next((c for c in ['Esp', 'ESP', 'Especie', 'Espécie'] if c in df_prod.columns), None)
+    df_prod[col_qtd] = pd.to_numeric(df_prod[col_qtd], errors='coerce').fillna(0.0)
+    if col_esp is not None:
+        esp_serie = df_prod[col_esp].astype(str).str.strip().str.upper()
+        mask_eac = esp_serie == 'EAC'
+        mask_aca = esp_serie == 'ACA'
+        df_prod.loc[mask_eac, col_qtd] = -df_prod.loc[mask_eac, col_qtd].abs()
+        df_prod.loc[mask_aca, col_qtd] = df_prod.loc[mask_aca, col_qtd].abs()
+        print(f"  Ajuste ACA/EAC: {mask_aca.sum()} ACA, {mask_eac.sum()} EAC (EAC negativado)")
+
     # Calcular embalagem e quantidade em ovos
     df_prod['embalagem'] = df_prod["Desc Item"].apply(extrair_embalagem_descricao)
     df_prod['qtd_embalagem'] = df_prod['embalagem'].apply(calcular_qtd_embalagem)

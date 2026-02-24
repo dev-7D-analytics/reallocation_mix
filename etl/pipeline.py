@@ -1140,6 +1140,17 @@ class ETLPipeline:
             if col_estab in df.columns:
                 df = df[df[col_estab].isin(estabelecimentos)].copy()
             
+            # Ajuste de sinal para estorno de produção:
+            # ACA = produção positiva; EAC = estorno (deve ser negativo)
+            col_esp = next((c for c in ['Esp', 'ESP', 'Especie', 'Espécie'] if c in df.columns), None)
+            df['Quantidade'] = pd.to_numeric(df['Quantidade'], errors='coerce').fillna(0.0)
+            if col_esp is not None:
+                esp_serie = df[col_esp].astype(str).str.strip().str.upper()
+                mask_eac = esp_serie == 'EAC'
+                mask_aca = esp_serie == 'ACA'
+                df.loc[mask_eac, 'Quantidade'] = -df.loc[mask_eac, 'Quantidade'].abs()
+                df.loc[mask_aca, 'Quantidade'] = df.loc[mask_aca, 'Quantidade'].abs()
+
             # Extrair embalagem e calcular quantidade (mesma lógica da comparação)
             df['embalagem'] = df['Desc Item'].apply(extrair_embalagem_descricao)
             df['qtd_embalagem'] = df['embalagem'].apply(calcular_qtd_embalagem)
