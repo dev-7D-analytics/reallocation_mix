@@ -454,6 +454,262 @@ C & 0,14 & 8.640 & 0,7\% \\
 A média ponderada pela proporção histórica reflete a realidade: o SKU A quase não é vendido.
 
 %==============================================================================
+\section{Formulação da Distribuição Histórica por Dia da Semana (DOW)}
+%==============================================================================
+
+Esta seção formaliza o pós-processamento para granularidade semanal (\texttt{S}),
+que distribui o volume semanal da semana-alvo por dia da semana e, em seguida,
+por SKU dentro da classe.
+
+\subsection{Objetivo}
+
+Dado o volume semanal alvo por classe, $V^{alvo}_{c,w^*}$, estimar:
+\begin{itemize}
+    \item volume diário da classe na semana-alvo, $\hat{V}_{c,w^*,d}$;
+    \item volume diário por SKU, $\hat{V}_{i,c,w^*,d}$;
+    \item volume semanal estimado por SKU, $\hat{V}_{i,c,w^*}$.
+\end{itemize}
+
+\subsection{Índices e Conjuntos}
+
+\begin{align}
+c &\in \mathcal{C} && \text{Classes} \\
+i &\in \mathcal{I}_c && \text{SKUs da classe } c \\
+d &\in \mathcal{D}=\{1,\ldots,7\} && \text{Dia da semana (1=dom,\ldots,7=sáb)} \\
+w &\in \mathcal{W}_c && \text{Semanas históricas válidas da classe } c \\
+w^* &&& \text{Semana alvo (configurada em } \texttt{semana\_ref}\text{)}
+\end{align}
+
+\subsection{Dados de Entrada}
+
+\begin{align}
+V_{i,c,w,d} &\ge 0 && \text{Volume histórico do SKU } i \text{ na classe } c, \text{ semana } w, \text{ dia } d \\
+V^{alvo}_{c,w^*} &\ge 0 && \text{Volume semanal alvo da classe } c \text{ na semana } w^*
+\end{align}
+
+Assume-se:
+\begin{equation}
+\forall c \in \mathcal{C},\ \forall i \in \mathcal{I}_c,\ \forall w \in \mathcal{W}_c,\ \forall d \in \mathcal{D}: \ V_{i,c,w,d}\in\mathbb{R}_{\ge 0}
+\end{equation}
+\begin{equation}
+\forall c \in \mathcal{C}: \ V^{alvo}_{c,w^*}\in\mathbb{R}_{\ge 0}
+\end{equation}
+
+Agregações:
+\begin{align}
+V_{c,w,d} &= \sum_{i \in \mathcal{I}_c} V_{i,c,w,d}, && \forall c \in \mathcal{C},\forall w \in \mathcal{W}_c,\forall d \in \mathcal{D} \\
+V_{c,w,\cdot} &= \sum_{d \in \mathcal{D}} V_{c,w,d}, && \forall c \in \mathcal{C},\forall w \in \mathcal{W}_c \\
+V_{c,\cdot,d} &= \sum_{w \in \mathcal{W}_c} V_{c,w,d}, && \forall c \in \mathcal{C},\forall d \in \mathcal{D} \\
+V_{c,\cdot,\cdot} &= \sum_{w \in \mathcal{W}_c}\sum_{d \in \mathcal{D}} V_{c,w,d}, && \forall c \in \mathcal{C}
+\end{align}
+
+Definições auxiliares de domínio válido:
+\begin{align}
+\mathcal{W}^{+}_c &:= \{w \in \mathcal{W}_c : V_{c,w,\cdot}>0\} \\
+\mathcal{W}^{+}_{c,d} &:= \{w \in \mathcal{W}_c : V_{c,w,d}>0\}
+\end{align}
+
+\paragraph{Interpretação por extenso das agregações}
+\begin{itemize}
+    \item $V_{c,w,d}$: volume da classe $c$ em um dia específico $d$ de uma semana histórica específica $w$. É obtido somando todos os SKUs da classe naquele dia e semana.
+    \item $V_{c,w,\cdot}$: volume semanal total da classe $c$ na semana $w$. É a soma dos 7 dias da semana.
+    \item $V_{c,\cdot,d}$: volume histórico acumulado da classe $c$ no dia da semana $d$ ao longo de todas as semanas da janela.
+    \item $V_{c,\cdot,\cdot}$: volume histórico total da classe $c$ em toda a janela (todos os dias de todas as semanas).
+\end{itemize}
+
+\subsection{Etapa A: Perfil da Classe por Dia da Semana}
+
+\subsubsection{Participação diária da classe em cada semana histórica}
+\begin{equation}
+p_{c,w,d} = \frac{V_{c,w,d}}{V_{c,w,\cdot}}, \quad \forall c \in \mathcal{C},\forall w \in \mathcal{W}^{+}_c,\forall d \in \mathcal{D}
+\end{equation}
+
+\paragraph{Interpretação}
+$p_{c,w,d}$ representa a fração do volume semanal da classe $c$ (na semana $w$) que ocorreu no dia $d$.
+Exemplo: se $p_{c,w,2}=0{,}12$, então 12\% do volume semanal daquela classe, naquela semana histórica, caiu na segunda-feira.
+
+\subsubsection{Peso da semana (média ponderada por volume semanal)}
+\begin{equation}
+\alpha_{c,w} = \frac{V_{c,w,\cdot}}{\sum_{u \in \mathcal{W}^{+}_c} V_{c,u,\cdot}},
+\quad \forall c \in \mathcal{C},\forall w \in \mathcal{W}^{+}_c
+\end{equation}
+
+\paragraph{Interpretação}
+$\alpha_{c,w}$ é o peso da semana $w$ na média histórica da classe $c$.
+Semanas com maior volume têm maior influência no perfil final; semanas pequenas têm influência menor.
+
+\subsubsection{Perfil histórico final da classe por dia}
+\begin{equation}
+p^{hist}_{c,d} = \sum_{w \in \mathcal{W}^{+}_c} \alpha_{c,w}\,p_{c,w,d},
+\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D}
+\end{equation}
+
+Forma equivalente agregada:
+\begin{equation}
+p^{hist}_{c,d} = \frac{V_{c,\cdot,d}}{V_{c,\cdot,\cdot}},
+\quad \forall c \in \mathcal{C}\ \text{tal que}\ V_{c,\cdot,\cdot}>0,\ \forall d \in \mathcal{D}
+\end{equation}
+
+\paragraph{Interpretação}
+$p^{hist}_{c,d}$ é o perfil histórico final da classe por dia da semana.
+Ele responde: ``historicamente, qual percentual do volume da classe $c$ cai no dia $d$?''
+A soma em $d=1,\ldots,7$ é igual a 1 (100\%).
+
+\subsubsection{Quebra do volume semanal alvo da classe em dias}
+\begin{equation}
+\hat{V}_{c,w^*,d} = V^{alvo}_{c,w^*}\cdot p^{hist}_{c,d},
+\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D}
+\end{equation}
+
+\paragraph{Interpretação}
+Essa equação transforma o volume semanal alvo da classe em um plano diário.
+Primeiro fixa-se o total da semana ($V^{alvo}_{c,w^*}$), depois aplica-se o perfil histórico por dia ($p^{hist}_{c,d}$).
+
+\subsection{Etapa B: Perfil do SKU dentro da Classe por Dia}
+
+\subsubsection{Participação do SKU no dia, por semana}
+\begin{equation}
+q_{i,c,w,d} = \frac{V_{i,c,w,d}}{V_{c,w,d}},
+\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall w \in \mathcal{W}^{+}_{c,d},\forall i \in \mathcal{I}_c
+\end{equation}
+
+\paragraph{Interpretação}
+$q_{i,c,w,d}$ é a participação do SKU $i$ dentro da classe $c$ no dia $d$ da semana $w$.
+Exemplo: $q_{i,c,w,d}=0{,}40$ significa que o SKU respondeu por 40\% do volume da classe naquele dia específico.
+
+\subsubsection{Peso da semana no dia (média ponderada por volume diário da classe)}
+\begin{equation}
+\beta_{c,w,d} = \frac{V_{c,w,d}}{\sum_{u \in \mathcal{W}^{+}_{c,d}} V_{c,u,d}},
+\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall w \in \mathcal{W}^{+}_{c,d}
+\end{equation}
+
+\paragraph{Interpretação}
+$\beta_{c,w,d}$ pondera a importância da semana $w$ ao calcular o perfil de SKUs no dia $d$.
+Se numa semana a classe teve volume alto no dia $d$, essa semana terá peso maior para estimar a distribuição SKU daquele dia.
+
+\subsubsection{Perfil histórico final do SKU no dia}
+\begin{equation}
+q^{hist}_{i,c,d} = \sum_{w \in \mathcal{W}^{+}_{c,d}} \beta_{c,w,d}\,q_{i,c,w,d},
+\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall i \in \mathcal{I}_c
+\end{equation}
+
+Forma equivalente agregada:
+\begin{equation}
+q^{hist}_{i,c,d} =
+\frac{\sum_{w \in \mathcal{W}^{+}_{c,d}} V_{i,c,w,d}}
+{\sum_{w \in \mathcal{W}^{+}_{c,d}} V_{c,w,d}},
+\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall i \in \mathcal{I}_c
+\end{equation}
+
+\paragraph{Interpretação}
+$q^{hist}_{i,c,d}$ representa o percentual histórico do SKU $i$ dentro da classe $c$ no dia $d$, já consolidado na janela histórica.
+Para um mesmo $(c,d)$, a soma dos SKUs é 1 (após normalização numérica).
+
+Normalização numérica (caso necessário por arredondamento):
+\begin{equation}
+\tilde{q}^{hist}_{i,c,d} =
+\frac{q^{hist}_{i,c,d}}
+{\sum_{j \in \mathcal{I}_c} q^{hist}_{j,c,d}},
+\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall i \in \mathcal{I}_c
+\end{equation}
+
+\subsubsection{Distribuição diária da classe para SKUs}
+\begin{equation}
+\hat{V}_{i,c,w^*,d} = \hat{V}_{c,w^*,d}\cdot \tilde{q}^{hist}_{i,c,d},
+\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall i \in \mathcal{I}_c
+\end{equation}
+
+\paragraph{Interpretação}
+Depois de calcular o volume diário da classe, esta etapa reparte esse volume entre os SKUs da classe usando o perfil histórico do dia.
+Ou seja, o dia é distribuído ``de cima para baixo'': classe $\rightarrow$ SKUs.
+
+\subsection{Etapa C: Consolidação Semanal por SKU}
+
+\begin{equation}
+\hat{V}_{i,c,w^*} = \sum_{d \in \mathcal{D}} \hat{V}_{i,c,w^*,d},
+\quad \forall c \in \mathcal{C},\forall i \in \mathcal{I}_c
+\end{equation}
+
+\paragraph{Interpretação}
+O volume semanal estimado do SKU é a soma das 7 estimativas diárias.
+Esse valor é a saída final da lógica de quebra para cada SKU na semana-alvo.
+
+\subsection{Condições de Consistência}
+
+\begin{align}
+\sum_{d \in \mathcal{D}} \hat{V}_{c,w^*,d} &= V^{alvo}_{c,w^*} \\
+\sum_{i \in \mathcal{I}_c} \hat{V}_{i,c,w^*,d} &= \hat{V}_{c,w^*,d}, \quad \forall d \in \mathcal{D} \\
+\sum_{i \in \mathcal{I}_c} \hat{V}_{i,c,w^*} &= V^{alvo}_{c,w^*}
+\end{align}
+
+\paragraph{Interpretação}
+As três equações garantem fechamento de massa:
+\begin{itemize}
+    \item o total diário da classe soma exatamente o total semanal alvo;
+    \item a soma dos SKUs em cada dia fecha exatamente o dia da classe;
+    \item a soma semanal dos SKUs fecha exatamente o total semanal da classe.
+\end{itemize}
+
+\subsection{Regras de Fallback}
+
+\subsubsection{F1: Classe sem histórico no dia $d$}
+
+Se $\forall w \in \mathcal{W}_c,\ V_{c,w,d}=0$, usar participação semanal do SKU na classe:
+\begin{equation}
+q^{hist}_{i,c,\text{sem}} =
+\frac{\sum_{w}\sum_{d} V_{i,c,w,d}}
+{\sum_{w}\sum_{d} V_{c,w,d}},
+\quad \forall c \in \mathcal{C},\forall i \in \mathcal{I}_c
+\end{equation}
+e distribuir:
+\begin{equation}
+\hat{V}_{i,c,w^*,d} = \hat{V}_{c,w^*,d}\cdot q^{hist}_{i,c,\text{sem}},
+\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D}\ \text{sem histórico},\forall i \in \mathcal{I}_c
+\end{equation}
+
+\paragraph{Interpretação}
+Quando falta histórico para o dia específico, usa-se um perfil menos granular (semanal da classe), evitando perda total de distribuição.
+
+\subsubsection{F2: SKU ativo sem histórico na classe}
+
+Se $\exists i \in \mathcal{I}_c$ ativo tal que
+\(
+\sum_{w \in \mathcal{W}_c}\sum_{d \in \mathcal{D}}V_{i,c,w,d}=0
+\),
+aplicar participação mínima $\epsilon$ (ou zero,
+conforme regra de negócio) e renormalizar em $\mathcal{I}_c$:
+\begin{equation}
+q^{hist}_{i,c,d} \leftarrow \epsilon, \quad
+\tilde{q}^{hist}_{i,c,d} \leftarrow
+\frac{q^{hist}_{i,c,d}}{\sum_{j \in \mathcal{I}_c} q^{hist}_{j,c,d}}
+\end{equation}
+
+\paragraph{Interpretação}
+Essa regra evita que SKUs ativos sem histórico fiquem permanentemente com participação impossível.
+Ao mesmo tempo, a renormalização preserva soma de 100\% entre SKUs da classe no dia.
+
+\subsubsection{F3: Classe sem histórico no horizonte}
+
+Se $V_{c,\cdot,\cdot}=0$, duas alternativas de política:
+\begin{enumerate}[label=\alph*)]
+    \item não distribuir (marcar \texttt{status\_fallback = sem\_historico\_classe}); ou
+    \item distribuir uniformemente por dia e por SKU ativo da classe.
+\end{enumerate}
+
+\paragraph{Interpretação}
+Se não há histórico suficiente da classe na janela, o modelo precisa de uma política explícita de negócio:
+ou não distribui automaticamente, ou aplica uma regra neutra (uniforme).
+
+\subsection{Observações de Implementação}
+
+\begin{itemize}
+    \item A janela histórica é configurada por \texttt{ano\_custo}, \texttt{mes\_custo} e \texttt{meses\_janela\_custo}.
+    \item A semana alvo $w^*$ deve ser excluída da história para evitar vazamento de informação.
+    \item Os mesmos filtros de estabelecimento e SKUs ativos do pipeline principal devem ser aplicados.
+    \item A execução desta análise é recomendada apenas para granularidade semanal (\texttt{S}).
+\end{itemize}
+
+%==============================================================================
 \section{Fluxo de Execução}
 %==============================================================================
 
