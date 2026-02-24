@@ -509,6 +509,17 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
         if df_prod.empty:
             raise ValueError(f"Nao encontrei registros para a semana {periodo_label} em {excel_path}")
 
+    # Ajuste de sinal para estorno de produção:
+    # ACA = produção positiva; EAC = estorno (deve ser negativo)
+    col_esp = next((c for c in ["Esp", "ESP", "Especie", "Espécie"] if c in df_prod.columns), None)
+    df_prod["Quantidade"] = pd.to_numeric(df_prod["Quantidade"], errors="coerce").fillna(0.0)
+    if col_esp is not None:
+        esp_serie = df_prod[col_esp].astype(str).str.strip().str.upper()
+        mask_eac = esp_serie == "EAC"
+        mask_aca = esp_serie == "ACA"
+        df_prod.loc[mask_eac, "Quantidade"] = -df_prod.loc[mask_eac, "Quantidade"].abs()
+        df_prod.loc[mask_aca, "Quantidade"] = df_prod.loc[mask_aca, "Quantidade"].abs()
+
     df_prod["embalagem"] = df_prod["Desc Item"].apply(extrair_embalagem_descricao)
     df_prod["qtd_embalagem"] = df_prod["embalagem"].apply(calcular_qtd_embalagem)
     df_prod["quantidade"] = df_prod["Quantidade"] * df_prod["qtd_embalagem"]
