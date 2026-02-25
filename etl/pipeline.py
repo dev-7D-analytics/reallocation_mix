@@ -1172,18 +1172,19 @@ class ETLPipeline:
             df['qtd_embalagem'] = df['embalagem'].apply(calcular_qtd_embalagem)
             df['quantidade'] = df['Quantidade'] * df['qtd_embalagem']
             
-            # Filtrar apenas SKUs com embalagem válida e quantidade > 0
+            # Filtrar embalagem válida (sem filtrar quantidade > 0 antes de agregar)
             df = df[
-                (df['embalagem'].notna()) & 
-                (df['quantidade'].notna()) & 
-                (df['quantidade'] > 0)
+                (df['embalagem'].notna()) &
+                (df['quantidade'].notna())
             ].copy()
-            
-            # Extrair SKUs
+
+            # Agregar por item para obter produção líquida (ACA - EAC)
             col_item = 'Cod Item' if 'Cod Item' in df.columns else 'CODIGO ITEM'
             if col_item in df.columns:
                 df[col_item] = pd.to_numeric(df[col_item], errors='coerce')
-                skus_producao = set(df[col_item].dropna().astype(int).unique())
+                df_agg = df.groupby(col_item, as_index=False)['quantidade'].sum()
+                df_agg = df_agg[df_agg['quantidade'] > 0]
+                skus_producao = set(df_agg[col_item].dropna().astype(int).unique())
                 
                 # Filtrar apenas SKUs ativos no estabelecimento
                 path_skus = Path(self.config['paths'].get('skus_restritos', 'inputs/skus_restritos.xlsx'))

@@ -23,6 +23,11 @@ dados:
   # Outros filtros
   semana_ref: 2026-07             # Semana de referência para produção (usado quando granularidade = S)
   data_ref: '2026-02-11'          # Data de referência para produção (usado quando granularidade = D ou M)
+  # Distribuição histórica por dia da semana (DOW) - usada apenas quando granularidade = S
+  # Se não informados, o código faz fallback para ano_custo/mes_custo/meses_janela_custo
+  dow_ano_ref: 2026               # Ano de referência da janela histórica DOW
+  dow_mes_ref: 2                  # Mês final da janela histórica DOW
+  dow_meses_janela: 6             # Janela em meses para cálculo do perfil DOW
   sku_minimo_transacoes: 1        # Mínimo de transações para considerar um SKU
   tipo_estoque: DISPONIVEL PARA VENDA  # Tipo de estoque a filtrar
 

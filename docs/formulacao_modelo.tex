@@ -41,7 +41,7 @@ O resultado é comparado com um \textbf{baseline} que representa a margem obtida
 
 \subsection{Conjuntos Principais}
 
-\begin{align}
+\begin{align}\label{eq:auto:al:001}
 I &= \{1, 2, \ldots, n\} && \text{Conjunto de todos os SKUs} \\
 C &= \{c_1, c_2, \ldots, c_m\} && \text{Conjunto de classes de produtos} \\
 S &= \{s_1, s_2, \ldots, s_k\} && \text{Conjunto de períodos (semanas) no histórico}
@@ -49,7 +49,7 @@ S &= \{s_1, s_2, \ldots, s_k\} && \text{Conjunto de períodos (semanas) no hist�
 
 \subsection{Subconjuntos Derivados}
 
-\begin{align}
+\begin{align}\label{eq:auto:al:002}
 I_c &\subseteq I && \text{SKUs pertencentes à classe } c \\
 I_{\text{válido}} &\subseteq I && \text{SKUs válidos para otimização} \\
 H &\subseteq I_{\text{válido}} && \text{SKUs com demanda histórica válida} \\
@@ -58,7 +58,7 @@ R &\subseteq I && \text{SKUs com pedidos reservados}
 
 \subsection{Mapeamentos}
 
-\begin{align}
+\begin{align}\label{eq:auto:al:003}
 \kappa: I &\rightarrow C && \text{Função que mapeia SKU para sua classe} \\
 e_i: I &\rightarrow \mathbb{Z}^+ && \text{Quantidade de ovos por embalagem do SKU } i
 \end{align}
@@ -88,7 +88,7 @@ $\kappa(i)$ & Classe do SKU $i$ & - & $C$ \\
 
 A quantidade de ovos por embalagem $e_i$ é extraída da descrição do produto:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:001}
 e_i = n_{\text{bandejas}} \times n_{\text{unidades}}
 \end{equation}
 
@@ -96,26 +96,26 @@ Exemplo: ``CX 12 BJ 30 UN'' $\Rightarrow e_i = 12 \times 30 = 360$ ovos.
 
 \subsection{Dados de Produção}
 
-\begin{equation}
+\begin{equation}\label{eq:auto:002}
 P_c \in \mathbb{R}^+ \quad \text{Produção total da classe } c \text{ na semana (ovos)}
 \end{equation}
 
 \subsection{Margem de Contribuição}
 
 \textbf{Margem por caixa:}
-\begin{equation}
+\begin{equation}\label{eq:auto:003}
 m_i = p_i - c_i \quad \text{(R\$/caixa)}
 \end{equation}
 
 \textbf{Margem por ovo} (coeficiente da função objetivo):
-\begin{equation}
+\begin{equation}\label{eq:auto:004}
 \mu_i = \frac{m_i}{e_i} = \frac{p_i - c_i}{e_i} \quad \text{(R\$/ovo)}
 \end{equation}
 
 \textbf{Tratamento de custo ausente:}
 
 Quando um SKU $i$ não possui custo individual, utiliza-se a média da classe:
-\begin{equation}
+\begin{equation}\label{eq:auto:005}
 c_i = \begin{cases}
 c_i^{\text{original}} & \text{se } c_i^{\text{original}} > 0 \\[4pt]
 \displaystyle\frac{\sum_{j \in I_{\kappa(i)}} c_j}{|I_{\kappa(i)}|} & \text{caso contrário}
@@ -130,7 +130,7 @@ c_i^{\text{original}} & \text{se } c_i^{\text{original}} > 0 \\[4pt]
 
 Cada registro de faturamento contém item, cliente, estabelecimento, data e quantidade em caixas. A quantidade é convertida para ovos:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:006}
 Q_f^{\text{ovos}} = Q_f^{\text{caixas}} \times 360
 \end{equation}
 
@@ -138,7 +138,7 @@ Q_f^{\text{ovos}} = Q_f^{\text{caixas}} \times 360
 
 Alguns registros têm estabelecimento incorreto. A correção é feita via mapeamento externo:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:007}
 \text{Estab\_Corrigido}(f) = \begin{cases}
 E(\text{cliente}_f) & \text{se } \text{cliente}_f \in \text{dom}(E) \\
 \text{estab}_f & \text{caso contrário}
@@ -150,14 +150,14 @@ onde $E: \text{Cod.Cliente} \rightarrow \text{Estab\_Padrao}$ é o mapeamento de
 \subsection{Filtro por Estabelecimento}
 
 Apenas registros do estabelecimento de interesse:
-\begin{equation}
+\begin{equation}\label{eq:auto:008}
 F_{\text{filtrado}} = \{f \in F : \text{Estab\_Corrigido}(f) = 100\}
 \end{equation}
 
 \subsection{Janela Temporal}
 
 Os dados são filtrados por uma janela configurável:
-\begin{equation}
+\begin{equation}\label{eq:auto:009}
 \text{Janela} = [\text{mes\_ref} - \text{meses\_janela} + 1, \; \text{mes\_ref}]
 \end{equation}
 
@@ -167,7 +167,7 @@ Configuração atual: \texttt{mes\_custo=11}, \texttt{meses\_janela\_custo=6} $\
 
 A granularidade é configurável (\texttt{S}=semanal, \texttt{M}=mensal, \texttt{D}=diário). Para cada SKU $i$ e período $s$:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:010}
 Q_{i,s} = \sum_{f : \text{item}_f = i, \, \text{período}(f) = s} Q_f^{\text{ovos}}
 \end{equation}
 
@@ -176,24 +176,24 @@ Q_{i,s} = \sum_{f : \text{item}_f = i, \, \text{período}(f) = s} Q_f^{\text{ovo
 O limite de demanda depende do tipo de cálculo configurado:
 
 \textbf{Método Máximo} (\texttt{tipo\_calculo\_demanda = maximo}):
-\begin{equation}
+\begin{equation}\label{eq:auto:011}
 D_i^{\text{base}} = \max_{s \in S_i} Q_{i,s}
 \end{equation}
 
 \textbf{Método Média} (\texttt{tipo\_calculo\_demanda = media}):
-\begin{equation}
+\begin{equation}\label{eq:auto:012}
 D_i^{\text{base}} = \frac{1}{|S_i|} \sum_{s \in S_i} Q_{i,s}
 \end{equation}
 
 \textbf{Método Percentil} (\texttt{tipo\_calculo\_demanda = percentil}):
-\begin{equation}
+\begin{equation}\label{eq:auto:013}
 D_i^{\text{base}} = \text{Percentil}_p(Q_{i,s}) \quad \text{onde } p = \texttt{percentil\_demanda}
 \end{equation}
 
 onde $S_i = \{s \in S : Q_{i,s} > 0\}$ é o conjunto de períodos com vendas.
 
 \textbf{Aplicação do fator de expansão:}
-\begin{equation}
+\begin{equation}\label{eq:auto:014}
 D_i = D_i^{\text{base}} \times \alpha \quad \text{onde } \alpha = \texttt{fator\_demanda\_maxima}
 \end{equation}
 
@@ -203,7 +203,7 @@ O fator $\alpha$ é aplicado igualmente a todos os SKUs, independente do método
 
 Para o cálculo do baseline, armazena-se o volume total vendido por SKU no período (sem fator):
 
-\begin{equation}
+\begin{equation}\label{eq:auto:015}
 V_i^{\text{hist}} = \sum_{s \in S_i} Q_{i,s}
 \end{equation}
 
@@ -211,7 +211,7 @@ V_i^{\text{hist}} = \sum_{s \in S_i} Q_{i,s}
 
 Um SKU é \textbf{válido para otimização} se:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:016}
 i \in I_{\text{válido}} \iff \begin{cases}
 \text{ESTAB}_i = 100 \\
 \text{STATUS}_i = \texttt{ATIVO} \\
@@ -231,19 +231,19 @@ SKUs da classe \texttt{OUTROS} são excluídos da otimização mas aparecem no o
 
 Um pedido para SKU $i$ é reservado se o SKU tem classe mapeada e produção na semana:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:017}
 i \in R \iff (Q_i^{\text{pedido}} > 0) \land (\kappa(i) \text{ existe}) \land (P_{\kappa(i)} > 0)
 \end{equation}
 
 \subsection{Quantidade Reservada}
 
-\begin{equation}
+\begin{equation}\label{eq:auto:018}
 r_i = Q_i^{\text{pedido}} \quad \forall i \in R
 \end{equation}
 
 \subsection{Reservas por Classe}
 
-\begin{equation}
+\begin{equation}\label{eq:auto:019}
 R_c = \sum_{i \in R : \kappa(i) = c} r_i \quad \forall c \in C
 \end{equation}
 
@@ -251,7 +251,7 @@ R_c = \sum_{i \in R : \kappa(i) = c} r_i \quad \forall c \in C
 
 Volume disponível para otimização após descontar reservas:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:020}
 E_c = \max(0, \; P_c - R_c) \quad \forall c \in C
 \end{equation}
 
@@ -261,12 +261,12 @@ E_c = \max(0, \; P_c - R_c) \quad \forall c \in C
 
 \subsection{Variável de Decisão}
 
-\begin{equation}
+\begin{equation}\label{eq:auto:021}
 x_i \geq 0 \quad \text{Quantidade alocada ao SKU } i \text{ (em ovos)}
 \end{equation}
 
 \textbf{Tipo da variável} (configurável via \texttt{variaveis\_continuas}):
-\begin{equation}
+\begin{equation}\label{eq:auto:022}
 x_i \in \begin{cases}
 \mathbb{R}^+ & \text{se \texttt{variaveis\_continuas = true} (padrão)} \\
 \mathbb{Z}^+ & \text{se \texttt{variaveis\_continuas = false}}
@@ -277,7 +277,7 @@ x_i \in \begin{cases}
 
 Maximizar a margem total de contribuição:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:023}
 \max \; Z = \sum_{i \in H} \mu_i \cdot x_i = \sum_{i \in H} \frac{p_i - c_i}{e_i} \cdot x_i
 \end{equation}
 
@@ -285,7 +285,7 @@ Maximizar a margem total de contribuição:
 
 \subsubsection{R1: Capacidade de Produção por Classe}
 
-\begin{equation}
+\begin{equation}\label{eq:auto:024}
 \sum_{i \in H : \kappa(i) = c} x_i \leq E_c \quad \forall c \in C
 \end{equation}
 
@@ -293,19 +293,19 @@ Maximizar a margem total de contribuição:
 
 Ativa quando \texttt{considerar\_demanda\_historica = true}:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:025}
 x_i \leq D_i \quad \forall i \in H
 \end{equation}
 
 \subsubsection{R3: Não-Negatividade}
 
-\begin{equation}
+\begin{equation}\label{eq:auto:026}
 x_i \geq 0 \quad \forall i \in H
 \end{equation}
 
 \subsection{Formulação Compacta}
 
-\begin{equation}
+\begin{equation}\label{eq:auto:027}
 \boxed{
 \begin{aligned}
 \max \quad & Z = \sum_{i \in H} \mu_i \cdot x_i \\[10pt]
@@ -358,7 +358,7 @@ Ambos utilizam o \textbf{mesmo volume total} por classe, excluindo reservas e cl
 
 O volume comparável por classe é o total alocado pelo modelo (excluindo reservas e OUTROS):
 
-\begin{equation}
+\begin{equation}\label{eq:auto:028}
 V_c^{\text{otim}} = \sum_{\substack{i \in H : \kappa(i) = c \\ \text{tipo}_i \neq \text{reserva}}} x_i^*
 \end{equation}
 
@@ -366,7 +366,7 @@ V_c^{\text{otim}} = \sum_{\substack{i \in H : \kappa(i) = c \\ \text{tipo}_i \ne
 
 Resultado direto do solver:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:029}
 M^{\text{otim}} = \sum_{\substack{i \in H \\ \text{tipo}_i = \text{otimizacao}}} \mu_i \cdot x_i^*
 = \sum_{\substack{i \in H \\ \text{tipo}_i = \text{otimizacao}}} \frac{m_i}{e_i} \cdot x_i^*
 \end{equation}
@@ -377,7 +377,7 @@ M^{\text{otim}} = \sum_{\substack{i \in H \\ \text{tipo}_i = \text{otimizacao}}}
 
 Para cada classe $c$, calcula-se a proporção de cada SKU com base no volume total vendido no período (sem fator multiplicativo):
 
-\begin{equation}
+\begin{equation}\label{eq:auto:030}
 \pi_i = \frac{V_i^{\text{hist}}}{\displaystyle\sum_{j \in H : \kappa(j) = c} V_j^{\text{hist}}}
 \quad \forall i \in H : \kappa(i) = c
 \end{equation}
@@ -392,20 +392,20 @@ onde $V_i^{\text{hist}} = \sum_{s \in S_i} Q_{i,s}$ é o volume total histórico
 
 Distribui o volume disponível da classe proporcionalmente ao histórico:
 
-\begin{equation}
+\begin{equation}\label{eq:auto:031}
 x_i^{\text{base}} = V_c^{\text{otim}} \cdot \pi_i \quad \forall i \in H : \kappa(i) = c
 \end{equation}
 
 \subsubsection{Passo 3: Margem Baseline Total}
 
-\begin{equation}
+\begin{equation}\label{eq:auto:032}
 M^{\text{base}} = \sum_{c \in C} \sum_{i \in H : \kappa(i) = c} x_i^{\text{base}} \cdot \mu_i
 = \sum_{c \in C} \sum_{i \in H : \kappa(i) = c} V_c^{\text{otim}} \cdot \pi_i \cdot \frac{m_i}{e_i}
 \end{equation}
 
 \subsection{Cálculo do Ganho}
 
-\begin{align}
+\begin{align}\label{eq:auto:al:004}
 \text{Ganho Absoluto} &= M^{\text{otim}} - M^{\text{base}} \\[6pt]
 \text{Ganho Percentual} &= \frac{M^{\text{otim}} - M^{\text{base}}}{M^{\text{base}}} \times 100\%
 \end{align}
@@ -418,295 +418,268 @@ M^{\text{base}} = \sum_{c \in C} \sum_{i \in H : \kappa(i) = c} x_i^{\text{base}
     \item \textbf{Ganho $< 0$}: As restrições (ex: demanda histórica muito restritiva) forçam o modelo a uma distribuição pior que a histórica.
 \end{itemize}
 
-\subsection{Por que não usar Média Simples?}
+% \subsection{Por que não usar Média Simples?}
 
-Uma abordagem anterior usava média simples da margem por ovo:
+% Uma abordagem anterior usava média simples da margem por ovo:
 
-\begin{equation}
-M^{\text{base,simples}} = \sum_{c \in C} V_c^{\text{otim}} \cdot \overline{\mu}_c
-\quad \text{onde} \quad
-\overline{\mu}_c = \frac{1}{|I_c \cap H|} \sum_{i \in H : \kappa(i) = c} \mu_i
-\end{equation}
+% \begin{equation}
+% M^{\text{base,simples}} = \sum_{c \in C} V_c^{\text{otim}} \cdot \overline{\mu}_c
+% \quad \text{onde} \quad
+% \overline{\mu}_c = \frac{1}{|I_c \cap H|} \sum_{i \in H : \kappa(i) = c} \mu_i
+% \end{equation}
 
-Essa abordagem assume que cada SKU receberia o mesmo volume ($V_c / |I_c|$), o que é \textbf{irrealista}: SKUs com alta margem podem ter histórico de vendas muito baixo. Isso \textbf{infla o baseline} e subestima o ganho da otimização.
+% Essa abordagem assume que cada SKU receberia o mesmo volume ($V_c / |I_c|$), o que é \textbf{irrealista}: SKUs com alta margem podem ter histórico de vendas muito baixo. Isso \textbf{infla o baseline} e subestima o ganho da otimização.
 
-\textbf{Exemplo numérico:}
+% \textbf{Exemplo numérico:}
 
-\begin{table}[h]
-\centering
-\begin{tabular}{lrrr}
-\toprule
-\textbf{SKU} & \textbf{$\mu_i$ (R\$/ovo)} & \textbf{$V_i^{\text{hist}}$} & \textbf{$\pi_i$} \\
-\midrule
-A & 0,62 & 6.000 & 0,5\% \\
-B & 0,30 & 1.292.713 & 98,9\% \\
-C & 0,14 & 8.640 & 0,7\% \\
-\bottomrule
-\end{tabular}
-\caption{Exemplo -- SKU A tem alta margem mas baixíssimo volume histórico}
-\end{table}
+% \begin{table}[h]
+% \centering
+% \begin{tabular}{lrrr}
+% \toprule
+% \textbf{SKU} & \textbf{$\mu_i$ (R\$/ovo)} & \textbf{$V_i^{\text{hist}}$} & \textbf{$\pi_i$} \\
+% \midrule
+% A & 0,62 & 6.000 & 0,5\% \\
+% B & 0,30 & 1.292.713 & 98,9\% \\
+% C & 0,14 & 8.640 & 0,7\% \\
+% \bottomrule
+% \end{tabular}
+% \caption{Exemplo -- SKU A tem alta margem mas baixíssimo volume histórico}
+% \end{table}
 
-\begin{align}
-\text{Média simples}: \quad \overline{\mu} &= \frac{0{,}62 + 0{,}30 + 0{,}14}{3} = 0{,}353 \quad \text{(inflada por A)} \\[4pt]
-\text{Média ponderada}: \quad \sum_i \pi_i \cdot \mu_i &= 0{,}005 \times 0{,}62 + 0{,}989 \times 0{,}30 + 0{,}007 \times 0{,}14 = 0{,}301
-\end{align}
+% \begin{align}
+% \text{Média simples}: \quad \overline{\mu} &= \frac{0{,}62 + 0{,}30 + 0{,}14}{3} = 0{,}353 \quad \text{(inflada por A)} \\[4pt]
+% \text{Média ponderada}: \quad \sum_i \pi_i \cdot \mu_i &= 0{,}005 \times 0{,}62 + 0{,}989 \times 0{,}30 + 0{,}007 \times 0{,}14 = 0{,}301
+% \end{align}
 
-A média ponderada pela proporção histórica reflete a realidade: o SKU A quase não é vendido.
-
+% A média ponderada pela proporção histórica reflete a realidade: o SKU A quase não é vendido.
 %==============================================================================
 \section{Formulação da Distribuição Histórica por Dia da Semana (DOW)}
 %==============================================================================
 
 Esta seção formaliza o pós-processamento para granularidade semanal (\texttt{S}),
-que distribui o volume semanal da semana-alvo por dia da semana e, em seguida,
-por SKU dentro da classe.
+que distribui os volumes semanais decididos pelo modelo de otimização em estimativas
+diárias por SKU, mantendo consistência exata com o output do comparador de
+produção/alocação.
 
 \subsection{Objetivo}
 
-Dado o volume semanal alvo por classe, $V^{alvo}_{c,w^*}$, estimar:
-\begin{itemize}
-    \item volume diário da classe na semana-alvo, $\hat{V}_{c,w^*,d}$;
-    \item volume diário por SKU, $\hat{V}_{i,c,w^*,d}$;
-    \item volume semanal estimado por SKU, $\hat{V}_{i,c,w^*}$.
-\end{itemize}
+Dado o volume semanal decidido pelo modelo para cada SKU, $V^{\text{mod}}_{i,w^*}$,
+estimar o volume diário:
+\begin{equation}\label{eq:dow:objetivo}
+\hat{V}_{i,w^*,d}, \quad \forall i \in \mathcal{I},\;\forall d \in \mathcal{D}
+\end{equation}
+
+\textbf{Requisito de consistência:} a soma dos 7 dias deve coincidir exatamente com o
+valor exibido no comparador, garantindo que o DOW seja uma \emph{desagregação temporal
+fiel} da decisão do modelo.
 
 \subsection{Índices e Conjuntos}
 
-\begin{align}
-c &\in \mathcal{C} && \text{Classes} \\
-i &\in \mathcal{I}_c && \text{SKUs da classe } c \\
-d &\in \mathcal{D}=\{1,\ldots,7\} && \text{Dia da semana (1=dom,\ldots,7=sáb)} \\
-w &\in \mathcal{W}_c && \text{Semanas históricas válidas da classe } c \\
-w^* &&& \text{Semana alvo (configurada em } \texttt{semana\_ref}\text{)}
+\begin{align}\label{eq:dow:indices}
+i &\in \mathcal{I} && \text{SKUs com volume decidido pelo modelo ($V^{\text{mod}}_{i,w^*}>0$)} \nonumber\\
+c &\in \mathcal{C} && \text{Classes de produto} \nonumber\\
+d &\in \mathcal{D}=\{1,\ldots,7\} && \text{Dia da semana (1=dom,\ldots,7=sáb)} \nonumber\\
+w &\in \mathcal{W} && \text{Semanas da janela histórica} \nonumber\\
+w^* &&& \text{Semana alvo (configurada em \texttt{semana\_ref})}
 \end{align}
+
+Mapeamentos:
+\begin{align}\label{eq:dow:mapeamentos}
+\kappa(i) &= c && \text{Classe do SKU } i \nonumber\\
+\mathcal{I}_c &= \{i \in \mathcal{I} : \kappa(i)=c\} && \text{SKUs da classe } c \text{ com volume no modelo}
+\end{align}
+
+\textbf{Premissa:} $\mathcal{I}$ contém apenas SKUs ativos, filtrados pelos mesmos
+critérios de estabelecimento e status do pipeline principal.
 
 \subsection{Dados de Entrada}
 
-\begin{align}
-V_{i,c,w,d} &\ge 0 && \text{Volume histórico do SKU } i \text{ na classe } c, \text{ semana } w, \text{ dia } d \\
-V^{alvo}_{c,w^*} &\ge 0 && \text{Volume semanal alvo da classe } c \text{ na semana } w^*
-\end{align}
+\subsubsection{Volume decidido pelo modelo (semanal por SKU)}
 
-Assume-se:
-\begin{equation}
-\forall c \in \mathcal{C},\ \forall i \in \mathcal{I}_c,\ \forall w \in \mathcal{W}_c,\ \forall d \in \mathcal{D}: \ V_{i,c,w,d}\in\mathbb{R}_{\ge 0}
+O volume semanal do SKU $i$ na semana-alvo $w^*$ é obtido do output do modelo de
+otimização:
+\begin{equation}\label{eq:dow:volume-modelo}
+V^{\text{mod}}_{i,w^*} = x_i^{\text{aloc}} + r_i^{\text{res}},
+\quad \forall i \in \mathcal{I}
 \end{equation}
-\begin{equation}
-\forall c \in \mathcal{C}: \ V^{alvo}_{c,w^*}\in\mathbb{R}_{\ge 0}
-\end{equation}
-
-Agregações:
-\begin{align}
-V_{c,w,d} &= \sum_{i \in \mathcal{I}_c} V_{i,c,w,d}, && \forall c \in \mathcal{C},\forall w \in \mathcal{W}_c,\forall d \in \mathcal{D} \\
-V_{c,w,\cdot} &= \sum_{d \in \mathcal{D}} V_{c,w,d}, && \forall c \in \mathcal{C},\forall w \in \mathcal{W}_c \\
-V_{c,\cdot,d} &= \sum_{w \in \mathcal{W}_c} V_{c,w,d}, && \forall c \in \mathcal{C},\forall d \in \mathcal{D} \\
-V_{c,\cdot,\cdot} &= \sum_{w \in \mathcal{W}_c}\sum_{d \in \mathcal{D}} V_{c,w,d}, && \forall c \in \mathcal{C}
-\end{align}
-
-Definições auxiliares de domínio válido:
-\begin{align}
-\mathcal{W}^{+}_c &:= \{w \in \mathcal{W}_c : V_{c,w,\cdot}>0\} \\
-\mathcal{W}^{+}_{c,d} &:= \{w \in \mathcal{W}_c : V_{c,w,d}>0\}
-\end{align}
-
-\paragraph{Interpretação por extenso das agregações}
+onde:
 \begin{itemize}
-    \item $V_{c,w,d}$: volume da classe $c$ em um dia específico $d$ de uma semana histórica específica $w$. É obtido somando todos os SKUs da classe naquele dia e semana.
-    \item $V_{c,w,\cdot}$: volume semanal total da classe $c$ na semana $w$. É a soma dos 7 dias da semana.
-    \item $V_{c,\cdot,d}$: volume histórico acumulado da classe $c$ no dia da semana $d$ ao longo de todas as semanas da janela.
-    \item $V_{c,\cdot,\cdot}$: volume histórico total da classe $c$ em toda a janela (todos os dias de todas as semanas).
+    \item $x_i^{\text{aloc}} \geq 0$: volume alocado pelo otimizador (do excedente
+        da classe), coluna \texttt{quantidade} no output do modelo;
+    \item $r_i^{\text{res}} \geq 0$: volume reservado por pedido garantido
+        ($= 0$ se o SKU não tem pedido), coluna \texttt{quantidade\_reservada}
+        no comparador.
 \end{itemize}
 
-\subsection{Etapa A: Perfil da Classe por Dia da Semana}
+Há duas situações de reserva:
+\begin{enumerate}
+    \item \textbf{SKU restrito com pedido} (ex: GRANEL, Exportação): não participa
+        da otimização; $x_i^{\text{aloc}}=0$ e $V^{\text{mod}}_{i,w^*}=r_i^{\text{res}}$.
+        Aparece como \texttt{tipo=reserva} no output do modelo.
+    \item \textbf{SKU permitido com pedido}: participa da otimização do excedente;
+        $V^{\text{mod}}_{i,w^*}=x_i^{\text{aloc}}+r_i^{\text{res}}$.
+        A reserva é descontada da produção da classe antes da otimização, e o SKU
+        pode receber volume adicional visando maximização de margem.
+\end{enumerate}
 
-\subsubsection{Participação diária da classe em cada semana histórica}
-\begin{equation}
-p_{c,w,d} = \frac{V_{c,w,d}}{V_{c,w,\cdot}}, \quad \forall c \in \mathcal{C},\forall w \in \mathcal{W}^{+}_c,\forall d \in \mathcal{D}
+Esses valores são os mesmos exibidos no comparador de produção/alocação
+(\texttt{quantidade\_alocada} + \texttt{quantidade\_reservada}), garantindo
+rastreabilidade ponta a ponta.
+
+\subsubsection{Histórico de produção}
+
+\begin{equation}\label{eq:dow:historico}
+V_{i,c,w,d} \geq 0: \quad \text{volume líquido produzido do SKU } i
+    \text{ (classe } c\text{), semana } w\text{, dia } d
 \end{equation}
 
-\paragraph{Interpretação}
-$p_{c,w,d}$ representa a fração do volume semanal da classe $c$ (na semana $w$) que ocorreu no dia $d$.
-Exemplo: se $p_{c,w,2}=0{,}12$, então 12\% do volume semanal daquela classe, naquela semana histórica, caiu na segunda-feira.
+\textbf{Premissa:} o volume histórico deve refletir a \emph{produção líquida} (ACA
+menos EAC), obtida via agregação (soma) antes da filtragem de valores positivos.
+Os mesmos filtros de estabelecimento e SKUs ativos do pipeline principal devem ser
+aplicados ao histórico.
 
-\subsubsection{Peso da semana (média ponderada por volume semanal)}
-\begin{equation}
-\alpha_{c,w} = \frac{V_{c,w,\cdot}}{\sum_{u \in \mathcal{W}^{+}_c} V_{c,u,\cdot}},
-\quad \forall c \in \mathcal{C},\forall w \in \mathcal{W}^{+}_c
-\end{equation}
+\subsection{Agregações Históricas}
 
-\paragraph{Interpretação}
-$\alpha_{c,w}$ é o peso da semana $w$ na média histórica da classe $c$.
-Semanas com maior volume têm maior influência no perfil final; semanas pequenas têm influência menor.
-
-\subsubsection{Perfil histórico final da classe por dia}
-\begin{equation}
-p^{hist}_{c,d} = \sum_{w \in \mathcal{W}^{+}_c} \alpha_{c,w}\,p_{c,w,d},
-\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D}
-\end{equation}
-
-Forma equivalente agregada:
-\begin{equation}
-p^{hist}_{c,d} = \frac{V_{c,\cdot,d}}{V_{c,\cdot,\cdot}},
-\quad \forall c \in \mathcal{C}\ \text{tal que}\ V_{c,\cdot,\cdot}>0,\ \forall d \in \mathcal{D}
-\end{equation}
-
-\paragraph{Interpretação}
-$p^{hist}_{c,d}$ é o perfil histórico final da classe por dia da semana.
-Ele responde: ``historicamente, qual percentual do volume da classe $c$ cai no dia $d$?''
-A soma em $d=1,\ldots,7$ é igual a 1 (100\%).
-
-\subsubsection{Quebra do volume semanal alvo da classe em dias}
-\begin{equation}
-\hat{V}_{c,w^*,d} = V^{alvo}_{c,w^*}\cdot p^{hist}_{c,d},
-\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D}
-\end{equation}
-
-\paragraph{Interpretação}
-Essa equação transforma o volume semanal alvo da classe em um plano diário.
-Primeiro fixa-se o total da semana ($V^{alvo}_{c,w^*}$), depois aplica-se o perfil histórico por dia ($p^{hist}_{c,d}$).
-
-\subsection{Etapa B: Perfil do SKU dentro da Classe por Dia}
-
-\subsubsection{Participação do SKU no dia, por semana}
-\begin{equation}
-q_{i,c,w,d} = \frac{V_{i,c,w,d}}{V_{c,w,d}},
-\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall w \in \mathcal{W}^{+}_{c,d},\forall i \in \mathcal{I}_c
-\end{equation}
-
-\paragraph{Interpretação}
-$q_{i,c,w,d}$ é a participação do SKU $i$ dentro da classe $c$ no dia $d$ da semana $w$.
-Exemplo: $q_{i,c,w,d}=0{,}40$ significa que o SKU respondeu por 40\% do volume da classe naquele dia específico.
-
-\subsubsection{Peso da semana no dia (média ponderada por volume diário da classe)}
-\begin{equation}
-\beta_{c,w,d} = \frac{V_{c,w,d}}{\sum_{u \in \mathcal{W}^{+}_{c,d}} V_{c,u,d}},
-\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall w \in \mathcal{W}^{+}_{c,d}
-\end{equation}
-
-\paragraph{Interpretação}
-$\beta_{c,w,d}$ pondera a importância da semana $w$ ao calcular o perfil de SKUs no dia $d$.
-Se numa semana a classe teve volume alto no dia $d$, essa semana terá peso maior para estimar a distribuição SKU daquele dia.
-
-\subsubsection{Perfil histórico final do SKU no dia}
-\begin{equation}
-q^{hist}_{i,c,d} = \sum_{w \in \mathcal{W}^{+}_{c,d}} \beta_{c,w,d}\,q_{i,c,w,d},
-\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall i \in \mathcal{I}_c
-\end{equation}
-
-Forma equivalente agregada:
-\begin{equation}
-q^{hist}_{i,c,d} =
-\frac{\sum_{w \in \mathcal{W}^{+}_{c,d}} V_{i,c,w,d}}
-{\sum_{w \in \mathcal{W}^{+}_{c,d}} V_{c,w,d}},
-\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall i \in \mathcal{I}_c
-\end{equation}
-
-\paragraph{Interpretação}
-$q^{hist}_{i,c,d}$ representa o percentual histórico do SKU $i$ dentro da classe $c$ no dia $d$, já consolidado na janela histórica.
-Para um mesmo $(c,d)$, a soma dos SKUs é 1 (após normalização numérica).
-
-Normalização numérica (caso necessário por arredondamento):
-\begin{equation}
-\tilde{q}^{hist}_{i,c,d} =
-\frac{q^{hist}_{i,c,d}}
-{\sum_{j \in \mathcal{I}_c} q^{hist}_{j,c,d}},
-\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall i \in \mathcal{I}_c
-\end{equation}
-
-\subsubsection{Distribuição diária da classe para SKUs}
-\begin{equation}
-\hat{V}_{i,c,w^*,d} = \hat{V}_{c,w^*,d}\cdot \tilde{q}^{hist}_{i,c,d},
-\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D},\forall i \in \mathcal{I}_c
-\end{equation}
-
-\paragraph{Interpretação}
-Depois de calcular o volume diário da classe, esta etapa reparte esse volume entre os SKUs da classe usando o perfil histórico do dia.
-Ou seja, o dia é distribuído ``de cima para baixo'': classe $\rightarrow$ SKUs.
-
-\subsection{Etapa C: Consolidação Semanal por SKU}
-
-\begin{equation}
-\hat{V}_{i,c,w^*} = \sum_{d \in \mathcal{D}} \hat{V}_{i,c,w^*,d},
-\quad \forall c \in \mathcal{C},\forall i \in \mathcal{I}_c
-\end{equation}
-
-\paragraph{Interpretação}
-O volume semanal estimado do SKU é a soma das 7 estimativas diárias.
-Esse valor é a saída final da lógica de quebra para cada SKU na semana-alvo.
-
-\subsection{Condições de Consistência}
-
-\begin{align}
-\sum_{d \in \mathcal{D}} \hat{V}_{c,w^*,d} &= V^{alvo}_{c,w^*} \\
-\sum_{i \in \mathcal{I}_c} \hat{V}_{i,c,w^*,d} &= \hat{V}_{c,w^*,d}, \quad \forall d \in \mathcal{D} \\
-\sum_{i \in \mathcal{I}_c} \hat{V}_{i,c,w^*} &= V^{alvo}_{c,w^*}
+\subsubsection{Agregações por SKU}
+\begin{align}\label{eq:dow:agg-sku}
+V_{i,\cdot,d} &= \sum_{w \in \mathcal{W}} V_{i,c,w,d},
+    && \text{volume do SKU } i \text{ no dia } d \text{ (toda a janela)} \\
+V_{i,\cdot,\cdot} &= \sum_{d \in \mathcal{D}} V_{i,\cdot,d},
+    && \text{volume total do SKU } i \text{ na janela}
 \end{align}
 
-\paragraph{Interpretação}
-As três equações garantem fechamento de massa:
-\begin{itemize}
-    \item o total diário da classe soma exatamente o total semanal alvo;
-    \item a soma dos SKUs em cada dia fecha exatamente o dia da classe;
-    \item a soma semanal dos SKUs fecha exatamente o total semanal da classe.
-\end{itemize}
+\subsubsection{Agregações por classe (auxiliares para fallback)}
+\begin{align}\label{eq:dow:agg-classe}
+V_{c,\cdot,d} &= \sum_{i \in \mathcal{I}_c} V_{i,\cdot,d},
+    && \text{volume da classe } c \text{ no dia } d \text{ (toda a janela)} \\
+V_{c,\cdot,\cdot} &= \sum_{d \in \mathcal{D}} V_{c,\cdot,d},
+    && \text{volume total da classe } c \text{ na janela}
+\end{align}
+
+\subsection{Perfil Histórico do SKU por Dia da Semana}
+
+Para cada SKU com histórico ($V_{i,\cdot,\cdot}>0$), define-se a participação do
+dia $d$ no volume semanal do SKU:
+\begin{equation}\label{eq:dow:perfil-sku-dia}
+p^{\text{hist}}_{i,d} = \frac{V_{i,\cdot,d}}{V_{i,\cdot,\cdot}},
+\quad \forall i : V_{i,\cdot,\cdot}>0,\;\forall d \in \mathcal{D}
+\end{equation}
+
+\textbf{Propriedade:} $\displaystyle\sum_{d \in \mathcal{D}} p^{\text{hist}}_{i,d} = 1$,
+garantindo que a soma dos 7 dias reproduz exatamente o volume semanal do modelo.
+
+O perfil $p^{\text{hist}}_{i,d}$ responde: ``historicamente, qual percentual da
+produção semanal do SKU $i$ cai no dia $d$?''
+
+\subsection{Perfil Histórico da Classe por Dia (Auxiliar para Fallback)}
+
+Para SKUs sem histórico individual, utiliza-se o perfil da classe como fallback:
+\begin{equation}\label{eq:dow:perfil-classe-dia}
+p^{\text{hist}}_{c,d} = \frac{V_{c,\cdot,d}}{V_{c,\cdot,\cdot}},
+\quad \forall c : V_{c,\cdot,\cdot}>0,\;\forall d \in \mathcal{D}
+\end{equation}
+
+A Equação~\eqref{eq:dow:perfil-classe-dia} é matematicamente equivalente à média
+ponderada por volume semanal:
+\[
+p^{\text{hist}}_{c,d}
+= \sum_{w \in \mathcal{W}^{+}_c}
+  \underbrace{\frac{V_{c,w,\cdot}}{\sum_u V_{c,u,\cdot}}}_{\alpha_{c,w}}
+  \cdot
+  \underbrace{\frac{V_{c,w,d}}{V_{c,w,\cdot}}}_{p_{c,w,d}}
+\]
+onde $\mathcal{W}^{+}_c := \{w : V_{c,w,\cdot}>0\}$.
+Semanas com maior volume têm maior influência no perfil.
+
+\subsection{Distribuição Diária por SKU}
+
+A estimativa de volume diário para cada SKU é:
+\begin{equation}\label{eq:dow:distribuicao-diaria}
+\hat{V}_{i,w^*,d} = V^{\text{mod}}_{i,w^*} \cdot p^{\text{hist}}_{i,d},
+\quad \forall i \in \mathcal{I},\;\forall d \in \mathcal{D}
+\end{equation}
+
+onde $p^{\text{hist}}_{i,d}$ é o perfil do SKU
+(Equação~\eqref{eq:dow:perfil-sku-dia}) ou, em caso de fallback, o perfil da
+classe (Equação~\eqref{eq:dow:perfil-classe-dia}).
+
+\subsection{Condição de Consistência}
+
+\textbf{Fechamento por SKU} (requisito principal):
+\begin{equation}\label{eq:dow:consistencia-sku}
+\sum_{d \in \mathcal{D}} \hat{V}_{i,w^*,d} = V^{\text{mod}}_{i,w^*},
+\quad \forall i \in \mathcal{I}
+\end{equation}
+
+A Equação~\eqref{eq:dow:consistencia-sku} garante que a soma dos 7 dias é
+\emph{idêntica} ao valor exibido no comparador de produção/alocação.
+Isso decorre diretamente de $\sum_d p^{\text{hist}}_{i,d} = 1$.
+
+\textbf{Fechamento por classe} (consequência):
+\begin{equation}\label{eq:dow:consistencia-classe}
+\sum_{i \in \mathcal{I}_c} \sum_{d \in \mathcal{D}} \hat{V}_{i,w^*,d}
+= \sum_{i \in \mathcal{I}_c} V^{\text{mod}}_{i,w^*},
+\quad \forall c \in \mathcal{C}
+\end{equation}
 
 \subsection{Regras de Fallback}
 
-\subsubsection{F1: Classe sem histórico no dia $d$}
+\subsubsection{F1: SKU sem histórico individual}
 
-Se $\forall w \in \mathcal{W}_c,\ V_{c,w,d}=0$, usar participação semanal do SKU na classe:
-\begin{equation}
-q^{hist}_{i,c,\text{sem}} =
-\frac{\sum_{w}\sum_{d} V_{i,c,w,d}}
-{\sum_{w}\sum_{d} V_{c,w,d}},
-\quad \forall c \in \mathcal{C},\forall i \in \mathcal{I}_c
+Se $V_{i,\cdot,\cdot}=0$ mas a classe $\kappa(i)$ possui histórico
+($V_{c,\cdot,\cdot}>0$), utilizar o perfil da classe:
+\begin{equation}\label{eq:dow:fallback-f1}
+p^{\text{hist}}_{i,d} \leftarrow p^{\text{hist}}_{c,d},
+\quad c = \kappa(i),\;\forall d \in \mathcal{D}
 \end{equation}
 e distribuir:
-\begin{equation}
-\hat{V}_{i,c,w^*,d} = \hat{V}_{c,w^*,d}\cdot q^{hist}_{i,c,\text{sem}},
-\quad \forall c \in \mathcal{C},\forall d \in \mathcal{D}\ \text{sem histórico},\forall i \in \mathcal{I}_c
+\begin{equation}\label{eq:dow:distribuicao-fallback-f1}
+\hat{V}_{i,w^*,d} = V^{\text{mod}}_{i,w^*} \cdot p^{\text{hist}}_{c,d},
+\quad \forall d \in \mathcal{D}
 \end{equation}
 
-\paragraph{Interpretação}
-Quando falta histórico para o dia específico, usa-se um perfil menos granular (semanal da classe), evitando perda total de distribuição.
+O perfil menos granular (classe) atua como proxy quando o SKU não possui histórico
+individual suficiente. O output deve registrar
+\texttt{fallback\_motivo = sku\_sem\_historico\_individual}.
 
-\subsubsection{F2: SKU ativo sem histórico na classe}
+\subsubsection{F2: SKU e classe sem histórico}
 
-Se $\exists i \in \mathcal{I}_c$ ativo tal que
-\(
-\sum_{w \in \mathcal{W}_c}\sum_{d \in \mathcal{D}}V_{i,c,w,d}=0
-\),
-aplicar participação mínima $\epsilon$ (ou zero,
-conforme regra de negócio) e renormalizar em $\mathcal{I}_c$:
-\begin{equation}
-q^{hist}_{i,c,d} \leftarrow \epsilon, \quad
-\tilde{q}^{hist}_{i,c,d} \leftarrow
-\frac{q^{hist}_{i,c,d}}{\sum_{j \in \mathcal{I}_c} q^{hist}_{j,c,d}}
+Se $V_{i,\cdot,\cdot}=0$ e $V_{c,\cdot,\cdot}=0$ (nem o SKU nem sua classe possuem
+histórico na janela), adota-se como premissa de negócio \textbf{não distribuir}:
+\begin{equation}\label{eq:dow:fallback-f2}
+\hat{V}_{i,w^*,d} \leftarrow 0,
+\quad \forall d \in \mathcal{D}
 \end{equation}
 
-\paragraph{Interpretação}
-Essa regra evita que SKUs ativos sem histórico fiquem permanentemente com participação impossível.
-Ao mesmo tempo, a renormalização preserva soma de 100\% entre SKUs da classe no dia.
+O volume do modelo é preservado no consolidado semanal, porém a quebra diária é
+zerada. O output deve registrar
+\texttt{fallback\_motivo = sku\_e\_classe\_sem\_historico}.
 
-\subsubsection{F3: Classe sem histórico no horizonte}
-
-Se $V_{c,\cdot,\cdot}=0$, duas alternativas de política:
-\begin{enumerate}[label=\alph*)]
-    \item não distribuir (marcar \texttt{status\_fallback = sem\_historico\_classe}); ou
-    \item distribuir uniformemente por dia e por SKU ativo da classe.
-\end{enumerate}
-
-\paragraph{Interpretação}
-Se não há histórico suficiente da classe na janela, o modelo precisa de uma política explícita de negócio:
-ou não distribui automaticamente, ou aplica uma regra neutra (uniforme).
+\textbf{Nota:} neste cenário, a condição de consistência
+(Equação~\eqref{eq:dow:consistencia-sku}) é relaxada; o volume semanal do modelo
+não é desagregado por dia, sinalizando ao usuário a necessidade de decisão manual.
 
 \subsection{Observações de Implementação}
 
 \begin{itemize}
-    \item A janela histórica é configurada por \texttt{ano\_custo}, \texttt{mes\_custo} e \texttt{meses\_janela\_custo}.
-    \item A semana alvo $w^*$ deve ser excluída da história para evitar vazamento de informação.
-    \item Os mesmos filtros de estabelecimento e SKUs ativos do pipeline principal devem ser aplicados.
-    \item A execução desta análise é recomendada apenas para granularidade semanal (\texttt{S}).
+    \item \textbf{Origem de $V^{\text{mod}}_{i,w^*}$:} obtido do
+        \texttt{resultado.resultado}, combinando \texttt{quantidade}
+        (tipo \texttt{otimizacao}) com o valor correspondente em
+        \texttt{pedidos\_garantidos\_por\_sku} para SKUs permitidos com pedido.
+        Para SKUs restritos (GRANEL, Exportação), o volume é o próprio
+        valor das linhas \texttt{tipo=reserva}.
+    \item \textbf{Produção líquida:} o histórico deve incorporar ajustes ACA/EAC
+        via agregação (soma líquida por item$\times$dia), \emph{antes} de filtrar
+        valores não-positivos, evitando superestimação de volumes.
+    \item \textbf{Premissa de janela:} parâmetros dedicados
+        (\texttt{dow\_ano\_ref}, \texttt{dow\_mes\_ref}, \texttt{dow\_meses\_janela}),
+        com fallback para \texttt{ano\_custo}/\texttt{mes\_custo}/\texttt{meses\_janela\_custo}.
+    \item A semana alvo $w^*$ deve ser excluída da história para evitar vazamento.
+    \item Os mesmos filtros de estabelecimento e SKUs ativos do pipeline principal
+        devem ser aplicados.
+    \item Execução restrita a granularidade semanal (\texttt{S}).
+    \item O output deve conter colunas de rastreabilidade de fallback
+        (\texttt{fallback\_aplicado}, \texttt{fallback\_motivo}).
 \end{itemize}
 
 %==============================================================================
@@ -758,7 +731,7 @@ ou não distribui automaticamente, ou aplica uma regra neutra (uniforme).
 
 \subsection{Métricas de Volume}
 
-\begin{align}
+\begin{align}\label{eq:auto:al:010}
 \text{Quantidade Alocada Total} &= \sum_{i \in H} x_i^* \\[6pt]
 \text{Quantidade Reservada Total} &= \sum_{i \in R} r_i \\[6pt]
 \text{Saldo Não Alocado} &= \sum_{c \in C} P_c - \left(\sum_{i \in H} x_i^* + \sum_{i \in R} r_i\right)
@@ -766,7 +739,7 @@ ou não distribui automaticamente, ou aplica uma regra neutra (uniforme).
 
 \subsection{Métricas Financeiras}
 
-\begin{align}
+\begin{align}\label{eq:auto:al:011}
 \text{Margem Otimizada} &= M^{\text{otim}} = \sum_{i \in H} \mu_i \cdot x_i^* \\[6pt]
 \text{Margem Baseline} &= M^{\text{base}} = \sum_{c \in C} \sum_{i} V_c^{\text{otim}} \cdot \pi_i \cdot \mu_i \\[6pt]
 \text{Ganho} &= M^{\text{otim}} - M^{\text{base}} \\[6pt]

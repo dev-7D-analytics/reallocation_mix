@@ -26,7 +26,7 @@ from typing import Dict, List, Any, Optional
 
 from etl.pipeline import ETLPipeline
 from modelo.otimizador import Otimizador
-from output import calcular_comparativo_baseline, salvar_resultados
+from output import calcular_comparativo_baseline, salvar_resultados, gerar_distribuicao_historica_dow
 from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
 
 
@@ -397,6 +397,13 @@ def main():
     
     # 6. Salvar
     salvar_resultados(resultado, resultado_etl, df_base, comparativo, config, logger)
+
+    # 7. Distribuição histórica DOW (somente granularidade semanal)
+    if config.get('modelo', {}).get('granularidade_demanda', 'S').upper() == 'S':
+        try:
+            gerar_distribuicao_historica_dow(resultado, resultado_etl, config, logger)
+        except Exception as e:
+            logger.warning(f"  DOW: falha ao gerar distribuição histórica: {e}")
     
     logger.info("\n" + "="*80)
     logger.info("EXECUÇÃO CONCLUÍDA")
