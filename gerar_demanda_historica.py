@@ -225,7 +225,23 @@ def main(argv=None):
     df_demanda['item'] = df_demanda['item'].astype(int)
     df_demanda = df_demanda.sort_values('demanda_max', ascending=False)
 
-    print(f"  SKUs com demanda: {len(df_demanda):,}")
+    print(f"  SKUs com demanda (antes filtro ativos): {len(df_demanda):,}")
+
+    # Filtrar apenas SKUs ativos no estabelecimento
+    path_skus = Path(config.get('paths', {}).get('skus_restritos', 'inputs/skus_restritos.xlsx'))
+    estabelecimentos = config.get('dados', {}).get('estabelecimentos', [100])
+    if path_skus.exists():
+        df_skus = pd.read_excel(path_skus)
+        if 'STATUS' in df_skus.columns and 'ESTAB' in df_skus.columns:
+            df_ativos = df_skus[
+                (df_skus['STATUS'] == 'ATIVO') &
+                (df_skus['ESTAB'].isin(estabelecimentos))
+            ]
+            skus_ativos = set(df_ativos['item'].astype(int).tolist())
+            antes = len(df_demanda)
+            df_demanda = df_demanda[df_demanda['item'].isin(skus_ativos)]
+            print(f"  Filtro SKUs ativos (ESTAB={estabelecimentos}): {antes} -> {len(df_demanda):,}")
+
     print(f"  Limite médio: {df_demanda['demanda_max'].mean():,.0f} ovos/{gran_desc.lower()}")
 
     # ── 4. Salvar ───────────────────────────────────────────────────────────

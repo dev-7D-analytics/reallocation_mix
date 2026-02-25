@@ -205,8 +205,33 @@ def main():
         return
     
     df_fat = pd.read_parquet(path_fat)
-    print(f"  Registros: {len(df_fat):,}")
-    
+    print(f"  Registros totais: {len(df_fat):,}")
+
+    # Filtrar por estabelecimento
+    estabelecimentos = config.get('dados', {}).get('estabelecimentos', [100])
+    if 'Estab' in df_fat.columns and estabelecimentos:
+        antes = len(df_fat)
+        df_fat = df_fat[df_fat['Estab'].isin(estabelecimentos)].copy()
+        print(f"  Filtro Estab={estabelecimentos}: {antes:,} -> {len(df_fat):,}")
+
+    # Filtrar apenas SKUs ativos no estabelecimento
+    path_skus = Path(config.get('paths', {}).get('skus_restritos', 'inputs/skus_restritos.xlsx'))
+    if path_skus.exists():
+        df_skus = pd.read_excel(path_skus)
+        if 'STATUS' in df_skus.columns and 'ESTAB' in df_skus.columns:
+            df_ativos = df_skus[
+                (df_skus['STATUS'] == 'ATIVO') &
+                (df_skus['ESTAB'].isin(estabelecimentos))
+            ]
+            skus_ativos = set(df_ativos['item'].astype(int).tolist())
+            if 'item' in df_fat.columns:
+                antes = len(df_fat)
+                df_fat['item'] = pd.to_numeric(df_fat['item'], errors='coerce')
+                df_fat = df_fat[df_fat['item'].isin(skus_ativos)].copy()
+                print(f"  Filtro SKUs ativos: {antes:,} -> {len(df_fat):,}")
+
+    print(f"  Registros após filtros: {len(df_fat):,}")
+
     # Detectar coluna de descrição (tentar múltiplas opções)
     col_desc = None
     # Prioridade 1: "ITEM -  DESCRIÇÃO"

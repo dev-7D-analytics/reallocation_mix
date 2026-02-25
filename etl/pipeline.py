@@ -729,11 +729,14 @@ class ETLPipeline:
                 df = df[df['STATUS'] == 'ATIVO']
                 self.logger.info(f"  Filtro STATUS='ATIVO': {len(df)} de {total_original}")
             
-            # 2. ESTAB = 100
+            # 2. ESTAB conforme config (dados.estabelecimentos)
             if 'ESTAB' in df.columns:
+                estabelecimentos = self.config.get('dados', {}).get('estabelecimentos', [100])
+                if not isinstance(estabelecimentos, list):
+                    estabelecimentos = [estabelecimentos]
                 antes = len(df)
-                df = df[df['ESTAB'] == 100]
-                self.logger.info(f"  Filtro ESTAB=100: {len(df)} de {antes}")
+                df = df[df['ESTAB'].isin(estabelecimentos)]
+                self.logger.info(f"  Filtro ESTAB={estabelecimentos}: {len(df)} de {antes}")
             
             # 3. TIPO diferente de ["Exportação", "GRANEL", "MARCA PROPRIA"]
             tipos_excluidos = ['Exportação', 'GRANEL', 'MARCA PROPRIA']
@@ -1126,13 +1129,26 @@ class ETLPipeline:
         
         try:
             df = pd.read_excel(path, sheet_name="CE0302", skiprows=1)
+            df['Data Trans'] = pd.to_datetime(df['Data Trans'], errors='coerce')
             
-            # Filtrar por semana
-            semana_ref = self.config.get('dados', {}).get('semana_ref', '2025-51')
-            df['week'] = pd.to_datetime(df['Data Trans']).dt.isocalendar().week
-            df['year'] = pd.to_datetime(df['Data Trans']).dt.isocalendar().year
-            df['year_week'] = df['year'].astype(str) + '-' + df['week'].astype(str).str.zfill(2)
-            df = df[df['year_week'] == semana_ref].copy()
+            # Filtrar por período conforme granularidade
+            granularidade = self.config.get('modelo', {}).get('granularidade_demanda', 'S').upper()
+            
+            if granularidade == 'D':
+                data_ref = pd.to_datetime(self.config['dados'].get('data_ref'))
+                df = df[df['Data Trans'].dt.date == data_ref.date()].copy()
+            elif granularidade == 'M':
+                data_ref = pd.to_datetime(self.config['dados'].get('data_ref'))
+                df = df[
+                    (df['Data Trans'].dt.year == data_ref.year) &
+                    (df['Data Trans'].dt.month == data_ref.month)
+                ].copy()
+            else:
+                semana_ref = self.config.get('dados', {}).get('semana_ref', '2025-51')
+                df['week'] = df['Data Trans'].dt.isocalendar().week
+                df['year'] = df['Data Trans'].dt.isocalendar().year
+                df['year_week'] = df['year'].astype(str) + '-' + df['week'].astype(str).str.zfill(2)
+                df = df[df['year_week'] == semana_ref].copy()
             
             # Filtrar por estabelecimento
             estabelecimentos = self.config.get('dados', {}).get('estabelecimentos', [100])
@@ -1167,7 +1183,24 @@ class ETLPipeline:
             col_item = 'Cod Item' if 'Cod Item' in df.columns else 'CODIGO ITEM'
             if col_item in df.columns:
                 df[col_item] = pd.to_numeric(df[col_item], errors='coerce')
-                return set(df[col_item].dropna().astype(int).unique())
+                skus_producao = set(df[col_item].dropna().astype(int).unique())
+                
+                # Filtrar apenas SKUs ativos no estabelecimento
+                path_skus = Path(self.config['paths'].get('skus_restritos', 'inputs/skus_restritos.xlsx'))
+                if path_skus.exists():
+                    df_skus = pd.read_excel(path_skus)
+                    if 'STATUS' in df_skus.columns and 'ESTAB' in df_skus.columns:
+                        estabelecimentos = self.config.get('dados', {}).get('estabelecimentos', [100])
+                        df_ativos = df_skus[
+                            (df_skus['STATUS'] == 'ATIVO') &
+                            (df_skus['ESTAB'].isin(estabelecimentos))
+                        ]
+                        skus_ativos = set(df_ativos['item'].astype(int).tolist())
+                        antes = len(skus_producao)
+                        skus_producao = skus_producao & skus_ativos
+                        self.logger.info(f"  _obter_skus_producao: filtro ativos {antes} -> {len(skus_producao)} SKUs")
+                
+                return skus_producao
         except Exception as e:
             self.logger.warning(f"  Erro ao obter SKUs da produção: {e}")
         

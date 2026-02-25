@@ -310,6 +310,23 @@ def main(argv=None):
     # Ordenar por volume
     df_precos = df_precos.sort_values('volume_total', ascending=False)
     
+    print(f"  Combinações (item+embalagem) antes filtro ativos: {len(df_precos):,}")
+
+    # Filtrar apenas SKUs ativos no estabelecimento
+    path_skus = Path(config.get('paths', {}).get('skus_restritos', 'inputs/skus_restritos.xlsx'))
+    estabelecimentos = config.get('dados', {}).get('estabelecimentos', [100])
+    if path_skus.exists():
+        df_skus = pd.read_excel(path_skus)
+        if 'STATUS' in df_skus.columns and 'ESTAB' in df_skus.columns:
+            df_ativos = df_skus[
+                (df_skus['STATUS'] == 'ATIVO') &
+                (df_skus['ESTAB'].isin(estabelecimentos))
+            ]
+            skus_ativos = set(df_ativos['item'].astype(int).tolist())
+            antes = len(df_precos)
+            df_precos = df_precos[df_precos['item'].isin(skus_ativos)]
+            print(f"  Filtro SKUs ativos (ESTAB={estabelecimentos}): {antes} -> {len(df_precos):,}")
+
     # Preparar dados finais (apenas colunas necessárias para o modelo)
     df_precos_final = df_precos[['item', 'embalagem', 'preco']].copy()
     

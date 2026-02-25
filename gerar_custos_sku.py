@@ -181,9 +181,25 @@ def main(argv=None):
     ].copy()
 
     # Output a nível item+embalagem (preserva granularidade original)
-    # O ETL faz merge por item_id se embalagem presente, senão por item
     custos_agg = custos_agg.sort_values('Quantidade', ascending=False)
     custos_agg['item'] = custos_agg['item'].astype(int)
+
+    print(f"  Combinações (item+embalagem) antes filtro ativos: {len(custos_agg):,}")
+
+    # Filtrar apenas SKUs ativos no estabelecimento
+    path_skus = Path(config.get('paths', {}).get('skus_restritos', 'inputs/skus_restritos.xlsx'))
+    estabelecimentos = config.get('dados', {}).get('estabelecimentos', [100])
+    if path_skus.exists():
+        df_skus = pd.read_excel(path_skus)
+        if 'STATUS' in df_skus.columns and 'ESTAB' in df_skus.columns:
+            df_ativos = df_skus[
+                (df_skus['STATUS'] == 'ATIVO') &
+                (df_skus['ESTAB'].isin(estabelecimentos))
+            ]
+            skus_ativos = set(df_ativos['item'].astype(int).tolist())
+            antes = len(custos_agg)
+            custos_agg = custos_agg[custos_agg['item'].isin(skus_ativos)]
+            print(f"  Filtro SKUs ativos (ESTAB={estabelecimentos}): {antes} -> {len(custos_agg):,}")
 
     # ── Salvar ──────────────────────────────────────────────────────────────
     output_csv = Path("inputs/custos_sku.csv")
