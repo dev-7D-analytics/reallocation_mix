@@ -25,21 +25,46 @@
 \section{Visão Geral}
 %==============================================================================
 
-O modelo de otimização tem como objetivo maximizar a margem total de contribuição na alocação da produção semanal de ovos para diferentes SKUs (\textit{Stock Keeping Units}), respeitando:
+Este documento formaliza o modelo de otimização de mix de produção desenvolvido
+para a alocação semanal de ovos entre diferentes SKUs (\textit{Stock Keeping
+Units}). O problema central que o modelo resolve pode ser enunciado da seguinte
+forma: \emph{dada a capacidade de produção da fábrica por classe de produto,
+como distribuir os ovos entre os SKUs de modo a maximizar a margem total de
+contribuição?}
 
+A resposta a essa pergunta deve respeitar três famílias de restrições
+operacionais:
 \begin{itemize}
-    \item Capacidade de produção por classe de produto
-    \item Demanda histórica como limite superior por SKU
-    \item Reservas prioritárias para pedidos garantidos
+    \item \textbf{Capacidade de produção:} cada classe de produto possui um
+        volume máximo de produção semanal que não pode ser excedido;
+    \item \textbf{Demanda histórica:} o volume alocado a cada SKU não deve
+        ultrapassar um limite derivado do comportamento histórico de vendas,
+        evitando alocações sem respaldo de mercado;
+    \item \textbf{Reservas de pedidos:} pedidos já confirmados são atendidos
+        prioritariamente, descontando seu volume da capacidade disponível antes
+        da otimização.
 \end{itemize}
 
-O resultado é comparado com um \textbf{baseline} que representa a margem obtida caso a empresa mantivesse a distribuição histórica de vendas.
+Para avaliar a eficácia do modelo, o resultado é comparado com um cenário
+de \textbf{baseline} que simula a margem obtida caso a empresa mantivesse a
+distribuição proporcional ao histórico de vendas --- isto é, sem qualquer
+realocação estratégica. A diferença entre a margem otimizada e a margem
+baseline quantifica o ganho financeiro proporcionado pelo modelo.
 
 %==============================================================================
 \section{Conjuntos e Índices}
 %==============================================================================
 
+A formulação matemática do modelo requer a definição precisa dos conjuntos que
+compõem o universo de decisão. Esta seção apresenta os conjuntos fundamentais,
+seus subconjuntos derivados e as funções de mapeamento utilizadas ao longo de
+toda a formulação.
+
 \subsection{Conjuntos Principais}
+
+Três conjuntos formam a base da modelagem: o universo de SKUs ($I$), o conjunto
+de classes de produto ($C$) e o conjunto de períodos temporais ($S$) que
+compõem a janela histórica de análise.
 
 \begin{align}\label{eq:auto:al:001}
 I &= \{1, 2, \ldots, n\} && \text{Conjunto de todos os SKUs} \\
@@ -48,6 +73,13 @@ S &= \{s_1, s_2, \ldots, s_k\} && \text{Conjunto de períodos (semanas) no hist�
 \end{align}
 
 \subsection{Subconjuntos Derivados}
+
+Nem todos os SKUs participam da otimização. A partir do conjunto universal $I$,
+derivam-se subconjuntos progressivamente mais restritos: $I_c$ agrupa os SKUs
+por classe; $I_{\text{válido}}$ filtra aqueles elegíveis para otimização
+(conforme critérios de status, tipo e estabelecimento); $H$ retém apenas os
+SKUs válidos que possuem demanda histórica positiva; e $R$ identifica os SKUs
+com pedidos já confirmados, cujo volume deve ser reservado antes da otimização.
 
 \begin{align}\label{eq:auto:al:002}
 I_c &\subseteq I && \text{SKUs pertencentes à classe } c \\
@@ -58,6 +90,12 @@ R &\subseteq I && \text{SKUs com pedidos reservados}
 
 \subsection{Mapeamentos}
 
+Duas funções de mapeamento são utilizadas extensivamente na formulação. A
+função $\kappa$ associa cada SKU à sua classe de produto --- essa relação
+é fundamental para as restrições de capacidade, que são definidas por classe.
+A função $e_i$ registra a quantidade de ovos por embalagem, necessária para
+converter volumes entre unidades de caixa e unidades de ovo.
+
 \begin{align}\label{eq:auto:al:003}
 \kappa: I &\rightarrow C && \text{Função que mapeia SKU para sua classe} \\
 e_i: I &\rightarrow \mathbb{Z}^+ && \text{Quantidade de ovos por embalagem do SKU } i
@@ -67,7 +105,17 @@ e_i: I &\rightarrow \mathbb{Z}^+ && \text{Quantidade de ovos por embalagem do SK
 \section{Parâmetros de Entrada}
 %==============================================================================
 
+O modelo de otimização opera sobre um conjunto de parâmetros que caracterizam
+cada SKU em termos comerciais (preço e custo), físicos (composição da
+embalagem) e operacionais (classe de produção). Esta seção detalha cada
+parâmetro e as transformações aplicadas antes da entrada no otimizador.
+
 \subsection{Dados do SKU}
+
+A Tabela~\ref{tab:parametros_sku} resume os parâmetros associados a cada SKU.
+O preço de venda ($p_i$) e o custo acumulado no ano (\textit{Year-To-Date},
+$c_i$) são expressos em reais por caixa. A partir desses valores, o modelo
+calcula a margem de contribuição unitária que alimenta a função objetivo.
 
 \begin{table}[h]
 \centering
@@ -82,39 +130,65 @@ $\kappa(i)$ & Classe do SKU $i$ & - & $C$ \\
 \bottomrule
 \end{tabular}
 \caption{Parâmetros por SKU}
+\label{tab:parametros_sku}
 \end{table}
 
 \subsection{Cálculo da Embalagem}
 
-A quantidade de ovos por embalagem $e_i$ é extraída da descrição do produto:
+A quantidade de ovos por embalagem ($e_i$) é extraída automaticamente da
+descrição textual do produto registrada no sistema. O valor é obtido pelo
+produto entre o número de bandejas e o número de unidades por bandeja:
 
 \begin{equation}\label{eq:auto:001}
 e_i = n_{\text{bandejas}} \times n_{\text{unidades}}
 \end{equation}
 
-Exemplo: ``CX 12 BJ 30 UN'' $\Rightarrow e_i = 12 \times 30 = 360$ ovos.
+Por exemplo, a descrição ``CX 12 BJ 30 UN'' indica 12 bandejas de 30 unidades,
+resultando em $e_i = 12 \times 30 = 360$ ovos. Esse fator de conversão é
+essencial para padronizar todas as quantidades em unidades de ovo, que é a
+unidade base do modelo.
 
 \subsection{Dados de Produção}
+
+O volume de produção semanal por classe constitui a principal restrição de
+capacidade do modelo. Para cada classe $c$, o parâmetro $P_c$ representa o
+total de ovos disponíveis para alocação na semana de planejamento:
 
 \begin{equation}\label{eq:auto:002}
 P_c \in \mathbb{R}^+ \quad \text{Produção total da classe } c \text{ na semana (ovos)}
 \end{equation}
 
+Esse valor é obtido a partir dos dados de produção da fábrica e representa a
+capacidade efetiva que deve ser integralmente distribuída entre os SKUs da
+classe --- seja por reserva de pedidos, seja pela alocação otimizada.
+
 \subsection{Margem de Contribuição}
 
-\textbf{Margem por caixa:}
+A margem de contribuição é a métrica central da função objetivo. Ela mede o
+retorno financeiro líquido de cada unidade alocada e orienta o otimizador a
+priorizar os SKUs mais rentáveis.
+
+A \textbf{margem por caixa} é calculada como a diferença entre preço de venda e
+custo:
 \begin{equation}\label{eq:auto:003}
 m_i = p_i - c_i \quad \text{(R\$/caixa)}
 \end{equation}
 
-\textbf{Margem por ovo} (coeficiente da função objetivo):
+Como a variável de decisão do modelo opera em unidades de ovo, é necessário
+converter a margem para a mesma base. A \textbf{margem por ovo} ($\mu_i$)
+constitui o coeficiente efetivo da função objetivo:
 \begin{equation}\label{eq:auto:004}
 \mu_i = \frac{m_i}{e_i} = \frac{p_i - c_i}{e_i} \quad \text{(R\$/ovo)}
 \end{equation}
 
 \textbf{Tratamento de custo ausente:}
 
-Quando um SKU $i$ não possui custo individual, utiliza-se a média da classe:
+Na prática, nem todos os SKUs possuem custo individual registrado no sistema.
+Para que nenhum SKU elegível seja excluído por falta de dados de custo,
+aplica-se uma regra de \textit{fallback}: quando o custo original é nulo ou
+ausente, utiliza-se a média aritmética dos custos dos demais SKUs da mesma
+classe. Essa abordagem assume que SKUs da mesma classe compartilham estruturas
+de custo similares:
 \begin{equation}\label{eq:auto:005}
 c_i = \begin{cases}
 c_i^{\text{original}} & \text{se } c_i^{\text{original}} > 0 \\[4pt]
@@ -126,9 +200,18 @@ c_i^{\text{original}} & \text{se } c_i^{\text{original}} > 0 \\[4pt]
 \section{Processamento de Dados (ETL)}
 %==============================================================================
 
+Antes de alimentar o otimizador, os dados brutos passam por um pipeline de
+\textit{Extract--Transform--Load} (ETL) que realiza limpeza, padronização e
+agregação. A qualidade desse processamento é determinante para a confiabilidade
+dos resultados, uma vez que o modelo depende de estimativas de demanda
+derivadas do histórico de faturamento.
+
 \subsection{Base de Faturamento}
 
-Cada registro de faturamento contém item, cliente, estabelecimento, data e quantidade em caixas. A quantidade é convertida para ovos:
+A base de faturamento constitui a fonte primária de dados históricos. Cada
+registro contém informações de item (SKU), cliente, estabelecimento, data e
+quantidade em caixas. Como o modelo opera em unidades de ovo, todas as
+quantidades são convertidas por um fator fixo de 360 ovos por caixa:
 
 \begin{equation}\label{eq:auto:006}
 Q_f^{\text{ovos}} = Q_f^{\text{caixas}} \times 360
@@ -136,7 +219,12 @@ Q_f^{\text{ovos}} = Q_f^{\text{caixas}} \times 360
 
 \subsection{Correção de Estabelecimento}
 
-Alguns registros têm estabelecimento incorreto. A correção é feita via mapeamento externo:
+Na base de dados original, alguns registros apresentam códigos de
+estabelecimento inconsistentes com a unidade fabril de origem. Para tratar
+essas inconsistências, aplica-se um mapeamento de correção baseado no código do
+cliente. Quando o cliente está presente no domínio do mapeamento, seu
+estabelecimento é substituído pelo valor padronizado; caso contrário, mantém-se
+o valor original:
 
 \begin{equation}\label{eq:auto:007}
 \text{Estab\_Corrigido}(f) = \begin{cases}
@@ -145,27 +233,42 @@ E(\text{cliente}_f) & \text{se } \text{cliente}_f \in \text{dom}(E) \\
 \end{cases}
 \end{equation}
 
-onde $E: \text{Cod.Cliente} \rightarrow \text{Estab\_Padrao}$ é o mapeamento de correção.
+onde $E: \text{Cod.Cliente} \rightarrow \text{Estab\_Padrao}$ é o mapeamento de
+correção, mantido em arquivo auxiliar.
 
 \subsection{Filtro por Estabelecimento}
 
-Apenas registros do estabelecimento de interesse:
+O modelo opera sobre a produção de um único estabelecimento. Após a correção,
+retêm-se apenas os registros associados ao estabelecimento de interesse
+(atualmente o estabelecimento 100):
+
 \begin{equation}\label{eq:auto:008}
 F_{\text{filtrado}} = \{f \in F : \text{Estab\_Corrigido}(f) = 100\}
 \end{equation}
 
 \subsection{Janela Temporal}
 
-Os dados são filtrados por uma janela configurável:
+Os dados de faturamento são filtrados por uma janela temporal configurável, definida
+por um mês de referência e um número de meses retroativos. Essa janela determina o
+horizonte histórico utilizado para o cálculo da demanda:
+
 \begin{equation}\label{eq:auto:009}
 \text{Janela} = [\text{mes\_ref} - \text{meses\_janela} + 1, \; \text{mes\_ref}]
 \end{equation}
 
-Configuração atual: \texttt{mes\_custo=11}, \texttt{meses\_janela\_custo=6} $\Rightarrow$ junho a novembro de 2025.
+Na configuração atual, com \texttt{mes\_custo=11} e
+\texttt{meses\_janela\_custo=6}, a janela abrange de junho a novembro de 2025.
+A escolha do tamanho da janela implica um compromisso entre representatividade
+estatística (janelas maiores capturam mais variabilidade) e atualidade dos
+dados (janelas menores refletem melhor o comportamento recente).
 
 \subsection{Agregação por Período}
 
-A granularidade é configurável (\texttt{S}=semanal, \texttt{M}=mensal, \texttt{D}=diário). Para cada SKU $i$ e período $s$:
+Após a filtragem, os registros são agregados por SKU e período temporal. A
+granularidade da agregação é configurável: semanal (\texttt{S}), mensal
+(\texttt{M}) ou diária (\texttt{D}). A escolha da granularidade afeta
+diretamente o cálculo da demanda histórica e, consequentemente, os limites
+impostos ao otimizador:
 
 \begin{equation}\label{eq:auto:010}
 Q_{i,s} = \sum_{f : \text{item}_f = i, \, \text{período}(f) = s} Q_f^{\text{ovos}}
@@ -173,35 +276,52 @@ Q_{i,s} = \sum_{f : \text{item}_f = i, \, \text{período}(f) = s} Q_f^{\text{ovo
 
 \subsection{Cálculo da Demanda Histórica}
 
-O limite de demanda depende do tipo de cálculo configurado:
+O limite de demanda por SKU é uma das restrições mais importantes do modelo,
+pois impede que o otimizador aloque volumes sem respaldo de mercado. O cálculo
+admite três métodos, selecionáveis via configuração, cada um com características
+distintas de conservadorismo:
 
-\textbf{Método Máximo} (\texttt{tipo\_calculo\_demanda = maximo}):
+\textbf{Método Máximo} (\texttt{tipo\_calculo\_demanda = maximo}) --- utiliza o
+pico de vendas observado no período, resultando no limite mais permissivo:
 \begin{equation}\label{eq:auto:011}
 D_i^{\text{base}} = \max_{s \in S_i} Q_{i,s}
 \end{equation}
 
-\textbf{Método Média} (\texttt{tipo\_calculo\_demanda = media}):
+\textbf{Método Média} (\texttt{tipo\_calculo\_demanda = media}) --- adota a
+média aritmética dos períodos com vendas, produzindo um limite intermediário:
 \begin{equation}\label{eq:auto:012}
 D_i^{\text{base}} = \frac{1}{|S_i|} \sum_{s \in S_i} Q_{i,s}
 \end{equation}
 
-\textbf{Método Percentil} (\texttt{tipo\_calculo\_demanda = percentil}):
+\textbf{Método Percentil} (\texttt{tipo\_calculo\_demanda = percentil}) ---
+permite ajuste fino do nível de confiança através do parâmetro $p$:
 \begin{equation}\label{eq:auto:013}
 D_i^{\text{base}} = \text{Percentil}_p(Q_{i,s}) \quad \text{onde } p = \texttt{percentil\_demanda}
 \end{equation}
 
-onde $S_i = \{s \in S : Q_{i,s} > 0\}$ é o conjunto de períodos com vendas.
+Em todos os métodos, $S_i = \{s \in S : Q_{i,s} > 0\}$ é o conjunto de
+períodos com vendas positivas, garantindo que períodos sem atividade não diluam
+a estimativa.
 
 \textbf{Aplicação do fator de expansão:}
+
+Após o cálculo base, aplica-se um fator multiplicativo $\alpha$ que permite
+flexibilizar o limite de demanda. Um valor $\alpha > 1$ amplia o limite,
+permitindo ao otimizador alocar volumes acima do máximo histórico; $\alpha = 1$
+mantém o limite estritamente no nível observado:
 \begin{equation}\label{eq:auto:014}
 D_i = D_i^{\text{base}} \times \alpha \quad \text{onde } \alpha = \texttt{fator\_demanda\_maxima}
 \end{equation}
 
-O fator $\alpha$ é aplicado igualmente a todos os SKUs, independente do método.
+O fator $\alpha$ é aplicado uniformemente a todos os SKUs, preservando as
+proporções relativas entre eles.
 
 \subsection{Volume Histórico Total}
 
-Para o cálculo do baseline, armazena-se o volume total vendido por SKU no período (sem fator):
+Além do limite de demanda, o pipeline calcula o volume total vendido por SKU ao
+longo de toda a janela --- sem aplicação do fator $\alpha$. Esse valor é
+utilizado posteriormente no cálculo do baseline para estimar a proporção
+histórica de cada SKU dentro de sua classe:
 
 \begin{equation}\label{eq:auto:015}
 V_i^{\text{hist}} = \sum_{s \in S_i} Q_{i,s}
@@ -209,7 +329,9 @@ V_i^{\text{hist}} = \sum_{s \in S_i} Q_{i,s}
 
 \subsection{Classificação de SKUs Válidos}
 
-Um SKU é \textbf{válido para otimização} se:
+Nem todos os SKUs do cadastro participam da otimização. Um SKU é considerado
+\textbf{válido} quando satisfaz simultaneamente cinco critérios que garantem
+pertinência operacional e qualidade de dados:
 
 \begin{equation}\label{eq:auto:016}
 i \in I_{\text{válido}} \iff \begin{cases}
@@ -221,21 +343,40 @@ e_i > 0
 \end{cases}
 \end{equation}
 
-SKUs da classe \texttt{OUTROS} são excluídos da otimização mas aparecem no output com alocação zero.
+SKUs da classe \texttt{OUTROS} são excluídos da otimização por não possuírem
+classificação produtiva compatível com as restrições de capacidade; contudo,
+aparecem no \textit{output} final com alocação zero, assegurando rastreabilidade
+completa do cadastro.
 
 %==============================================================================
 \section{Sistema de Reservas}
 %==============================================================================
 
+O sistema de reservas implementa uma política de prioridade para pedidos já
+confirmados. Antes que o otimizador distribua o excedente de produção, os
+volumes correspondentes a pedidos garantidos são segregados e alocados
+incondicionalmente aos respectivos SKUs. Essa separação assegura que
+compromissos comerciais já firmados sejam honrados independentemente do
+resultado da otimização.
+
 \subsection{Critério de Elegibilidade}
 
-Um pedido para SKU $i$ é reservado se o SKU tem classe mapeada e produção na semana:
+Um pedido para o SKU $i$ é elegível para reserva quando três condições são
+satisfeitas simultaneamente: o SKU possui pedido com quantidade positiva, está
+associado a uma classe de produto válida e essa classe possui produção
+programada na semana:
 
 \begin{equation}\label{eq:auto:017}
 i \in R \iff (Q_i^{\text{pedido}} > 0) \land (\kappa(i) \text{ existe}) \land (P_{\kappa(i)} > 0)
 \end{equation}
 
+A exigência de que a classe tenha produção positiva evita reservar volumes para
+SKUs cuja produção não está planejada na semana em questão.
+
 \subsection{Quantidade Reservada}
+
+A quantidade reservada para cada SKU é igual ao volume total de pedidos
+confirmados, sem qualquer redução ou ajuste:
 
 \begin{equation}\label{eq:auto:018}
 r_i = Q_i^{\text{pedido}} \quad \forall i \in R
@@ -243,29 +384,53 @@ r_i = Q_i^{\text{pedido}} \quad \forall i \in R
 
 \subsection{Reservas por Classe}
 
+O total de reservas por classe é obtido pela soma das reservas individuais dos
+SKUs pertencentes àquela classe. Esse valor é fundamental para calcular o
+volume residual disponível para otimização:
+
 \begin{equation}\label{eq:auto:019}
 R_c = \sum_{i \in R : \kappa(i) = c} r_i \quad \forall c \in C
 \end{equation}
 
 \subsection{Produção Excedente}
 
-Volume disponível para otimização após descontar reservas:
+O volume excedente por classe --- isto é, a capacidade efetivamente disponível
+para a otimização --- é obtido descontando as reservas da produção total.
+O operador $\max$ garante que o excedente nunca seja negativo, tratando
+cenários em que os pedidos confirmados excedem a capacidade de produção:
 
 \begin{equation}\label{eq:auto:020}
 E_c = \max(0, \; P_c - R_c) \quad \forall c \in C
 \end{equation}
 
+Quando $R_c > P_c$, o excedente é zero e nenhum volume adicional é alocado
+pelo otimizador para aquela classe, sinalizando que a produção é insuficiente
+para atender integralmente os próprios pedidos garantidos.
+
 %==============================================================================
 \section{Modelo de Otimização}
 %==============================================================================
 
+Esta seção apresenta a formulação matemática do problema de otimização. O modelo
+é formulado como um programa linear (ou inteiro, conforme configuração), cuja
+solução determina a alocação ótima de volume para cada SKU.
+
 \subsection{Variável de Decisão}
+
+A variável de decisão $x_i$ representa a quantidade de ovos alocada ao SKU $i$
+pelo otimizador. Essa variável é definida apenas para os SKUs do conjunto $H$
+(válidos com demanda histórica):
 
 \begin{equation}\label{eq:auto:021}
 x_i \geq 0 \quad \text{Quantidade alocada ao SKU } i \text{ (em ovos)}
 \end{equation}
 
-\textbf{Tipo da variável} (configurável via \texttt{variaveis\_continuas}):
+O domínio da variável é configurável: na configuração padrão utilizam-se
+variáveis contínuas, o que resulta em um programa linear (LP) de resolução
+eficiente. Quando se deseja que as alocações sejam múltiplos inteiros de
+embalagens, ativam-se variáveis inteiras, transformando o problema em um
+programa inteiro (IP):
+
 \begin{equation}\label{eq:auto:022}
 x_i \in \begin{cases}
 \mathbb{R}^+ & \text{se \texttt{variaveis\_continuas = true} (padrão)} \\
@@ -275,7 +440,10 @@ x_i \in \begin{cases}
 
 \subsection{Função Objetivo}
 
-Maximizar a margem total de contribuição:
+O objetivo do modelo é maximizar a margem total de contribuição, definida como
+a soma ponderada das alocações pelos respectivos coeficientes de margem por ovo.
+Essa formulação direciona o \textit{solver} a priorizar SKUs com maior retorno
+financeiro por unidade de volume:
 
 \begin{equation}\label{eq:auto:023}
 \max \; Z = \sum_{i \in H} \mu_i \cdot x_i = \sum_{i \in H} \frac{p_i - c_i}{e_i} \cdot x_i
@@ -283,7 +451,14 @@ Maximizar a margem total de contribuição:
 
 \subsection{Restrições}
 
+O modelo está sujeito a três famílias de restrições que delimitam o espaço de
+soluções viáveis.
+
 \subsubsection{R1: Capacidade de Produção por Classe}
+
+A primeira restrição garante que o volume total alocado aos SKUs de cada classe
+não exceda a produção excedente (já descontadas as reservas). Essa restrição
+vincula o modelo à realidade física da fábrica:
 
 \begin{equation}\label{eq:auto:024}
 \sum_{i \in H : \kappa(i) = c} x_i \leq E_c \quad \forall c \in C
@@ -291,7 +466,11 @@ Maximizar a margem total de contribuição:
 
 \subsubsection{R2: Limite de Demanda Histórica}
 
-Ativa quando \texttt{considerar\_demanda\_historica = true}:
+A segunda restrição impede que o otimizador aloque a um SKU um volume superior
+ao seu teto de demanda derivado do histórico. Essa restrição é ativável via
+configuração (\texttt{considerar\_demanda\_historica = true}) e funciona como um
+mecanismo de prudência: evita concentrar toda a produção em poucos SKUs de alta
+margem que, na prática, não teriam mercado para absorver tal volume:
 
 \begin{equation}\label{eq:auto:025}
 x_i \leq D_i \quad \forall i \in H
@@ -299,11 +478,16 @@ x_i \leq D_i \quad \forall i \in H
 
 \subsubsection{R3: Não-Negatividade}
 
+A terceira restrição assegura que nenhuma alocação seja negativa, condição
+fisicamente necessária:
+
 \begin{equation}\label{eq:auto:026}
 x_i \geq 0 \quad \forall i \in H
 \end{equation}
 
 \subsection{Formulação Compacta}
+
+A formulação completa do modelo pode ser expressa de forma compacta como:
 
 \begin{equation}\label{eq:auto:027}
 \boxed{
@@ -317,9 +501,17 @@ x_i \geq 0 \quad \forall i \in H
 }
 \end{equation}
 
+Trata-se de um programa linear com $|H|$ variáveis e $|C| + |H|$ restrições
+(excluindo as de não-negatividade), dimensões que o tornam computacionalmente
+tratável mesmo para catálogos com centenas de SKUs.
+
 \subsection{Configuração do Solver}
 
-O modelo é resolvido pelo OR-Tools com os seguintes parâmetros configuráveis:
+O modelo é resolvido pela biblioteca \textit{Google OR-Tools}, que oferece
+interface unificada para múltiplos \textit{solvers}. A Tabela~\ref{tab:solver}
+apresenta os parâmetros configuráveis e seus valores padrão. O \textit{solver}
+SCIP é utilizado por sua robustez em problemas mistos (LP/IP); o GLOP é uma
+alternativa para formulações puramente contínuas:
 
 \begin{table}[h]
 \centering
@@ -337,34 +529,53 @@ O modelo é resolvido pelo OR-Tools com os seguintes parâmetros configuráveis:
 \bottomrule
 \end{tabular}
 \caption{Parâmetros do solver}
+\label{tab:solver}
 \end{table}
 
 %==============================================================================
 \section{Comparativo: Baseline vs Otimizado}
 %==============================================================================
 
-O comparativo avalia o ganho da otimização em relação a um cenário \textbf{baseline} que representa a distribuição histórica real das vendas.
+Para que o valor gerado pelo otimizador seja mensurável, é necessário
+compará-lo com um cenário de referência. Este comparativo confronta a margem
+obtida pelo modelo com a margem que seria obtida caso a empresa mantivesse a
+distribuição proporcional ao histórico de vendas --- o chamado
+\textbf{baseline}. A diferença entre os dois cenários quantifica o ganho
+financeiro proporcionado pela otimização.
 
 \subsection{Princípio}
 
+O comparativo é construído sobre uma pergunta contrafactual:
+
 \begin{itemize}
-    \item \textbf{Baseline}: ``Qual seria a margem se continuássemos vendendo na mesma proporção histórica?''
-    \item \textbf{Otimizado}: ``Qual a margem obtida pelo modelo ao realocar volume para SKUs mais rentáveis?''
+    \item \textbf{Baseline}: ``Qual seria a margem se continuássemos alocando
+        o volume na mesma proporção das vendas históricas?''
+    \item \textbf{Otimizado}: ``Qual a margem efetivamente obtida pelo modelo
+        ao realocar volume para os SKUs mais rentáveis?''
 \end{itemize}
 
-Ambos utilizam o \textbf{mesmo volume total} por classe, excluindo reservas e classe OUTROS.
+Para que a comparação seja justa, ambos os cenários utilizam o \textbf{mesmo
+volume total} por classe, excluindo reservas e a classe \texttt{OUTROS}. Dessa
+forma, a diferença de margem reflete exclusivamente o efeito da realocação, e
+não variações de volume.
 
 \subsection{Volume Utilizado}
 
-O volume comparável por classe é o total alocado pelo modelo (excluindo reservas e OUTROS):
+O volume comparável por classe corresponde ao total efetivamente alocado pelo
+otimizador (excluindo linhas de reserva e a classe \texttt{OUTROS}):
 
 \begin{equation}\label{eq:auto:028}
 V_c^{\text{otim}} = \sum_{\substack{i \in H : \kappa(i) = c \\ \text{tipo}_i \neq \text{reserva}}} x_i^*
 \end{equation}
 
+Esse volume serve como denominador comum para ambos os cenários: o otimizado o
+distribui conforme a solução ótima; o baseline o redistribui conforme as
+proporções históricas.
+
 \subsection{Margem Otimizada}
 
-Resultado direto do solver:
+A margem otimizada é o resultado direto da resolução do modelo. Ela corresponde
+ao valor da função objetivo avaliada na solução ótima:
 
 \begin{equation}\label{eq:auto:029}
 M^{\text{otim}} = \sum_{\substack{i \in H \\ \text{tipo}_i = \text{otimizacao}}} \mu_i \cdot x_i^*
@@ -373,30 +584,46 @@ M^{\text{otim}} = \sum_{\substack{i \in H \\ \text{tipo}_i = \text{otimizacao}}}
 
 \subsection{Margem Baseline}
 
+O cálculo da margem baseline envolve três passos: estimar a proporção histórica
+de cada SKU dentro de sua classe, redistribuir o volume disponível segundo
+essas proporções e, por fim, calcular a margem resultante.
+
 \subsubsection{Passo 1: Proporção Histórica}
 
-Para cada classe $c$, calcula-se a proporção de cada SKU com base no volume total vendido no período (sem fator multiplicativo):
+Para cada classe $c$, a proporção de cada SKU é determinada pela razão entre
+seu volume histórico individual e o volume histórico total da classe. Essa
+proporção reflete a participação relativa do SKU nas vendas passadas:
 
 \begin{equation}\label{eq:auto:030}
 \pi_i = \frac{V_i^{\text{hist}}}{\displaystyle\sum_{j \in H : \kappa(j) = c} V_j^{\text{hist}}}
 \quad \forall i \in H : \kappa(i) = c
 \end{equation}
 
-onde $V_i^{\text{hist}} = \sum_{s \in S_i} Q_{i,s}$ é o volume total histórico do SKU $i$ na mesma janela temporal usada para o cálculo do limite de demanda.
+onde $V_i^{\text{hist}} = \sum_{s \in S_i} Q_{i,s}$ é o volume total histórico
+do SKU $i$ na mesma janela temporal usada para o cálculo do limite de demanda.
 
-\textbf{Propriedade}: $\sum_{i \in H : \kappa(i) = c} \pi_i = 1$ para cada classe $c$.
+\textbf{Propriedade}: $\sum_{i \in H : \kappa(i) = c} \pi_i = 1$ para cada
+classe $c$, garantindo que todo o volume da classe seja distribuído.
 
-\textbf{Fallback}: Se $\sum_j V_j^{\text{hist}} = 0$ (sem dados históricos), usa-se distribuição uniforme: $\pi_i = 1/|I_c \cap H|$.
+\textbf{Fallback}: Quando $\sum_j V_j^{\text{hist}} = 0$ (classe sem dados
+históricos), adota-se distribuição uniforme: $\pi_i = 1/|I_c \cap H|$. Essa
+regra evita divisão por zero e atribui igual importância a todos os SKUs da
+classe na ausência de evidência histórica.
 
 \subsubsection{Passo 2: Volume Baseline por SKU}
 
-Distribui o volume disponível da classe proporcionalmente ao histórico:
+O volume baseline de cada SKU é obtido redistribuindo o volume otimizado da
+classe segundo as proporções históricas. Esse procedimento simula o cenário em
+que a empresa manteria sua prática habitual de distribuição:
 
 \begin{equation}\label{eq:auto:031}
 x_i^{\text{base}} = V_c^{\text{otim}} \cdot \pi_i \quad \forall i \in H : \kappa(i) = c
 \end{equation}
 
 \subsubsection{Passo 3: Margem Baseline Total}
+
+A margem baseline total é a soma das margens individuais de todos os SKUs,
+ponderadas pelos volumes baseline:
 
 \begin{equation}\label{eq:auto:032}
 M^{\text{base}} = \sum_{c \in C} \sum_{i \in H : \kappa(i) = c} x_i^{\text{base}} \cdot \mu_i
@@ -405,6 +632,9 @@ M^{\text{base}} = \sum_{c \in C} \sum_{i \in H : \kappa(i) = c} x_i^{\text{base}
 
 \subsection{Cálculo do Ganho}
 
+O ganho da otimização é expresso em termos absolutos (diferença em reais) e
+relativos (diferença percentual sobre o baseline):
+
 \begin{align}\label{eq:auto:al:004}
 \text{Ganho Absoluto} &= M^{\text{otim}} - M^{\text{base}} \\[6pt]
 \text{Ganho Percentual} &= \frac{M^{\text{otim}} - M^{\text{base}}}{M^{\text{base}}} \times 100\%
@@ -412,10 +642,19 @@ M^{\text{base}} = \sum_{c \in C} \sum_{i \in H : \kappa(i) = c} x_i^{\text{base}
 
 \subsection{Interpretação}
 
+O sinal do ganho comunica diretamente o valor agregado pelo modelo:
+
 \begin{itemize}
-    \item \textbf{Ganho $> 0$}: A otimização gera mais margem que a distribuição histórica, realocando volume para SKUs mais rentáveis.
-    \item \textbf{Ganho $= 0$}: A distribuição histórica já é ótima dadas as restrições.
-    \item \textbf{Ganho $< 0$}: As restrições (ex: demanda histórica muito restritiva) forçam o modelo a uma distribuição pior que a histórica.
+    \item \textbf{Ganho $> 0$}: A otimização supera o baseline, indicando que a
+        realocação para SKUs mais rentáveis gera margem incremental. Esse é o
+        cenário esperado na maioria das execuções.
+    \item \textbf{Ganho $= 0$}: A distribuição histórica já é ótima dado o
+        conjunto de restrições vigentes --- a otimização não encontra espaço
+        para melhoria.
+    \item \textbf{Ganho $< 0$}: As restrições (por exemplo, limites de demanda
+        muito restritivos) forçam o modelo a uma distribuição inferior à
+        histórica. Esse cenário sinaliza a necessidade de revisão dos
+        parâmetros de entrada.
 \end{itemize}
 
 % \subsection{Por que não usar Média Simples?}
@@ -456,25 +695,35 @@ M^{\text{base}} = \sum_{c \in C} \sum_{i \in H : \kappa(i) = c} x_i^{\text{base}
 \section{Formulação da Distribuição Histórica por Dia da Semana (DOW)}
 %==============================================================================
 
-Esta seção formaliza o pós-processamento para granularidade semanal (\texttt{S}),
-que distribui os volumes semanais decididos pelo modelo de otimização em estimativas
-diárias por SKU, mantendo consistência exata com o output do comparador de
-produção/alocação.
+O modelo de otimização, quando operado em granularidade semanal, produz como
+resultado um volume único por SKU para toda a semana-alvo. Essa informação,
+embora suficiente para decisões de alocação agregada, não atende à necessidade
+operacional de planejar a produção dia a dia. A distribuição DOW
+(\emph{Day-of-Week}) resolve essa lacuna: trata-se de um pós-processamento que
+desagrega o volume semanal de cada SKU nos sete dias da semana, utilizando o
+padrão histórico de produção como referência.
+
+A premissa central é que o volume total semanal --- já decidido pelo modelo ---
+não deve ser alterado; a distribuição DOW apenas redistribui esse total no tempo,
+preservando a decisão de otimização e garantindo rastreabilidade integral com o
+comparador de produção/alocação.
 
 \subsection{Objetivo}
 
-Dado o volume semanal decidido pelo modelo para cada SKU, $V^{\text{mod}}_{i,w^*}$,
-estimar o volume diário:
+Dado o volume semanal decidido pelo modelo para cada SKU, denotado por
+$V^{\text{mod}}_{i,w^*}$, o objetivo é estimar o volume diário:
 \begin{equation}\label{eq:dow:objetivo}
 \hat{V}_{i,w^*,d}, \quad \forall i \in \mathcal{I},\;\forall d \in \mathcal{D}
 \end{equation}
 
-\textbf{Requisito de consistência:} a soma dos 7 dias deve coincidir exatamente com o
-valor exibido no comparador, garantindo que o DOW seja uma \emph{desagregação temporal
-fiel} da decisão do modelo.
+O requisito fundamental de consistência exige que a soma dos sete dias coincida
+exatamente com o valor semanal do modelo. Dessa forma, o DOW funciona como uma
+\emph{desagregação temporal fiel}: o usuário pode consultar tanto o total semanal
+quanto o detalhe diário, com a garantia de que ambos são coerentes entre si.
 
 \subsection{Índices e Conjuntos}
 
+A formulação utiliza os seguintes índices e conjuntos:
 \begin{align}\label{eq:dow:indices}
 i &\in \mathcal{I} && \text{SKUs com volume decidido pelo modelo ($V^{\text{mod}}_{i,w^*}>0$)} \nonumber\\
 c &\in \mathcal{C} && \text{Classes de produto} \nonumber\\
@@ -483,64 +732,96 @@ w &\in \mathcal{W} && \text{Semanas da janela histórica} \nonumber\\
 w^* &&& \text{Semana alvo (configurada em \texttt{semana\_ref})}
 \end{align}
 
-Mapeamentos:
+Cada SKU pertence a exatamente uma classe de produto, relação expressa pela
+função de mapeamento $\kappa$ e pelo conjunto derivado $\mathcal{I}_c$:
 \begin{align}\label{eq:dow:mapeamentos}
 \kappa(i) &= c && \text{Classe do SKU } i \nonumber\\
 \mathcal{I}_c &= \{i \in \mathcal{I} : \kappa(i)=c\} && \text{SKUs da classe } c \text{ com volume no modelo}
 \end{align}
 
-\textbf{Premissa:} $\mathcal{I}$ contém apenas SKUs ativos, filtrados pelos mesmos
-critérios de estabelecimento e status do pipeline principal.
+\textbf{Premissa de escopo:} o conjunto $\mathcal{I}$ contém apenas SKUs ativos,
+filtrados pelos mesmos critérios de estabelecimento e status aplicados no
+pipeline principal de otimização, assegurando que a distribuição DOW opere
+sobre o mesmo universo de produtos.
 
 \subsection{Dados de Entrada}
 
+A distribuição DOW requer duas fontes de dados: o volume decidido pelo modelo
+para a semana-alvo e o histórico de produção diária.
+
 \subsubsection{Volume decidido pelo modelo (semanal por SKU)}
 
-O volume semanal do SKU $i$ na semana-alvo $w^*$ é obtido do output do modelo de
-otimização:
+O volume semanal do SKU $i$ na semana-alvo $w^*$ é composto por duas parcelas,
+conforme a Equação~\eqref{eq:dow:volume-modelo}:
 \begin{equation}\label{eq:dow:volume-modelo}
 V^{\text{mod}}_{i,w^*} = x_i^{\text{aloc}} + r_i^{\text{res}},
 \quad \forall i \in \mathcal{I}
 \end{equation}
 onde:
 \begin{itemize}
-    \item $x_i^{\text{aloc}} \geq 0$: volume alocado pelo otimizador (do excedente
-        da classe), coluna \texttt{quantidade} no output do modelo;
-    \item $r_i^{\text{res}} \geq 0$: volume reservado por pedido garantido
-        ($= 0$ se o SKU não tem pedido), coluna \texttt{quantidade\_reservada}
-        no comparador.
+    \item $x_i^{\text{aloc}} \geq 0$ representa o volume alocado pelo otimizador
+        a partir do excedente da classe, correspondente à coluna
+        \texttt{quantidade} no output do modelo;
+    \item $r_i^{\text{res}} \geq 0$ representa o volume reservado por pedido
+        garantido, sendo igual a zero quando o SKU não possui pedido vinculado,
+        correspondente à coluna \texttt{quantidade\_reservada} no comparador.
 \end{itemize}
 
-Há duas situações de reserva:
+A composição dessas parcelas varia conforme a natureza do SKU. Distinguem-se
+dois cenários:
 \begin{enumerate}
-    \item \textbf{SKU restrito com pedido} (ex: GRANEL, Exportação): não participa
-        da otimização; $x_i^{\text{aloc}}=0$ e $V^{\text{mod}}_{i,w^*}=r_i^{\text{res}}$.
-        Aparece como \texttt{tipo=reserva} no output do modelo.
-    \item \textbf{SKU permitido com pedido}: participa da otimização do excedente;
-        $V^{\text{mod}}_{i,w^*}=x_i^{\text{aloc}}+r_i^{\text{res}}$.
-        A reserva é descontada da produção da classe antes da otimização, e o SKU
-        pode receber volume adicional visando maximização de margem.
+    \item \textbf{SKU restrito com pedido} (categorias como GRANEL ou
+        Exportação): o SKU não participa da otimização, de modo que
+        $x_i^{\text{aloc}}=0$ e o volume total reduz-se à reserva,
+        $V^{\text{mod}}_{i,w^*}=r_i^{\text{res}}$. No output do modelo,
+        esse SKU aparece com \texttt{tipo=reserva}.
+    \item \textbf{SKU permitido com pedido}: o SKU participa normalmente da
+        otimização do excedente, podendo receber volume adicional visando a
+        maximização de margem. Nesse caso,
+        $V^{\text{mod}}_{i,w^*}=x_i^{\text{aloc}}+r_i^{\text{res}}$, onde a
+        reserva já foi descontada da produção da classe antes de o otimizador
+        operar sobre o excedente remanescente.
 \end{enumerate}
 
-Esses valores são os mesmos exibidos no comparador de produção/alocação
-(\texttt{quantidade\_alocada} + \texttt{quantidade\_reservada}), garantindo
-rastreabilidade ponta a ponta.
+\noindent É importante ressaltar que os valores de $V^{\text{mod}}_{i,w^*}$ são
+idênticos aos exibidos no comparador de produção/alocação (soma de
+\texttt{quantidade\_alocada} com \texttt{quantidade\_reservada}), o que garante
+rastreabilidade ponta a ponta entre a decisão do modelo e o plano diário
+gerado pelo DOW.
 
 \subsubsection{Histórico de produção}
 
+O segundo dado de entrada é o volume histórico de produção, desagregado por
+SKU, semana e dia:
 \begin{equation}\label{eq:dow:historico}
 V_{i,c,w,d} \geq 0: \quad \text{volume líquido produzido do SKU } i
     \text{ (classe } c\text{), semana } w\text{, dia } d
 \end{equation}
 
-\textbf{Premissa:} o volume histórico deve refletir a \emph{produção líquida} (ACA
-menos EAC), obtida via agregação (soma) antes da filtragem de valores positivos.
-Os mesmos filtros de estabelecimento e SKUs ativos do pipeline principal devem ser
-aplicados ao histórico.
+O adjetivo \emph{líquido} é intencional: o volume deve refletir a produção
+efetiva, isto é, a diferença entre registros de acabamento (ACA) e seus
+respectivos estornos (EAC). Para obtê-lo corretamente, os registros brutos
+são primeiro agregados por combinação item$\times$dia --- permitindo que
+ACA e EAC se compensem --- e somente então filtrados para reter apenas os
+saldos positivos. Essa ordem é essencial: filtrar registros negativos
+\emph{antes} da agregação eliminaria os estornos prematuramente,
+superestimando a produção histórica.
+
+Além do tratamento ACA/EAC, aplicam-se ao histórico os mesmos filtros de
+estabelecimento e de SKUs ativos vigentes no pipeline principal,
+assegurando coerência entre a base histórica e o universo de produtos
+em operação.
 
 \subsection{Agregações Históricas}
 
+A partir do histórico granular $V_{i,c,w,d}$, calculam-se agregações em dois
+níveis: por SKU (utilizadas no cálculo principal) e por classe (utilizadas
+como mecanismo de fallback).
+
 \subsubsection{Agregações por SKU}
+
+As agregações por SKU consolidam o volume ao longo das semanas da janela
+histórica, produzindo o total por dia da semana e o total geral:
 \begin{align}\label{eq:dow:agg-sku}
 V_{i,\cdot,d} &= \sum_{w \in \mathcal{W}} V_{i,c,w,d},
     && \text{volume do SKU } i \text{ no dia } d \text{ (toda a janela)} \\
@@ -548,7 +829,15 @@ V_{i,\cdot,\cdot} &= \sum_{d \in \mathcal{D}} V_{i,\cdot,d},
     && \text{volume total do SKU } i \text{ na janela}
 \end{align}
 
+Em termos práticos, $V_{i,\cdot,d}$ responde à pergunta: ``quanto o SKU $i$
+produziu, no total, em todas as segundas-feiras (ou terças, etc.) da janela
+histórica?'' Já $V_{i,\cdot,\cdot}$ é o volume total do SKU em toda a janela,
+servindo como denominador para o cálculo do perfil percentual.
+
 \subsubsection{Agregações por classe (auxiliares para fallback)}
+
+De forma análoga, calculam-se as agregações no nível da classe, somando os
+volumes de todos os SKUs pertencentes a ela:
 \begin{align}\label{eq:dow:agg-classe}
 V_{c,\cdot,d} &= \sum_{i \in \mathcal{I}_c} V_{i,\cdot,d},
     && \text{volume da classe } c \text{ no dia } d \text{ (toda a janela)} \\
@@ -556,31 +845,51 @@ V_{c,\cdot,\cdot} &= \sum_{d \in \mathcal{D}} V_{c,\cdot,d},
     && \text{volume total da classe } c \text{ na janela}
 \end{align}
 
+Essas agregações não são utilizadas no fluxo principal de cálculo, mas são
+mantidas como recurso auxiliar para situações em que o SKU individual não
+dispõe de histórico suficiente (ver Seção de Fallback).
+
 \subsection{Perfil Histórico do SKU por Dia da Semana}
 
-Para cada SKU com histórico ($V_{i,\cdot,\cdot}>0$), define-se a participação do
-dia $d$ no volume semanal do SKU:
+O perfil histórico é o elemento central da distribuição DOW. Ele expressa,
+para cada SKU, a fração do volume semanal que historicamente recaiu em cada
+dia da semana. Formalmente, para todo SKU com histórico disponível
+($V_{i,\cdot,\cdot}>0$):
 \begin{equation}\label{eq:dow:perfil-sku-dia}
 p^{\text{hist}}_{i,d} = \frac{V_{i,\cdot,d}}{V_{i,\cdot,\cdot}},
 \quad \forall i : V_{i,\cdot,\cdot}>0,\;\forall d \in \mathcal{D}
 \end{equation}
 
-\textbf{Propriedade:} $\displaystyle\sum_{d \in \mathcal{D}} p^{\text{hist}}_{i,d} = 1$,
-garantindo que a soma dos 7 dias reproduz exatamente o volume semanal do modelo.
+A interpretação é direta: $p^{\text{hist}}_{i,d}$ responde à pergunta
+``historicamente, qual percentual da produção semanal do SKU $i$ ocorreu
+no dia $d$?''. Por exemplo, se $p^{\text{hist}}_{i,3} = 0{,}25$, significa
+que 25\% da produção semanal do SKU $i$ concentrou-se historicamente às
+terças-feiras.
 
-O perfil $p^{\text{hist}}_{i,d}$ responde: ``historicamente, qual percentual da
-produção semanal do SKU $i$ cai no dia $d$?''
+Por construção, a soma dos sete perfis diários é unitária:
+$\displaystyle\sum_{d \in \mathcal{D}} p^{\text{hist}}_{i,d} = 1$.
+Essa propriedade é o que garante, algebricamente, que a distribuição diária
+reproduza exatamente o volume semanal do modelo.
 
 \subsection{Perfil Histórico da Classe por Dia (Auxiliar para Fallback)}
 
-Para SKUs sem histórico individual, utiliza-se o perfil da classe como fallback:
+Quando um SKU não possui histórico individual na janela, é necessário recorrer
+a uma aproximação. A alternativa adotada é utilizar o perfil da classe à qual
+o SKU pertence, calculado de forma análoga à
+Equação~\eqref{eq:dow:perfil-sku-dia}:
 \begin{equation}\label{eq:dow:perfil-classe-dia}
 p^{\text{hist}}_{c,d} = \frac{V_{c,\cdot,d}}{V_{c,\cdot,\cdot}},
 \quad \forall c : V_{c,\cdot,\cdot}>0,\;\forall d \in \mathcal{D}
 \end{equation}
 
-A Equação~\eqref{eq:dow:perfil-classe-dia} é matematicamente equivalente à média
-ponderada por volume semanal:
+A intuição é que SKUs de uma mesma classe tendem a compartilhar padrões de
+produção semelhantes (mesma linha de envase, mesmo ritmo fabril), de modo que
+o perfil agregado da classe constitui um \emph{proxy} razoável na ausência de
+dados individuais.
+
+Cabe observar que a Equação~\eqref{eq:dow:perfil-classe-dia} é matematicamente
+equivalente a uma média ponderada dos perfis semanais individuais, onde o peso
+de cada semana é proporcional ao seu volume total:
 \[
 p^{\text{hist}}_{c,d}
 = \sum_{w \in \mathcal{W}^{+}_c}
@@ -588,112 +897,195 @@ p^{\text{hist}}_{c,d}
   \cdot
   \underbrace{\frac{V_{c,w,d}}{V_{c,w,\cdot}}}_{p_{c,w,d}}
 \]
-onde $\mathcal{W}^{+}_c := \{w : V_{c,w,\cdot}>0\}$.
-Semanas com maior volume têm maior influência no perfil.
+onde $\mathcal{W}^{+}_c := \{w : V_{c,w,\cdot}>0\}$. Isso significa que
+semanas com maior volume de produção exercem maior influência sobre o perfil
+final, refletindo de forma mais fidedigna os padrões operacionais recentes.
 
 \subsection{Distribuição Diária por SKU}
 
-A estimativa de volume diário para cada SKU é:
+Com o perfil histórico definido, a estimativa de volume diário para cada SKU
+é obtida pela multiplicação direta do volume semanal do modelo pelo perfil
+do dia correspondente:
 \begin{equation}\label{eq:dow:distribuicao-diaria}
 \hat{V}_{i,w^*,d} = V^{\text{mod}}_{i,w^*} \cdot p^{\text{hist}}_{i,d},
 \quad \forall i \in \mathcal{I},\;\forall d \in \mathcal{D}
 \end{equation}
 
-onde $p^{\text{hist}}_{i,d}$ é o perfil do SKU
-(Equação~\eqref{eq:dow:perfil-sku-dia}) ou, em caso de fallback, o perfil da
-classe (Equação~\eqref{eq:dow:perfil-classe-dia}).
+Nesta equação, $p^{\text{hist}}_{i,d}$ é o perfil do próprio SKU quando
+disponível (Equação~\eqref{eq:dow:perfil-sku-dia}) ou, quando não há
+histórico individual, o perfil da classe
+(Equação~\eqref{eq:dow:perfil-classe-dia}), conforme as regras de fallback
+descritas na subseção seguinte.
 
-\subsection{Condição de Consistência}
+A lógica subjacente é conservadora: assume-se que o padrão de distribuição
+semanal observado no passado se manterá na semana-alvo. Em dias nos quais o
+SKU historicamente não foi produzido (por exemplo, finais de semana), o perfil
+será zero e, consequentemente, nenhum volume será atribuído a esses dias.
 
-\textbf{Fechamento por SKU} (requisito principal):
+\subsection{Condições de Consistência}
+
+A distribuição DOW deve satisfazer duas condições de fechamento que asseguram
+a integridade dos volumes.
+
+A condição primária garante o \textbf{fechamento por SKU}: a soma dos sete
+dias deve ser idêntica ao volume semanal decidido pelo modelo:
 \begin{equation}\label{eq:dow:consistencia-sku}
 \sum_{d \in \mathcal{D}} \hat{V}_{i,w^*,d} = V^{\text{mod}}_{i,w^*},
 \quad \forall i \in \mathcal{I}
 \end{equation}
 
-A Equação~\eqref{eq:dow:consistencia-sku} garante que a soma dos 7 dias é
-\emph{idêntica} ao valor exibido no comparador de produção/alocação.
-Isso decorre diretamente de $\sum_d p^{\text{hist}}_{i,d} = 1$.
+Essa igualdade decorre diretamente da propriedade
+$\sum_d p^{\text{hist}}_{i,d} = 1$ e é verificada automaticamente no output.
+Seu significado prático é que o total semanal exibido no comparador de
+produção/alocação é exatamente reproduzido pela soma dos sete dias do DOW.
 
-\textbf{Fechamento por classe} (consequência):
+Como consequência, o \textbf{fechamento por classe} também é preservado:
 \begin{equation}\label{eq:dow:consistencia-classe}
 \sum_{i \in \mathcal{I}_c} \sum_{d \in \mathcal{D}} \hat{V}_{i,w^*,d}
 = \sum_{i \in \mathcal{I}_c} V^{\text{mod}}_{i,w^*},
 \quad \forall c \in \mathcal{C}
 \end{equation}
 
+Ambas as condições são auditadas na aba de validações do arquivo de saída,
+permitindo que eventuais divergências (por exemplo, causadas por
+arredondamento numérico) sejam identificadas e investigadas.
+
 \subsection{Regras de Fallback}
+
+O cálculo do perfil histórico pressupõe a existência de dados na janela
+considerada. Quando essa premissa não é atendida, aplicam-se regras de
+fallback hierárquicas, que degradam a granularidade da estimativa de forma
+controlada e rastreável.
 
 \subsubsection{F1: SKU sem histórico individual}
 
-Se $V_{i,\cdot,\cdot}=0$ mas a classe $\kappa(i)$ possui histórico
-($V_{c,\cdot,\cdot}>0$), utilizar o perfil da classe:
+Quando o SKU $i$ não possui produção registrada na janela ($V_{i,\cdot,\cdot}=0$),
+mas sua classe $\kappa(i)$ dispõe de histórico ($V_{c,\cdot,\cdot}>0$),
+substitui-se o perfil individual pelo perfil da classe:
 \begin{equation}\label{eq:dow:fallback-f1}
 p^{\text{hist}}_{i,d} \leftarrow p^{\text{hist}}_{c,d},
 \quad c = \kappa(i),\;\forall d \in \mathcal{D}
 \end{equation}
-e distribuir:
+
+A distribuição resultante utiliza o perfil da classe em lugar do perfil
+individual:
 \begin{equation}\label{eq:dow:distribuicao-fallback-f1}
 \hat{V}_{i,w^*,d} = V^{\text{mod}}_{i,w^*} \cdot p^{\text{hist}}_{c,d},
 \quad \forall d \in \mathcal{D}
 \end{equation}
 
-O perfil menos granular (classe) atua como proxy quando o SKU não possui histórico
-individual suficiente. O output deve registrar
-\texttt{fallback\_motivo = sku\_sem\_historico\_individual}.
+Essa substituição é razoável porque SKUs de uma mesma classe compartilham
+características produtivas similares. A condição de consistência
+(Equação~\eqref{eq:dow:consistencia-sku}) permanece satisfeita, uma vez que
+$\sum_d p^{\text{hist}}_{c,d} = 1$. O output registra a ocorrência por meio
+da coluna \texttt{fallback\_motivo = sku\_sem\_historico\_individual},
+permitindo ao usuário avaliar a confiabilidade da estimativa.
 
 \subsubsection{F2: SKU e classe sem histórico}
 
-Se $V_{i,\cdot,\cdot}=0$ e $V_{c,\cdot,\cdot}=0$ (nem o SKU nem sua classe possuem
-histórico na janela), adota-se como premissa de negócio \textbf{não distribuir}:
+No cenário mais extremo, quando nem o SKU nem sua classe possuem histórico na
+janela ($V_{i,\cdot,\cdot}=0$ e $V_{c,\cdot,\cdot}=0$), não há base empírica
+para estimar qualquer perfil diário. Nesse caso, adota-se como premissa de
+negócio a decisão de \textbf{não distribuir} o volume entre os dias:
 \begin{equation}\label{eq:dow:fallback-f2}
 \hat{V}_{i,w^*,d} \leftarrow 0,
 \quad \forall d \in \mathcal{D}
 \end{equation}
 
-O volume do modelo é preservado no consolidado semanal, porém a quebra diária é
-zerada. O output deve registrar
-\texttt{fallback\_motivo = sku\_e\_classe\_sem\_historico}.
+O volume semanal do modelo permanece registrado no consolidado semanal, porém
+a quebra diária é integralmente zerada. O output sinaliza essa situação
+por meio de \texttt{fallback\_motivo = sku\_e\_classe\_sem\_historico},
+indicando ao usuário que uma decisão manual de programação é necessária para
+esse SKU.
 
-\textbf{Nota:} neste cenário, a condição de consistência
-(Equação~\eqref{eq:dow:consistencia-sku}) é relaxada; o volume semanal do modelo
-não é desagregado por dia, sinalizando ao usuário a necessidade de decisão manual.
+Neste cenário, a condição de consistência
+(Equação~\eqref{eq:dow:consistencia-sku}) é intencionalmente relaxada: a soma
+dos sete dias será zero, divergindo do volume semanal do modelo. Essa
+divergência é esperada e documentada, servindo como alerta explícito de que o
+volume não pôde ser desagregado automaticamente.
+
+\subsection{Diagnóstico de Zeros na Distribuição}
+
+Além das regras de fallback, a distribuição DOW registra na coluna
+\texttt{log\_zero} o diagnóstico específico para cada dia com volume estimado
+igual a zero. Essa informação distingue duas causas raiz fundamentalmente
+diferentes:
+\begin{itemize}
+    \item \textbf{SKU nunca produzido neste dia da semana:} não há nenhum
+        registro de produção para o SKU nesse dia da semana em toda a janela
+        histórica, indicando um padrão operacional real (por exemplo, o SKU
+        não é produzido aos finais de semana).
+    \item \textbf{Produção registrada e integralmente estornada (ACA cancelado
+        por EAC):} existem registros de produção para o SKU nesse dia, porém
+        todos foram cancelados por estornos correspondentes, resultando em
+        saldo líquido zero. Essa distinção é relevante porque indica que houve
+        atividade produtiva planejada, ainda que efetivamente anulada.
+\end{itemize}
+
+A presença dessa coluna confere ao output uma camada adicional de
+transparência, permitindo que o planejador de produção interprete os zeros
+com conhecimento de causa e tome decisões informadas.
 
 \subsection{Observações de Implementação}
 
 \begin{itemize}
-    \item \textbf{Origem de $V^{\text{mod}}_{i,w^*}$:} obtido do
-        \texttt{resultado.resultado}, combinando \texttt{quantidade}
-        (tipo \texttt{otimizacao}) com o valor correspondente em
-        \texttt{pedidos\_garantidos\_por\_sku} para SKUs permitidos com pedido.
-        Para SKUs restritos (GRANEL, Exportação), o volume é o próprio
-        valor das linhas \texttt{tipo=reserva}.
-    \item \textbf{Produção líquida:} o histórico deve incorporar ajustes ACA/EAC
-        via agregação (soma líquida por item$\times$dia), \emph{antes} de filtrar
-        valores não-positivos, evitando superestimação de volumes.
-    \item \textbf{Premissa de janela:} parâmetros dedicados
-        (\texttt{dow\_ano\_ref}, \texttt{dow\_mes\_ref}, \texttt{dow\_meses\_janela}),
-        com fallback para \texttt{ano\_custo}/\texttt{mes\_custo}/\texttt{meses\_janela\_custo}.
-    \item A semana alvo $w^*$ deve ser excluída da história para evitar vazamento.
-    \item Os mesmos filtros de estabelecimento e SKUs ativos do pipeline principal
-        devem ser aplicados.
-    \item Execução restrita a granularidade semanal (\texttt{S}).
-    \item O output deve conter colunas de rastreabilidade de fallback
-        (\texttt{fallback\_aplicado}, \texttt{fallback\_motivo}).
+    \item \textbf{Origem de $V^{\text{mod}}_{i,w^*}$:} o volume semanal por
+        SKU é obtido do objeto \texttt{resultado.resultado}, combinando a
+        coluna \texttt{quantidade} (para linhas com \texttt{tipo=otimizacao})
+        com o valor correspondente em \texttt{pedidos\_garantidos\_por\_sku}
+        para SKUs permitidos que possuem pedido. Para SKUs restritos
+        (GRANEL, Exportação), o volume é o próprio valor das linhas
+        \texttt{tipo=reserva}.
+    \item \textbf{Produção líquida:} o histórico de produção incorpora ajustes
+        ACA/EAC por meio de agregação (soma líquida por item$\times$dia)
+        \emph{antes} de filtrar valores não-positivos, evitando a
+        superestimação de volumes que ocorreria caso os estornos fossem
+        descartados prematuramente.
+    \item \textbf{Janela histórica desacoplada:} a distribuição DOW utiliza
+        parâmetros dedicados (\texttt{dow\_ano\_ref}, \texttt{dow\_mes\_ref},
+        \texttt{dow\_meses\_janela}), com fallback automático para os
+        parâmetros de custo (\texttt{ano\_custo}, \texttt{mes\_custo},
+        \texttt{meses\_janela\_custo}) quando não configurados. Essa
+        separação permite ajustar a janela do DOW independentemente da
+        janela de apuração de custos.
+    \item \textbf{Exclusão da semana-alvo:} a semana $w^*$ é excluída do
+        histórico para evitar vazamento de informação --- ou seja, impedir
+        que o volume a ser estimado contamine a base utilizada para estimá-lo.
+    \item \textbf{Filtros consistentes:} aplicam-se ao histórico os mesmos
+        filtros de estabelecimento e SKUs ativos vigentes no pipeline
+        principal de otimização.
+    \item \textbf{Execução condicional:} a distribuição DOW é executada
+        exclusivamente quando a granularidade de demanda é semanal
+        (\texttt{S}), sendo silenciosamente ignorada em granularidades
+        diária ou mensal.
+    \item \textbf{Rastreabilidade:} o output contém três colunas de
+        rastreabilidade --- \texttt{metodo} (identifica o tipo de perfil
+        utilizado), \texttt{fallback\_motivo} (registra a causa da
+        substituição de perfil) e \texttt{log\_zero} (diagnostica a causa
+        raiz de volumes diários iguais a zero) --- permitindo auditoria
+        completa de cada linha do resultado.
 \end{itemize}
 
 %==============================================================================
 \section{Fluxo de Execução}
 %==============================================================================
 
+O sistema é executado em cinco etapas sequenciais, cada uma encapsulada em
+um módulo Python dedicado. A separação em etapas facilita a manutenção, a
+depuração e a execução parcial do pipeline (por exemplo, reexecutar apenas
+a otimização sem reprocessar o ETL).
+
 \begin{enumerate}
-    \item \textbf{Preparação de dados} (\texttt{executar\_pipeline.sh})
+    \item \textbf{Preparação de dados} (\texttt{executar\_pipeline.sh})\\
+    Etapa inicial que extrai e consolida dados brutos em arquivos intermediários.
     \begin{enumerate}[label=\alph*.]
         \item \texttt{extrair\_precos\_embalagem.py} $\rightarrow$ \texttt{precos\_sku\_embalagem.csv}
         \item \texttt{gerar\_producao\_classe.py} $\rightarrow$ \texttt{producao\_classe.csv}
     \end{enumerate}
     
-    \item \textbf{ETL} (\texttt{etl/pipeline.py})
+    \item \textbf{ETL} (\texttt{etl/pipeline.py})\\
+    Pipeline de transformação que carrega, filtra, corrige e agrega os dados,
+    produzindo os parâmetros prontos para consumo pelo otimizador.
     \begin{enumerate}[label=\alph*.]
         \item Carregar produção, classes, pedidos, preços, custos
         \item Carregar e filtrar faturamento (correção de estabelecimento)
@@ -703,7 +1095,8 @@ não é desagregado por dia, sinalizando ao usuário a necessidade de decisão m
         \item Calcular produção excedente por classe
     \end{enumerate}
     
-    \item \textbf{Otimização} (\texttt{modelo/otimizador.py})
+    \item \textbf{Otimização} (\texttt{modelo/otimizador.py})\\
+    Construção e resolução do modelo matemático descrito na Seção~6.
     \begin{enumerate}[label=\alph*.]
         \item Criar solver e configurar parâmetros
         \item Criar variáveis de decisão ($x_i$)
@@ -711,14 +1104,18 @@ não é desagregado por dia, sinalizando ao usuário a necessidade de decisão m
         \item Resolver e extrair resultados
     \end{enumerate}
     
-    \item \textbf{Comparativo Baseline} (\texttt{main.py})
+    \item \textbf{Comparativo Baseline} (\texttt{main.py})\\
+    Avaliação do ganho da otimização em relação ao cenário de referência
+    (Seção~7).
     \begin{enumerate}[label=\alph*.]
         \item Calcular proporção histórica por SKU/classe
         \item Calcular margem baseline
         \item Comparar com margem otimizada
     \end{enumerate}
     
-    \item \textbf{Relatório} (\texttt{comparar\_producao\_alocacao.py})
+    \item \textbf{Relatório} (\texttt{comparar\_producao\_alocacao.py})\\
+    Consolidação final que reúne produção, alocação e reservas em um relatório
+    detalhado por SKU e classe.
     \begin{enumerate}[label=\alph*.]
         \item Consolidar dados de produção, alocação, reservas
         \item Gerar comparativo detalhado por SKU
@@ -729,7 +1126,15 @@ não é desagregado por dia, sinalizando ao usuário a necessidade de decisão m
 \section{Métricas de Saída}
 %==============================================================================
 
+O modelo produz dois grupos de métricas que permitem avaliar tanto a utilização
+da capacidade produtiva quanto o impacto financeiro da realocação.
+
 \subsection{Métricas de Volume}
+
+As métricas de volume quantificam como a capacidade total de produção foi
+distribuída entre as três destinações possíveis: alocação otimizada, reservas
+de pedidos e saldo não utilizado. O saldo não alocado pode indicar, por
+exemplo, classes cuja capacidade excede a demanda total dos SKUs elegíveis:
 
 \begin{align}\label{eq:auto:al:010}
 \text{Quantidade Alocada Total} &= \sum_{i \in H} x_i^* \\[6pt]
@@ -738,6 +1143,11 @@ não é desagregado por dia, sinalizando ao usuário a necessidade de decisão m
 \end{align}
 
 \subsection{Métricas Financeiras}
+
+As métricas financeiras traduzem os volumes em valores monetários, permitindo
+avaliar o retorno econômico da solução. A comparação entre margem otimizada e
+margem baseline evidencia o ganho incremental proporcionado pelo modelo. Receita
+e custo totais fornecem uma visão complementar do impacto operacional:
 
 \begin{align}\label{eq:auto:al:011}
 \text{Margem Otimizada} &= M^{\text{otim}} = \sum_{i \in H} \mu_i \cdot x_i^* \\[6pt]
@@ -750,6 +1160,15 @@ não é desagregado por dia, sinalizando ao usuário a necessidade de decisão m
 %==============================================================================
 \section{Configuração (\texttt{config.yaml})}
 %==============================================================================
+
+Todos os parâmetros do modelo são centralizados no arquivo
+\texttt{config.yaml}, que é carregado automaticamente na inicialização do
+pipeline. Essa abordagem segue o princípio de separação entre código e
+configuração, permitindo que alterações de cenário (por exemplo, janela
+temporal, método de demanda ou parâmetros do \textit{solver}) sejam realizadas
+sem modificação de código-fonte.
+
+A tabela a seguir lista os principais parâmetros agrupados por seção:
 
 \begin{longtable}{llp{7cm}}
 \toprule
@@ -781,34 +1200,61 @@ não é desagregado por dia, sinalizando ao usuário a necessidade de decisão m
 \section{Glossário de Símbolos}
 %==============================================================================
 
+Para facilitar a consulta durante a leitura do documento, a tabela a seguir
+consolida todos os símbolos utilizados na formulação, acompanhados de suas
+definições e unidades quando aplicável.
+
 \begin{longtable}{cl}
 \toprule
 \textbf{Símbolo} & \textbf{Descrição} \\
 \midrule
 \endhead
+\multicolumn{2}{l}{\textit{Conjuntos}} \\[4pt]
 $I$ & Conjunto de todos os SKUs \\
 $C$ & Conjunto de classes de produtos \\
-$H$ & SKUs válidos com demanda histórica \\
-$R$ & SKUs com reservas \\
-$p_i$ & Preço do SKU $i$ (R\$/caixa) \\
-$c_i$ & Custo do SKU $i$ (R\$/caixa) \\
+$S$ & Conjunto de períodos temporais na janela histórica \\
+$H$ & SKUs válidos com demanda histórica positiva \\
+$R$ & SKUs com pedidos reservados \\
+$I_c$ & SKUs pertencentes à classe $c$ \\
+$I_{\text{válido}}$ & SKUs elegíveis para otimização \\
+\midrule
+\multicolumn{2}{l}{\textit{Parâmetros do SKU}} \\[4pt]
+$p_i$ & Preço de venda do SKU $i$ (R\$/caixa) \\
+$c_i$ & Custo YTD do SKU $i$ (R\$/caixa) \\
 $e_i$ & Ovos por embalagem do SKU $i$ \\
 $m_i$ & Margem por caixa: $p_i - c_i$ \\
-$\mu_i$ & Margem por ovo: $m_i / e_i$ \\
-$P_c$ & Produção total da classe $c$ (ovos) \\
-$D_i$ & Limite de demanda histórica (ovos) \\
+$\mu_i$ & Margem por ovo: $m_i / e_i$ (coeficiente da função objetivo) \\
+$\kappa(i)$ & Classe do SKU $i$ \\
+\midrule
+\multicolumn{2}{l}{\textit{Parâmetros de produção e demanda}} \\[4pt]
+$P_c$ & Produção total da classe $c$ na semana (ovos) \\
+$D_i$ & Limite de demanda histórica do SKU $i$ (ovos) \\
 $\alpha$ & Fator de expansão da demanda \\
+$Q_{i,s}$ & Volume faturado do SKU $i$ no período $s$ (ovos) \\
+$V_i^{\text{hist}}$ & Volume histórico total do SKU $i$ na janela (ovos) \\
+\midrule
+\multicolumn{2}{l}{\textit{Sistema de reservas}} \\[4pt]
 $r_i$ & Quantidade reservada do SKU $i$ (ovos) \\
 $R_c$ & Total reservado da classe $c$ (ovos) \\
-$E_c$ & Produção excedente da classe $c$ (ovos) \\
+$E_c$ & Produção excedente da classe $c$ após reservas (ovos) \\
+\midrule
+\multicolumn{2}{l}{\textit{Variáveis e resultados da otimização}} \\[4pt]
 $x_i$ & Variável de decisão: alocação do SKU $i$ (ovos) \\
-$x_i^*$ & Valor ótimo da alocação \\
-$V_i^{\text{hist}}$ & Volume histórico total do SKU $i$ (ovos) \\
+$x_i^*$ & Valor ótimo da variável de decisão \\
+$Z$ & Função objetivo (margem total de contribuição) \\
+\midrule
+\multicolumn{2}{l}{\textit{Comparativo baseline}} \\[4pt]
 $\pi_i$ & Proporção histórica do SKU $i$ na classe \\
+$x_i^{\text{base}}$ & Volume baseline do SKU $i$ (ovos) \\
 $V_c^{\text{otim}}$ & Volume otimizável da classe $c$ (ovos) \\
-$M^{\text{otim}}$ & Margem total otimizada \\
-$M^{\text{base}}$ & Margem total baseline \\
-$Z$ & Função objetivo (margem total) \\
+$M^{\text{otim}}$ & Margem total otimizada (R\$) \\
+$M^{\text{base}}$ & Margem total baseline (R\$) \\
+\midrule
+\multicolumn{2}{l}{\textit{Distribuição DOW}} \\[4pt]
+$V^{\text{mod}}_{i,w^*}$ & Volume semanal do modelo para o SKU $i$ (ovos) \\
+$p^{\text{hist}}_{i,d}$ & Perfil histórico diário do SKU $i$ no dia $d$ \\
+$p^{\text{hist}}_{c,d}$ & Perfil histórico diário da classe $c$ no dia $d$ \\
+$\hat{V}_{i,w^*,d}$ & Volume diário estimado do SKU $i$ no dia $d$ (ovos) \\
 \bottomrule
 \end{longtable}
 
