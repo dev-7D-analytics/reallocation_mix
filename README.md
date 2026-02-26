@@ -14,7 +14,7 @@ realocando volume de produção entre SKUs da mesma classe biológica de ovos.
 ```
 realocacao-git/
 ├── config.yaml                          # Configuração central (parâmetros, paths)
-├── main.py                              # Orquestrador: ETL -> Otimização -> Output
+├── main.py                              # Orquestrador: ETL -> Otimização -> Output + DOW
 ├── executar_pipeline.sh                 # Shell script para rodar pipeline completo (Linux/Mac)
 ├── executar_pipeline.bat                # Batch script para rodar pipeline completo (Windows)
 ├── requirements.txt                     # Dependências Python
@@ -30,6 +30,7 @@ realocacao-git/
 ├── output/
 │   ├── __init__.py
 │   ├── comparativo.py                   # Comparativo baseline vs otimizado + auditoria
+│   ├── distribuicao_historica_dow.py    # Distribuição histórica diária (DOW)
 │   └── resultados.py                    # Salvamento de resultados (CSV/Excel)
 │
 ├── gerar_pedidos_clientes.py            # Gera pedidos_clientes.csv a partir da CARTEIRA_VENDIDA.xlsx
@@ -71,7 +72,7 @@ na ordem indicada:
      ├─ PRODUÇÃO DIA.xlsx ────► gerar_producao_classe.py ──► inputs/producao_classe.csv (editável)
      │   base_skus_classes.xlsx
      │
-     └──────────────────────────► main.py (ETL + Otimização + Output)
+     └──────────────────────────► main.py (ETL + Otimização + Output + DOW)
                                     │
                                     ▼
                                 comparar_producao_alocacao.py (relatório final)
@@ -253,6 +254,7 @@ Arquivos gerados na pasta `resultados/`.
 | `auditoria_baseline_*.xlsx` | Auditoria: Detalhe por SKU, Resumo por Classe, Parâmetros |
 | `demanda_historica_*.xlsx` | Limites de demanda histórica calculados |
 | `comparacao_producao_alocacao_*.xlsx` | Comparação produção real vs alocação do modelo |
+| `distribuicao_historica_dow_*.xlsx` | Distribuição histórica diária por SKU (DOW) |
 
 ## Configuração relevante (`config.yaml`)
 
