@@ -127,9 +127,13 @@ def salvar_resultados(
     path_demanda = salvar_demanda_historica(resultado_etl, config, logger, timestamp)
     
     if len(resultado.resultado) > 0:
+        resultado_export = resultado.resultado.copy()
+        if 'margem_unitaria' in resultado_export.columns and 'margem_unitaria_cx360' not in resultado_export.columns:
+            resultado_export['margem_unitaria_cx360'] = resultado_export['margem_unitaria']
+
         # CSV principal
         csv_path = output_dir / f'resultado_realocacao_completo_{timestamp}.csv'
-        resultado.resultado.to_csv(csv_path, index=False)
+        resultado_export.to_csv(csv_path, index=False)
         
         # CSV resumo por classe
         resumo_csv_path = output_dir / f'resumo_por_classe_{timestamp}.csv'
@@ -154,7 +158,7 @@ def salvar_resultados(
         num_abas = 3
         with pd.ExcelWriter(xlsx_path, engine='openpyxl') as writer:
             # Aba 1: Resultado Detalhado
-            resultado.resultado.to_excel(writer, sheet_name='Detalhado', index=False)
+            resultado_export.to_excel(writer, sheet_name='Detalhado', index=False)
             
             # Aba 2: Resumo por Classe
             if len(resultado.resumo_classe) > 0:

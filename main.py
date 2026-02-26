@@ -19,6 +19,8 @@ Data: 2025-01-30
 
 import yaml
 import logging
+import subprocess
+import sys
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
@@ -26,7 +28,12 @@ from typing import Dict, List, Any, Optional
 
 from etl.pipeline import ETLPipeline
 from modelo.otimizador import Otimizador
-from output import calcular_comparativo_baseline, salvar_resultados, gerar_distribuicao_historica_dow
+from output import (
+    calcular_comparativo_baseline,
+    salvar_resultados,
+    gerar_distribuicao_historica_dow,
+    gerar_consolidado_pbi,
+)
 from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
 
 
@@ -404,6 +411,34 @@ def main():
             gerar_distribuicao_historica_dow(resultado, resultado_etl, config, logger)
         except Exception as e:
             logger.warning(f"  DOW: falha ao gerar distribuição histórica: {e}")
+
+    # 8. Comparação Produção x Alocação (necessária antes do consolidado PBI)
+    comparacao_ok = False
+    try:
+        logger.info("\n>>> FASE 5: COMPARAÇÃO PRODUÇÃO x ALOCAÇÃO")
+        script_comparacao = Path(__file__).resolve().parent / 'comparar_producao_alocacao.py'
+        cmd = [sys.executable, str(script_comparacao)]
+        semana_ref = config.get('dados', {}).get('semana_ref')
+        if semana_ref:
+            cmd.extend(['--year-week', str(semana_ref)])
+        rc = subprocess.run(cmd, cwd=str(Path(__file__).resolve().parent), check=False).returncode
+        if rc == 0:
+            comparacao_ok = True
+            logger.info("  Comparação produção x alocação gerada com sucesso.")
+        else:
+            logger.warning(f"  Comparação produção x alocação retornou código {rc}.")
+    except Exception as e:
+        logger.warning(f"  Comparação produção x alocação: falha na execução automática: {e}")
+
+    # 9. Consolidado PBI (depende de comparação + auditoria + DOW quando aplicável)
+    if comparacao_ok:
+        try:
+            logger.info("\n>>> FASE 6: CONSOLIDADO PBI")
+            gerar_consolidado_pbi(config=config, logger=logger)
+        except Exception as e:
+            logger.warning(f"  PBI consolidado: falha ao gerar arquivo consolidado: {e}")
+    else:
+        logger.warning("  PBI consolidado: etapa ignorada porque a comparação não foi gerada nesta rodada.")
     
     logger.info("\n" + "="*80)
     logger.info("EXECUÇÃO CONCLUÍDA")

@@ -254,6 +254,7 @@ def calcular_comparativo_baseline(
                 'preco': row_base['preco'],
                 'custo_ytd': row_base['custo_ytd'],
                 'margem_unitaria': row_base['margem_unitaria'],
+                'margem_unitaria_cx360': row_base['margem_unitaria'],
                 # Intermediários por ovo (reprodução: margem_unitaria / qtd_ovos_por_caixa)
                 'preco_por_ovo': preco_por_ovo,
                 'custo_por_ovo': custo_por_ovo,
@@ -321,6 +322,7 @@ def calcular_comparativo_baseline(
                 'preco': preco_res,
                 'custo_ytd': custo_res,
                 'margem_unitaria': margem_unit,
+                'margem_unitaria_cx360': margem_unit,
                 'preco_por_ovo': preco_ovo,
                 'custo_por_ovo': custo_ovo,
                 'margem_por_ovo': margem_ovo,
@@ -449,7 +451,7 @@ def _gerar_auditoria_baseline(
         # Identificação
         'classe', 'item_id', 'item', 'descricao', 'embalagem', 'tipo_sku',
         # Dados unitários por caixa
-        'qtd_ovos_por_caixa', 'preco', 'custo_ytd', 'margem_unitaria',
+        'qtd_ovos_por_caixa', 'preco', 'custo_ytd', 'margem_unitaria', 'margem_unitaria_cx360',
         # Intermediários por ovo (preco/qtd, custo/qtd, margem/qtd)
         'preco_por_ovo', 'custo_por_ovo', 'margem_por_ovo',
         # Pedidos: reserva por SKU, pedido original, déficit, priorização

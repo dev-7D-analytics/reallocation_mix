@@ -860,7 +860,7 @@ def main():
     comparacao = construir_comparacao(producao, alocacao, periodo_label, config)
     
     # Garantir tipos numéricos nas colunas-chave (compatibilidade pandas 2.x)
-    for col_num in ['preco', 'custo_ytd', 'margem_unitaria', 'margem_por_ovo', 'limite_demanda_historica']:
+    for col_num in ['preco', 'custo_ytd', 'margem_unitaria', 'margem_unitaria_cx360', 'margem_por_ovo', 'limite_demanda_historica']:
         if col_num in comparacao.columns:
             comparacao[col_num] = pd.to_numeric(comparacao[col_num], errors='coerce')
     
@@ -1099,8 +1099,10 @@ def main():
                 comparacao.loc[mask_sem_custo, "custo_ytd"] = comparacao.loc[mask_sem_custo, "item"].map(custos_por_item_externo)
                 comparacao.loc[(mask_sem_custo) & (comparacao["custo_ytd"].notna()), "custo_origem"] = "arquivo_externo_por_item"
     
-    # Calcular margem unitária (em R$/caixa)
+    # Calcular margem unitária (em R$/CX360, base normalizada)
     comparacao["margem_unitaria"] = comparacao["preco"] - comparacao["custo_ytd"]
+    # Alias explícito de unidade para output (mantém compatibilidade com coluna legada)
+    comparacao["margem_unitaria_cx360"] = comparacao["margem_unitaria"]
     
     # ==========================================================================
     # ADICIONAR SKUs COM PEDIDO MAS SEM PRODUÇÃO NA SEMANA
@@ -1423,7 +1425,7 @@ def main():
         # === QUANTIDADES ===
         'quantidade_produzida', 'quantidade_alocada', 'quantidade_reservada', 'diferenca_aloc_menos_prod', 'diferenca_absoluta',
         # === FINANCEIRO UNITÁRIO ===
-        'preco', 'custo_ytd', 'margem_unitaria', 'margem_por_ovo',
+        'preco', 'custo_ytd', 'margem_unitaria', 'margem_unitaria_cx360', 'margem_por_ovo',
         # === DEMANDA HISTÓRICA ===
         'tem_demanda_historica', 'demanda_max', 'limite_demanda_historica',
         'periodo_demanda_mes_ref', 'periodo_demanda_ano_ref', 'periodo_demanda_janela_meses',
@@ -1653,7 +1655,7 @@ def main():
         "cx360_produzida", "cx360_alocada", "cx360_reservada", "cx360_diferenca",
         "cxfisica_produzida", "cxfisica_alocada", "cxfisica_reservada", "cxfisica_diferenca",
         "periodo_label", "data_producao",
-        "preco", "custo_ytd", "margem_unitaria", "margem_por_ovo",
+        "preco", "custo_ytd", "margem_unitaria", "margem_unitaria_cx360", "margem_por_ovo",
         "tem_demanda_historica", "demanda_max", "limite_demanda_historica",
         "periodo_demanda_mes_ref", "periodo_demanda_ano_ref",
         "periodo_demanda_janela_meses", "tipo_calculo_demanda", "granularidade_demanda",
