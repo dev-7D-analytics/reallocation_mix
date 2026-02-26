@@ -23,6 +23,8 @@ from typing import Any, Dict, Optional
 import pandas as pd
 import yaml
 
+from metadados_output import aplicar_colunas_estabelecimento
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = PROJECT_ROOT / "resultados"
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
@@ -225,6 +227,7 @@ def gerar_consolidado_pbi(
     params_dow = _parametros_dow_colunas(config)
     params_todos = {**params_modelo, **params_dow}
     df_sku = _injetar_parametros(df_sku, params_todos)
+    df_sku = aplicar_colunas_estabelecimento(df_sku, config)
     log(f"  Parametros injetados: {len(params_todos)} colunas")
     log(f"  Resultado: {len(df_sku)} linhas x {len(df_sku.columns)} colunas")
 
@@ -233,6 +236,7 @@ def gerar_consolidado_pbi(
     if df_dow is not None and len(df_dow) > 0:
         df_diaria = df_dow.copy()
         df_diaria = _injetar_parametros(df_diaria, params_dow)
+        df_diaria = aplicar_colunas_estabelecimento(df_diaria, config)
         log(f"  Resultado: {len(df_diaria)} linhas x {len(df_diaria.columns)} colunas")
     else:
         df_diaria = pd.DataFrame()
@@ -240,6 +244,7 @@ def gerar_consolidado_pbi(
 
     # ── Aba 3: parametros ──
     df_params = _extrair_parametros_flat(config)
+    df_params = aplicar_colunas_estabelecimento(df_params, config)
     log(f"  Parametros: {len(df_params)} linhas")
 
     # ── Exportar ──

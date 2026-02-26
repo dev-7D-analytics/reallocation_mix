@@ -28,6 +28,7 @@ from extrair_compatibilidade_embalagem import (
     extrair_embalagem_descricao,
     calcular_qtd_embalagem,
 )
+from metadados_output import aplicar_colunas_estabelecimento
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +477,10 @@ def gerar_distribuicao_historica_dow(
         [v1[cols_val], pd.DataFrame(v2_rows)],
         ignore_index=True,
     )
+    df_distrib = aplicar_colunas_estabelecimento(df_distrib, config)
+    df_consolidado = aplicar_colunas_estabelecimento(df_consolidado, config)
+    df_perfil_classe = aplicar_colunas_estabelecimento(df_perfil_classe, config)
+    df_validacoes = aplicar_colunas_estabelecimento(df_validacoes, config)
 
     # ── 9. Salvar XLSX ──
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

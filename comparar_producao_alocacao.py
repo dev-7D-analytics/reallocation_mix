@@ -10,6 +10,7 @@ from extrair_compatibilidade_embalagem import (
     calcular_qtd_embalagem,
     extrair_embalagem_descricao,
 )
+from metadados_output import aplicar_colunas_estabelecimento
 
 
 INPUT_PATH = Path("inputs")
@@ -1665,6 +1666,11 @@ def main():
     colunas_final = [c for c in colunas_ordenadas if c in comparacao.columns]
     colunas_final += [c for c in comparacao.columns if c not in colunas_final and c != "embalagens"]
     comparacao = comparacao[colunas_final]
+    comparacao = aplicar_colunas_estabelecimento(comparacao, config)
+    if len(df_demanda_historica) > 0:
+        df_demanda_historica = aplicar_colunas_estabelecimento(df_demanda_historica, config)
+    if len(df_param_demanda) > 0:
+        df_param_demanda = aplicar_colunas_estabelecimento(df_param_demanda, config)
 
     # Salvar CSV (única tabela: uma linha por SKU, quantidade_reservada na coluna específica)
     comparacao.to_csv(output_path_csv, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
@@ -1699,6 +1705,7 @@ def main():
     if len(pedidos_ignorados) > 0:
         df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
         df_pedidos_ignorados = df_pedidos_ignorados.sort_values('quantidade_total_pedida', ascending=False)
+        df_pedidos_ignorados = aplicar_colunas_estabelecimento(df_pedidos_ignorados, config)
         output_pedidos_ignorados_csv = RESULTS_DIR / f"pedidos_ignorados_{periodo_label}_{timestamp}.csv"
         output_pedidos_ignorados_xlsx = RESULTS_DIR / f"pedidos_ignorados_{periodo_label}_{timestamp}.xlsx"
         df_pedidos_ignorados.to_csv(output_pedidos_ignorados_csv, index=False, encoding="utf-8")

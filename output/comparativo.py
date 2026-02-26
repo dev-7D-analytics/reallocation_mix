@@ -14,6 +14,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict
 
+from metadados_output import aplicar_colunas_estabelecimento
+
 
 def calcular_comparativo_baseline(
     resultado: pd.DataFrame,
@@ -487,6 +489,7 @@ def _gerar_auditoria_baseline(
     
     # Ordenar por classe e margem_por_ovo (descendente)
     df_detalhe = df_detalhe.sort_values(['classe', 'margem_por_ovo'], ascending=[True, False])
+    df_detalhe = aplicar_colunas_estabelecimento(df_detalhe, config)
     
     # === ABA 2: Resumo por Classe ===
     resumo = df_audit.groupby('classe').agg(
@@ -547,6 +550,7 @@ def _gerar_auditoria_baseline(
     )
     totais = pd.DataFrame([totais_dict])
     resumo = pd.concat([resumo, totais], ignore_index=True)
+    resumo = aplicar_colunas_estabelecimento(resumo, config)
     
     # === ABA 3: Parâmetros ===
     modelo_cfg = config.get('modelo', {})
@@ -566,6 +570,7 @@ def _gerar_auditoria_baseline(
         {'parametro': 'metodo_baseline', 'valor': 'Proporção histórica real (volume vendido no período, sem fator)'},
         {'parametro': 'data_geracao', 'valor': timestamp},
     ])
+    params = aplicar_colunas_estabelecimento(params, config)
     
     # === Salvar Excel ===
     with pd.ExcelWriter(path, engine='openpyxl') as writer:

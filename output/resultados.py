@@ -15,6 +15,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
 
+from metadados_output import aplicar_colunas_estabelecimento
+
 
 def criar_aba_estatisticas(
     resultado: pd.DataFrame,
@@ -130,6 +132,7 @@ def salvar_resultados(
         resultado_export = resultado.resultado.copy()
         if 'margem_unitaria' in resultado_export.columns and 'margem_unitaria_cx360' not in resultado_export.columns:
             resultado_export['margem_unitaria_cx360'] = resultado_export['margem_unitaria']
+        resultado_export = aplicar_colunas_estabelecimento(resultado_export, config)
 
         # CSV principal
         csv_path = output_dir / f'resultado_realocacao_completo_{timestamp}.csv'
@@ -137,8 +140,10 @@ def salvar_resultados(
         
         # CSV resumo por classe
         resumo_csv_path = output_dir / f'resumo_por_classe_{timestamp}.csv'
+        resumo_export = resultado.resumo_classe.copy()
+        resumo_export = aplicar_colunas_estabelecimento(resumo_export, config)
         if len(resultado.resumo_classe) > 0:
-            resultado.resumo_classe.to_csv(resumo_csv_path, index=False)
+            resumo_export.to_csv(resumo_csv_path, index=False)
         
         # Excel com múltiplas abas
         xlsx_path = output_dir / f'resultado_realocacao_completo_{timestamp}.xlsx'
@@ -151,6 +156,7 @@ def salvar_resultados(
             resultado_etl,
             config
         )
+        df_estatisticas = aplicar_colunas_estabelecimento(df_estatisticas, config)
         
         # Verificar pedidos ignorados
         pedidos_ignorados = getattr(resultado_etl, 'pedidos_ignorados', [])
@@ -162,7 +168,7 @@ def salvar_resultados(
             
             # Aba 2: Resumo por Classe
             if len(resultado.resumo_classe) > 0:
-                resultado.resumo_classe.to_excel(writer, sheet_name='Resumo por Classe', index=False)
+                resumo_export.to_excel(writer, sheet_name='Resumo por Classe', index=False)
             
             # Aba 3: Estatísticas
             df_estatisticas.to_excel(writer, sheet_name='Estatísticas', index=False)
@@ -173,12 +179,14 @@ def salvar_resultados(
                 df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
                 if 'quantidade_pedida' in df_pedidos_ignorados.columns:
                     df_pedidos_ignorados = df_pedidos_ignorados.sort_values('quantidade_pedida', ascending=False)
+                df_pedidos_ignorados = aplicar_colunas_estabelecimento(df_pedidos_ignorados, config)
                 df_pedidos_ignorados.to_excel(writer, sheet_name='Pedidos Ignorados', index=False)
         
         # Salvar pedidos ignorados separadamente (se houver)
         if len(pedidos_ignorados) > 0:
             pedidos_ign_csv = output_dir / f'pedidos_ignorados_{timestamp}.csv'
             df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
+            df_pedidos_ignorados = aplicar_colunas_estabelecimento(df_pedidos_ignorados, config)
             df_pedidos_ignorados.to_csv(pedidos_ign_csv, index=False)
         
         # Log
@@ -268,6 +276,7 @@ def salvar_demanda_historica(resultado_etl, config: dict, logger: logging.Logger
     # Ordem das colunas: item, descricao, classe, demanda_max
     col_order = ['item', 'descricao', 'classe', 'demanda_max']
     df_demanda = df_demanda[[c for c in col_order if c in df_demanda.columns]]
+    df_demanda = aplicar_colunas_estabelecimento(df_demanda, config)
     
     output_dir = Path('resultados')
     output_dir.mkdir(exist_ok=True)
@@ -288,6 +297,7 @@ def salvar_demanda_historica(resultado_etl, config: dict, logger: logging.Logger
         {'parametro': 'skus_com_limite', 'valor': len(df_demanda)},
         {'parametro': 'data_geracao', 'valor': timestamp},
     ])
+    df_param = aplicar_colunas_estabelecimento(df_param, config)
     
     with pd.ExcelWriter(path_xlsx, engine='openpyxl') as writer:
         df_demanda.to_excel(writer, sheet_name='Demanda', index=False)

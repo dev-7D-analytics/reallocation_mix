@@ -14,7 +14,7 @@ realocando volume de produção entre SKUs da mesma classe biológica de ovos.
 ```
 realocacao-git/
 ├── config.yaml                          # Configuração central (parâmetros, paths)
-├── main.py                              # Orquestrador: ETL -> Otimização -> Output
+├── main.py                              # Orquestrador: ETL -> Otimização -> Output -> Comparação -> PBI
 ├── executar_pipeline.sh                 # Shell script para rodar pipeline completo (Linux/Mac)
 ├── executar_pipeline.bat                # Batch script para rodar pipeline completo (Windows)
 ├── requirements.txt                     # Dependências Python
@@ -30,6 +30,8 @@ realocacao-git/
 ├── output/
 │   ├── __init__.py
 │   ├── comparativo.py                   # Comparativo baseline vs otimizado + auditoria
+│   ├── distribuicao_historica_dow.py    # Distribuição diária DOW (semanal)
+│   ├── gerar_consolidado_pbi.py         # Consolidação final PBI (CSV + XLSX)
 │   └── resultados.py                    # Salvamento de resultados (CSV/Excel)
 │
 ├── gerar_pedidos_clientes.py            # Gera pedidos_clientes.csv a partir da CARTEIRA_VENDIDA.xlsx
@@ -71,10 +73,7 @@ na ordem indicada:
      ├─ PRODUÇÃO DIA.xlsx ────► gerar_producao_classe.py ──► inputs/producao_classe.csv (editável)
      │   base_skus_classes.xlsx
      │
-     └──────────────────────────► main.py (ETL + Otimização + Output)
-                                    │
-                                    ▼
-                                comparar_producao_alocacao.py (relatório final)
+     └──────────────────────────► main.py (ETL + Otimização + Output + Comparação + PBI)
 ```
 
 ### Inputs editáveis pelo usuário
@@ -94,15 +93,15 @@ Os CSVs já saem com os cálculos aplicados (ex: fator multiplicativo na demanda
 
 | Base de dados atualizada | Scripts a re-executar (na ordem) |
 |---|---|
-| `manti_fat_*.parquet` (faturamento) | `extrair_compatibilidade_embalagem.py` -> `extrair_precos_embalagem.py` -> `gerar_demanda_historica.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `CARTEIRA_VENDIDA.xlsx` (carteira vendida) | `gerar_pedidos_clientes.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `PRODUÇÃO DIA.xlsx` (produção diária) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `MANTI-PRIC_Custos_*.parquet` (custos) | `gerar_custos_sku.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `base_skus_classes.xlsx` (classificação) | `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `skus_restritos.xlsx` (SKUs permitidos) | `gerar_pedidos_clientes.py` -> `gerar_producao_classe.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `ESTAB CORRIGIDO.xlsx` (estab. corrigido) | `gerar_demanda_historica.py` -> `main.py` -> `comparar_producao_alocacao.py` |
-| `config.yaml` (parâmetros) | `main.py` -> `comparar_producao_alocacao.py` (e geradores de input se janela/granularidade mudaram) |
-| Edição manual de CSV (preço/custo/demanda) | `main.py` -> `comparar_producao_alocacao.py` |
+| `manti_fat_*.parquet` (faturamento) | `extrair_compatibilidade_embalagem.py` -> `extrair_precos_embalagem.py` -> `gerar_demanda_historica.py` -> `main.py` |
+| `CARTEIRA_VENDIDA.xlsx` (carteira vendida) | `gerar_pedidos_clientes.py` -> `main.py` |
+| `PRODUÇÃO DIA.xlsx` (produção diária) | `gerar_producao_classe.py` -> `main.py` |
+| `MANTI-PRIC_Custos_*.parquet` (custos) | `gerar_custos_sku.py` -> `main.py` |
+| `base_skus_classes.xlsx` (classificação) | `gerar_producao_classe.py` -> `main.py` |
+| `skus_restritos.xlsx` (SKUs permitidos) | `gerar_pedidos_clientes.py` -> `gerar_producao_classe.py` -> `main.py` |
+| `ESTAB CORRIGIDO.xlsx` (estab. corrigido) | `gerar_demanda_historica.py` -> `main.py` |
+| `config.yaml` (parâmetros) | `main.py` (e geradores de input se janela/granularidade mudaram) |
+| Edição manual de CSV (preço/custo/demanda) | `main.py` |
 
 ## Entradas esperadas (configuradas em `config.yaml`)
 
@@ -234,8 +233,9 @@ python gerar_custos_sku.py                     # 3. Custos por SKU
 python gerar_demanda_historica.py              # 4. Demanda histórica por SKU
 python gerar_pedidos_clientes.py               # 5. Pedidos de clientes
 python gerar_producao_classe.py                # 6. Produção por classe
-python main.py                                 # 7. ETL + Otimização + Output
-python comparar_producao_alocacao.py           # 8. Relatório comparativo
+python main.py                                 # 7. ETL + Otimização + Output + DOW + Comparação + PBI
+# python comparar_producao_alocacao.py         # (opcional) gerar relatório comparativo avulso
+# python output/gerar_consolidado_pbi.py       # (opcional) gerar consolidado PBI avulso
 ```
 
 > **Nota**: No Windows use `python` em vez de `python3`. No Linux/Mac use `python3` ou `python` (depende da instalação). Os CSVs gerados nos passos 2-6 podem ser editados manualmente antes de rodar o passo 7.
@@ -253,6 +253,9 @@ Arquivos gerados na pasta `resultados/`.
 | `auditoria_baseline_*.xlsx` | Auditoria: Detalhe por SKU, Resumo por Classe, Parâmetros |
 | `demanda_historica_*.xlsx` | Limites de demanda histórica calculados |
 | `comparacao_producao_alocacao_*.xlsx` | Comparação produção real vs alocação do modelo |
+| `distribuicao_historica_dow_*.xlsx` | Distribuição histórica diária por SKU (DOW) |
+| `pbi_consolidado_sku_*.csv` | Consolidação SKU para BI (flat) |
+| `pbi_consolidado_*.xlsx` | Consolidação BI com abas: consolidado_sku, distribuicao_diaria, parametros |
 
 ## Configuração relevante (`config.yaml`)
 
