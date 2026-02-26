@@ -609,6 +609,13 @@ def carregar_alocacao(arquivo_resultado: Optional[str], sep: str = ",", decimal:
     df_aloc["embalagem"] = df_aloc["embalagem"].astype(str)
     df_aloc["classe"] = df_aloc["classe"].fillna("OUTROS")
 
+    # tipo=reserva: quantidade no resultado representa o pedido garantido (r_res),
+    # não uma decisão do otimizador (x_aloc=0 por definição).
+    # Zerar aqui para que quantidade_alocada reflita apenas alocação via otimização;
+    # o volume reservado será mapeado em quantidade_reservada (via pedidos_clientes).
+    if "tipo" in df_aloc.columns:
+        df_aloc.loc[df_aloc["tipo"] == "reserva", "quantidade"] = 0
+
     agg_dict = {"quantidade": "sum"}
     if "tipo" in df_aloc.columns:
         agg_dict["tipo"] = "first"
