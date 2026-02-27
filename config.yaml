@@ -23,6 +23,9 @@ dados:
   # Outros filtros
   semana_ref: 2026-07             # Semana de referência para produção (usado quando granularidade = S)
   data_ref: '2026-02-11'          # Data de referência para produção (usado quando granularidade = D ou M)
+  # Referências independentes para PEDIDOS (granularidade segue modelo.granularidade_demanda)
+  pedidos_semana_ref: 2026-08     # Referência semanal para pedidos (usado quando granularidade = S)
+  pedidos_data_ref: '2026-02-11'  # Referência diária/mensal para pedidos (usado quando granularidade = D ou M)
   # Distribuição histórica por dia da semana (DOW) - usada apenas quando granularidade = S
   # Se não informados, o código faz fallback para ano_custo/mes_custo/meses_janela_custo
   dow_ano_ref: 2026               # Ano de referência da janela histórica DOW

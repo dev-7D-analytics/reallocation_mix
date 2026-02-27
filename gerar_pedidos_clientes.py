@@ -51,6 +51,12 @@ def main():
     print("=" * 80)
 
     config = carregar_config()
+    dados_cfg = config.get('dados', {})
+    avisos = []
+
+    def registrar_aviso(msg: str):
+        avisos.append(msg)
+        print(f"  [AVISO] {msg}")
 
     # Caminhos
     path_carteira = Path(config.get('paths', {}).get('carteira_vendida', 'inputs/CARTEIRA_VENDIDA.xlsx'))
@@ -89,24 +95,57 @@ def main():
     else:
         print("  [AVISO] Lista de SKUs ativos não encontrada, usando todos")
 
-    # Filtro: Período de entrega conforme granularidade do config
+    # Filtro: Período de entrega conforme granularidade do modelo.
+    # Referências de pedidos são independentes das referências de produção:
+    # - semanal: dados.pedidos_semana_ref (fallback: dados.semana_ref)
+    # - diário/mensal: dados.pedidos_data_ref (fallback: dados.data_ref)
     df['Dt.Entrega'] = pd.to_datetime(df['Dt.Entrega'], errors='coerce')
     granularidade = config.get('modelo', {}).get('granularidade_demanda', 'S').upper()
     antes_periodo = len(df)
+    pedidos_semana_ref = dados_cfg.get('pedidos_semana_ref')
+    pedidos_data_ref = dados_cfg.get('pedidos_data_ref')
+    semana_ref_modelo = dados_cfg.get('semana_ref')
+    data_ref_modelo = dados_cfg.get('data_ref')
+
+    # Warnings de combinação inválida (chave informada mas incompatível com granularidade ativa)
+    if granularidade == 'S':
+        if pedidos_data_ref not in [None, ""]:
+            registrar_aviso(
+                "dados.pedidos_data_ref foi informado, mas será ignorado porque "
+                "granularidade_demanda='S' (usa referência semanal)."
+            )
+    elif granularidade in ['D', 'M']:
+        if pedidos_semana_ref not in [None, ""]:
+            registrar_aviso(
+                "dados.pedidos_semana_ref foi informado, mas será ignorado porque "
+                f"granularidade_demanda='{granularidade}' (usa referência por data)."
+            )
+
+    # Warnings de fallback para referências gerais
+    if granularidade == 'S' and pedidos_semana_ref in [None, ""]:
+        registrar_aviso(
+            "dados.pedidos_semana_ref não informado; usando fallback dados.semana_ref."
+        )
+    if granularidade in ['D', 'M'] and pedidos_data_ref in [None, ""]:
+        registrar_aviso(
+            "dados.pedidos_data_ref não informado; usando fallback dados.data_ref."
+        )
 
     if granularidade == 'D':
-        data_ref = pd.to_datetime(config['dados'].get('data_ref'))
+        data_ref_raw = pedidos_data_ref if pedidos_data_ref not in [None, ""] else data_ref_modelo
+        data_ref = pd.to_datetime(data_ref_raw)
         df = df[df['Dt.Entrega'].dt.date == data_ref.date()].copy()
         periodo_desc = f"dia {data_ref.strftime('%Y-%m-%d')}"
     elif granularidade == 'M':
-        data_ref = pd.to_datetime(config['dados'].get('data_ref'))
+        data_ref_raw = pedidos_data_ref if pedidos_data_ref not in [None, ""] else data_ref_modelo
+        data_ref = pd.to_datetime(data_ref_raw)
         df = df[
             (df['Dt.Entrega'].dt.year == data_ref.year) &
             (df['Dt.Entrega'].dt.month == data_ref.month)
         ].copy()
         periodo_desc = f"mês {data_ref.strftime('%Y-%m')}"
     else:
-        semana_ref = config['dados']['semana_ref']
+        semana_ref = pedidos_semana_ref if pedidos_semana_ref not in [None, ""] else semana_ref_modelo
         df['year_week'] = (
             df['Dt.Entrega'].dt.isocalendar().year.astype(str) + '-' +
             df['Dt.Entrega'].dt.isocalendar().week.astype(str).str.zfill(2)
@@ -118,6 +157,12 @@ def main():
 
     if len(df) == 0:
         print("[AVISO] Nenhum registro após filtros")
+        if avisos:
+            print("\n" + "-" * 80)
+            print("RESUMO DE AVISOS")
+            print("-" * 80)
+            for i, msg in enumerate(avisos, 1):
+                print(f"  {i}. {msg}")
         return
 
     # 3. Converter quantidades
@@ -188,6 +233,13 @@ def main():
     for _, r in pedidos.head(15).iterrows():
         desc = str(r['descricao'])[:45]
         print(f"  {r['item']:>8} {desc:45s} {r['quantidade']:>12,} ovos  R${r['preco_pedido']:>8.2f}/cx  {r['n_pedidos']:>3} ped")
+
+    if avisos:
+        print("\n" + "-" * 80)
+        print("RESUMO DE AVISOS")
+        print("-" * 80)
+        for i, msg in enumerate(avisos, 1):
+            print(f"  {i}. {msg}")
 
     return pedidos
 

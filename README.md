@@ -252,18 +252,32 @@ Arquivos gerados na pasta `resultados/`.
 | `resultado_realocacao_completo_*.xlsx` | Excel com abas: Detalhado, Resumo por Classe, Estatísticas, Pedidos Ignorados |
 | `auditoria_baseline_*.xlsx` | Auditoria: Detalhe por SKU, Resumo por Classe, Parâmetros |
 | `demanda_historica_*.xlsx` | Limites de demanda histórica calculados |
-| `comparacao_producao_alocacao_*.xlsx` | Comparação produção real vs alocação do modelo |
+| `comparacao_producao_alocacao_*.xlsx` | Comparação produção real vs alocação do modelo (inclui `quantidade_nao_atendida_pedido`) |
 | `distribuicao_historica_dow_*.xlsx` | Distribuição histórica diária por SKU (DOW) |
-| `pbi_consolidado_sku_*.csv` | Consolidação SKU para BI (flat) |
-| `pbi_consolidado_*.xlsx` | Consolidação BI com abas: consolidado_sku, distribuicao_diaria, parametros |
+| `pbi_consolidado_sku_*.csv` | Consolidação SKU para BI (flat, inclui `quantidade_nao_atendida_pedido`) |
+| `pbi_consolidado_*.xlsx` | Consolidação BI com abas: consolidado_sku, distribuicao_diaria, parametros (inclui `quantidade_nao_atendida_pedido` na aba consolidado_sku) |
 
 ## Configuração relevante (`config.yaml`)
 
 - **Objetivo**: `modelo.tipo_objetivo` = `maximizar_margem` (padrão)
 - **Pedidos**: `modelo.atender_pedidos` (True prioriza pedidos garantidos)
+- **Referência temporal de pedidos (independente)**:
+  - `dados.pedidos_semana_ref` (usado quando `modelo.granularidade_demanda = S`)
+  - `dados.pedidos_data_ref` (usado quando `modelo.granularidade_demanda = D` ou `M`)
+  - a granularidade dos pedidos segue `modelo.granularidade_demanda`; apenas a referência temporal é independente
 - **Cap de reserva**: `modelo.capar_reserva_na_producao` (True limita reservas à produção disponível, priorizando por margem)
 - **Demanda histórica**: `modelo.considerar_demanda_historica`, `granularidade_demanda` (M/S/D), `tipo_calculo_demanda` (`percentil`, `maximo`, `media`)
 - **Solver**: `solver.solver_type`, `time_limit_ms`, `num_threads`
+
+### Regras de filtro de pedidos por período
+
+O script `gerar_pedidos_clientes.py` aplica o filtro de período pela data de entrega (`Dt.Entrega`) assim:
+
+- `granularidade_demanda = S`: usa `dados.pedidos_semana_ref` (fallback: `dados.semana_ref`)
+- `granularidade_demanda = D`: usa `dados.pedidos_data_ref` (fallback: `dados.data_ref`) no dia exato
+- `granularidade_demanda = M`: usa `dados.pedidos_data_ref` (fallback: `dados.data_ref`) no mês da data
+
+Quando o usuário informa uma referência incompatível com a granularidade ativa (ex.: `pedidos_semana_ref` com granularidade `D`/`M`), o script emite aviso durante o filtro e repete no resumo final.
 
 ## Autor
 
