@@ -761,7 +761,8 @@ onde:
 \begin{itemize}
     \item $x_i^{\text{aloc}} \geq 0$ representa o volume alocado pelo otimizador
         a partir do excedente da classe, correspondente à coluna
-        \texttt{quantidade} no output do modelo;
+        \texttt{quantidade} no output do modelo para linhas com
+        \texttt{tipo=otimizacao};
     \item $r_i^{\text{res}} \geq 0$ representa o volume reservado por pedido
         garantido, sendo igual a zero quando o SKU não possui pedido vinculado,
         correspondente à coluna \texttt{quantidade\_reservada} no comparador.
