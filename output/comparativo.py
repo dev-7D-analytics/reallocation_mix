@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict
 
-from metadados_output import aplicar_colunas_estabelecimento
+from output.metadados_output import aplicar_colunas_estabelecimento
 
 
 def calcular_comparativo_baseline(

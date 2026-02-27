@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 import yaml
 
-from metadados_output import aplicar_colunas_estabelecimento
+from output.metadados_output import aplicar_colunas_estabelecimento
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = PROJECT_ROOT / "resultados"

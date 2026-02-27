@@ -28,7 +28,7 @@ from extrair_compatibilidade_embalagem import (
     extrair_embalagem_descricao,
     calcular_qtd_embalagem,
 )
-from metadados_output import aplicar_colunas_estabelecimento
+from output.metadados_output import aplicar_colunas_estabelecimento
 
 
 # ---------------------------------------------------------------------------

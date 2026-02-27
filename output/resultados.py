@@ -15,7 +15,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
 
-from metadados_output import aplicar_colunas_estabelecimento
+from output.metadados_output import aplicar_colunas_estabelecimento
 
 
 def criar_aba_estatisticas(
