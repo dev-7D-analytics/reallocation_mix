@@ -1248,7 +1248,8 @@ def main():
         for col_extra in ['preco_pedido', 'data_entrega_min', 'data_entrega_max',
                           'n_pedidos', 'n_clientes', 'qt_pedida_caixas']:
             if col_extra in pedidos_idx.columns:
-                comparacao[col_extra] = comparacao["item"].map(pedidos_idx[col_extra].to_dict())
+                col_destino = "preco_medio_pedido" if col_extra == "preco_pedido" else col_extra
+                comparacao[col_destino] = comparacao["item"].map(pedidos_idx[col_extra].to_dict())
     else:
         comparacao["tem_pedido"] = False
         comparacao["quantidade_reservada"] = 0
@@ -1450,7 +1451,7 @@ def main():
         'periodo_demanda_mes_ref', 'periodo_demanda_ano_ref', 'periodo_demanda_janela_meses',
         'tipo_calculo_demanda', 'granularidade_demanda',
         # === PEDIDOS (CARTEIRA VENDIDA) ===
-        'preco_pedido', 'data_entrega_min', 'data_entrega_max',
+        'preco_medio_pedido', 'data_entrega_min', 'data_entrega_max',
         'n_pedidos', 'n_clientes', 'qt_pedida_caixas',
         # === FLAGS / STATUS ===
         'tipo', 'origem_dado', 'tem_pedido', 'pedido_ignorado', 'sku_restrito',

@@ -95,6 +95,8 @@ def _carregar_comparacao() -> Optional[pd.DataFrame]:
         return None
     print(f"  Comparacao: {path.name}")
     df = pd.read_csv(path)
+    if "preco_pedido" in df.columns and "preco_medio_pedido" not in df.columns:
+        df = df.rename(columns={"preco_pedido": "preco_medio_pedido"})
     if "margem_unitaria" in df.columns and "margem_unitaria_cx360" not in df.columns:
         df["margem_unitaria_cx360"] = df["margem_unitaria"]
     # Compatibilidade: comparação antiga pode não ter coluna explícita de déficit.
