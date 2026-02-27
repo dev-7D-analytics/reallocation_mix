@@ -680,6 +680,9 @@ def agregar_comparacao_por_item(
         "quantidade_alocada": "sum",
         "quantidade_reservada": "max",  # mesmo valor em todas as linhas do item
     }
+    if "quantidade_nao_atendida_pedido" in comparacao.columns:
+        # Déficit é único por SKU no resultado; usar max evita duplicidade após merge
+        agg_dict["quantidade_nao_atendida_pedido"] = "max"
     # Colunas que mantemos com o primeiro valor não nulo (ou primeiro)
     for col in comparacao.columns:
         if col in agg_dict or col == "item":
@@ -687,9 +690,9 @@ def agregar_comparacao_por_item(
         if col not in agg_dict:
             agg_dict[col] = "first"
     # Garantir que colunas numéricas de quantidade não viram "first"
-    for k in ["quantidade_produzida", "quantidade_alocada", "quantidade_reservada"]:
+    for k in ["quantidade_produzida", "quantidade_alocada", "quantidade_reservada", "quantidade_nao_atendida_pedido"]:
         if k in agg_dict and agg_dict[k] == "first":
-            agg_dict[k] = "sum" if k != "quantidade_reservada" else "max"
+            agg_dict[k] = "sum" if k not in ["quantidade_reservada", "quantidade_nao_atendida_pedido"] else "max"
     # Agrupar
     por_item = comparacao.groupby("item", as_index=False).agg(agg_dict)
     # Recalcular diferenças
@@ -836,6 +839,7 @@ def main():
     margem_por_ovo_por_item = {}  # item -> margem_por_ovo (R$/ovo - métrica otimizada)
     df_demanda_historica = pd.DataFrame(columns=["item", "descricao", "classe", "demanda_max"])
     df_param_demanda = pd.DataFrame(columns=["parametro", "valor"])
+    deficit_pedido_por_item = {}
     try:
         df_aloc_completo = pd.read_csv(caminho_resultado)
         if 'tem_demanda_historica' in df_aloc_completo.columns and 'item' in df_aloc_completo.columns:
@@ -854,6 +858,11 @@ def main():
         if 'margem_por_ovo' in df_aloc_completo.columns and 'item' in df_aloc_completo.columns:
             # Pegar o primeiro valor de margem_por_ovo para cada SKU
             margem_por_ovo_por_item = df_aloc_completo.groupby('item')['margem_por_ovo'].first().to_dict()
+
+        # Extrair déficit de pedido por item (pedido não atendido por falta de produção da classe)
+        if 'deficit_pedido' in df_aloc_completo.columns and 'item' in df_aloc_completo.columns:
+            df_aloc_completo['deficit_pedido'] = pd.to_numeric(df_aloc_completo['deficit_pedido'], errors='coerce').fillna(0.0)
+            deficit_pedido_por_item = df_aloc_completo.groupby('item')['deficit_pedido'].max().to_dict()
         
         # Extrair usa_custo_medio_classe por item_id
         if 'usa_custo_medio_classe' in df_aloc_completo.columns and 'item_id' in df_aloc_completo.columns:
@@ -1232,6 +1241,7 @@ def main():
         pedidos_dict = pedidos.set_index('item')['quantidade_total_pedida'].to_dict()
         comparacao["tem_pedido"] = comparacao["item"].isin(skus_com_pedido)
         comparacao["quantidade_reservada"] = comparacao["item"].map(pedidos_dict).fillna(0)
+        comparacao["quantidade_nao_atendida_pedido"] = comparacao["item"].map(deficit_pedido_por_item).fillna(0.0)
         
         # Campos enriquecidos da carteira vendida
         pedidos_idx = pedidos.set_index('item')
@@ -1242,6 +1252,7 @@ def main():
     else:
         comparacao["tem_pedido"] = False
         comparacao["quantidade_reservada"] = 0
+        comparacao["quantidade_nao_atendida_pedido"] = 0.0
     
     # 3. pedido_ignorado: SKU tem pedido que foi ignorado
     if len(pedidos_ignorados) > 0:
@@ -1431,7 +1442,7 @@ def main():
         # === PERÍODO ===
         'periodo_label', 'data_producao',
         # === QUANTIDADES ===
-        'quantidade_produzida', 'quantidade_alocada', 'quantidade_reservada', 'diferenca_aloc_menos_prod', 'diferenca_absoluta',
+        'quantidade_produzida', 'quantidade_alocada', 'quantidade_reservada', 'quantidade_nao_atendida_pedido', 'diferenca_aloc_menos_prod', 'diferenca_absoluta',
         # === FINANCEIRO UNITÁRIO ===
         'preco', 'custo_ytd', 'margem_unitaria', 'margem_unitaria_cx360', 'margem_por_ovo',
         # === DEMANDA HISTÓRICA ===
@@ -1583,6 +1594,7 @@ def main():
                     'quantidade_produzida': 0.0,
                     'quantidade_alocada': 0.0,
                     'quantidade_reservada': 0.0,
+                    'quantidade_nao_atendida_pedido': 0.0,
                     'periodo_label': periodo_label,
                     'data_producao': producao['data_producao'].iloc[0] if len(producao) > 0 else pd.NaT,
                     'diferenca_aloc_menos_prod': 0.0,
@@ -1632,6 +1644,7 @@ def main():
         "quantidade_produzida": "cx360_produzida",
         "quantidade_alocada": "cx360_alocada",
         "quantidade_reservada": "cx360_reservada",
+        "quantidade_nao_atendida_pedido": "cx360_nao_atendida_pedido",
         "quantidade_total_pedida": "cx360_total_pedida",
         "diferenca_aloc_menos_prod": "cx360_diferenca",
     }
@@ -1645,6 +1658,7 @@ def main():
         "quantidade_produzida": "cxfisica_produzida",
         "quantidade_alocada": "cxfisica_alocada",
         "quantidade_reservada": "cxfisica_reservada",
+        "quantidade_nao_atendida_pedido": "cxfisica_nao_atendida_pedido",
         "diferenca_aloc_menos_prod": "cxfisica_diferenca",
     }
     for col_origem, col_cx in colunas_qtd_cxfisica.items():
@@ -1658,10 +1672,10 @@ def main():
     # Ordem de colunas para exportação: quantidades agrupadas (ovos, cx360, cxfisica)
     colunas_ordenadas = [
         "item_id", "item", "descricao", "embalagem", "ovos_por_caixa", "classe",
-        "quantidade_produzida", "quantidade_alocada", "quantidade_reservada",
+        "quantidade_produzida", "quantidade_alocada", "quantidade_reservada", "quantidade_nao_atendida_pedido",
         "diferenca_aloc_menos_prod", "diferenca_absoluta",
-        "cx360_produzida", "cx360_alocada", "cx360_reservada", "cx360_diferenca",
-        "cxfisica_produzida", "cxfisica_alocada", "cxfisica_reservada", "cxfisica_diferenca",
+        "cx360_produzida", "cx360_alocada", "cx360_reservada", "cx360_nao_atendida_pedido", "cx360_diferenca",
+        "cxfisica_produzida", "cxfisica_alocada", "cxfisica_reservada", "cxfisica_nao_atendida_pedido", "cxfisica_diferenca",
         "periodo_label", "data_producao",
         "preco", "custo_ytd", "margem_unitaria", "margem_unitaria_cx360", "margem_por_ovo",
         "tem_demanda_historica", "demanda_max", "limite_demanda_historica",

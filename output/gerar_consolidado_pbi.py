@@ -97,6 +97,12 @@ def _carregar_comparacao() -> Optional[pd.DataFrame]:
     df = pd.read_csv(path)
     if "margem_unitaria" in df.columns and "margem_unitaria_cx360" not in df.columns:
         df["margem_unitaria_cx360"] = df["margem_unitaria"]
+    # Compatibilidade: comparação antiga pode não ter coluna explícita de déficit.
+    if "quantidade_nao_atendida_pedido" not in df.columns:
+        if "deficit_pedido" in df.columns:
+            df["quantidade_nao_atendida_pedido"] = pd.to_numeric(df["deficit_pedido"], errors="coerce").fillna(0.0)
+        else:
+            df["quantidade_nao_atendida_pedido"] = 0.0
     return df
 
 
@@ -109,6 +115,11 @@ def _carregar_auditoria() -> Optional[pd.DataFrame]:
     df = pd.read_excel(path, sheet_name="Detalhe por SKU")
     if "margem_unitaria" in df.columns and "margem_unitaria_cx360" not in df.columns:
         df["margem_unitaria_cx360"] = df["margem_unitaria"]
+    if "quantidade_nao_atendida_pedido" not in df.columns:
+        if "deficit_pedido" in df.columns:
+            df["quantidade_nao_atendida_pedido"] = pd.to_numeric(df["deficit_pedido"], errors="coerce").fillna(0.0)
+        else:
+            df["quantidade_nao_atendida_pedido"] = 0.0
     return df
 
 
