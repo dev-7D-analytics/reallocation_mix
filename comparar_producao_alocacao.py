@@ -514,16 +514,22 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
     # ACA = produção positiva; EAC = estorno (deve ser negativo)
     col_esp = next((c for c in ["Esp", "ESP", "Especie", "Espécie"] if c in df_prod.columns), None)
     df_prod["Quantidade"] = pd.to_numeric(df_prod["Quantidade"], errors="coerce").fillna(0.0)
+    quantidade_assinada = df_prod["Quantidade"].copy()
     if col_esp is not None:
         esp_serie = df_prod[col_esp].astype(str).str.strip().str.upper()
         mask_eac = esp_serie == "EAC"
         mask_aca = esp_serie == "ACA"
-        df_prod.loc[mask_eac, "Quantidade"] = -df_prod.loc[mask_eac, "Quantidade"].abs()
-        df_prod.loc[mask_aca, "Quantidade"] = df_prod.loc[mask_aca, "Quantidade"].abs()
+        quantidade_assinada.loc[mask_eac] = -quantidade_assinada.loc[mask_eac].abs()
+        quantidade_assinada.loc[mask_aca] = quantidade_assinada.loc[mask_aca].abs()
 
     df_prod["embalagem"] = df_prod["Desc Item"].apply(extrair_embalagem_descricao)
     df_prod["qtd_embalagem"] = df_prod["embalagem"].apply(calcular_qtd_embalagem)
-    df_prod["quantidade"] = df_prod["Quantidade"] * df_prod["qtd_embalagem"]
+    # Produção bruta: somente movimentos positivos (ACA).
+    df_prod["quantidade"] = df_prod["Quantidade"].clip(lower=0) * df_prod["qtd_embalagem"]
+    # Estorno EAC em volume positivo para rastreabilidade.
+    df_prod["quantidade_estorno_eac"] = (-quantidade_assinada.clip(upper=0)) * df_prod["qtd_embalagem"]
+    # Produção líquida efetivamente disponível ao modelo (ACA - EAC).
+    df_prod["quantidade_produzida_liquida_modelo"] = quantidade_assinada * df_prod["qtd_embalagem"]
 
     df_prod["item"] = pd.to_numeric(df_prod["Cod Item"], errors="coerce")
     df_prod = df_prod[
@@ -569,9 +575,12 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
     df_prod["classe"] = df_prod["classe"].fillna("OUTROS")
 
     prod_agg = (
-        df_prod.groupby(["item", "embalagem", "item_id", "classe"], as_index=False)["quantidade"]
-        .sum()
-        .rename(columns={"quantidade": "quantidade_produzida"})
+        df_prod.groupby(["item", "embalagem", "item_id", "classe"], as_index=False)
+        .agg(
+            quantidade_produzida=("quantidade", "sum"),
+            quantidade_estorno_eac=("quantidade_estorno_eac", "sum"),
+            quantidade_produzida_liquida_modelo=("quantidade_produzida_liquida_modelo", "sum"),
+        )
     )
     prod_agg["periodo_label"] = periodo_label
     prod_agg["data_producao"] = data_producao
@@ -635,6 +644,10 @@ def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, periodo
         how="outer",
     )
     comparacao["quantidade_produzida"] = comparacao["quantidade_produzida"].fillna(0)
+    if "quantidade_estorno_eac" in comparacao.columns:
+        comparacao["quantidade_estorno_eac"] = comparacao["quantidade_estorno_eac"].fillna(0)
+    if "quantidade_produzida_liquida_modelo" in comparacao.columns:
+        comparacao["quantidade_produzida_liquida_modelo"] = comparacao["quantidade_produzida_liquida_modelo"].fillna(0)
     comparacao["quantidade_alocada"] = comparacao["quantidade_alocada"].fillna(0)
     comparacao["diferenca_aloc_menos_prod"] = comparacao["quantidade_alocada"] - comparacao["quantidade_produzida"]
     comparacao["diferenca_absoluta"] = comparacao["diferenca_aloc_menos_prod"].abs()   
@@ -677,6 +690,8 @@ def agregar_comparacao_por_item(
     # Quantidades: soma produção e alocação; reserva é única por item -> max para não duplicar
     agg_dict = {
         "quantidade_produzida": "sum",
+        "quantidade_estorno_eac": "sum",
+        "quantidade_produzida_liquida_modelo": "sum",
         "quantidade_alocada": "sum",
         "quantidade_reservada": "max",  # mesmo valor em todas as linhas do item
     }
@@ -690,7 +705,7 @@ def agregar_comparacao_por_item(
         if col not in agg_dict:
             agg_dict[col] = "first"
     # Garantir que colunas numéricas de quantidade não viram "first"
-    for k in ["quantidade_produzida", "quantidade_alocada", "quantidade_reservada", "quantidade_nao_atendida_pedido"]:
+    for k in ["quantidade_produzida", "quantidade_estorno_eac", "quantidade_produzida_liquida_modelo", "quantidade_alocada", "quantidade_reservada", "quantidade_nao_atendida_pedido"]:
         if k in agg_dict and agg_dict[k] == "first":
             agg_dict[k] = "sum" if k not in ["quantidade_reservada", "quantidade_nao_atendida_pedido"] else "max"
     # Agrupar
@@ -1164,6 +1179,8 @@ def main():
                     'periodo_label': periodo_label,
                     'data_producao': producao['data_producao'].iloc[0] if len(producao) > 0 else pd.NaT,
                     'quantidade_produzida': 0,
+                    'quantidade_estorno_eac': 0,
+                    'quantidade_produzida_liquida_modelo': 0,
                     'quantidade_alocada': 0,
                     'diferenca_aloc_menos_prod': 0,
                     'diferenca_absoluta': 0,
@@ -1443,7 +1460,8 @@ def main():
         # === PERÍODO ===
         'periodo_label', 'data_producao',
         # === QUANTIDADES ===
-        'quantidade_produzida', 'quantidade_alocada', 'quantidade_reservada', 'quantidade_nao_atendida_pedido', 'diferenca_aloc_menos_prod', 'diferenca_absoluta',
+        'quantidade_produzida', 'quantidade_estorno_eac', 'quantidade_produzida_liquida_modelo',
+        'quantidade_alocada', 'quantidade_reservada', 'quantidade_nao_atendida_pedido', 'diferenca_aloc_menos_prod', 'diferenca_absoluta',
         # === FINANCEIRO UNITÁRIO ===
         'preco', 'custo_ytd', 'margem_unitaria', 'margem_unitaria_cx360', 'margem_por_ovo',
         # === DEMANDA HISTÓRICA ===
@@ -1593,6 +1611,8 @@ def main():
                     'embalagem': embalagem if embalagem else 'SEM_EMBALAGEM',
                     'classe': classe,
                     'quantidade_produzida': 0.0,
+                    'quantidade_estorno_eac': 0.0,
+                    'quantidade_produzida_liquida_modelo': 0.0,
                     'quantidade_alocada': 0.0,
                     'quantidade_reservada': 0.0,
                     'quantidade_nao_atendida_pedido': 0.0,
@@ -1643,6 +1663,8 @@ def main():
     OVOS_POR_CAIXA = 360
     colunas_qtd_cx360 = {
         "quantidade_produzida": "cx360_produzida",
+        "quantidade_estorno_eac": "cx360_estorno_eac",
+        "quantidade_produzida_liquida_modelo": "cx360_produzida_liquida_modelo",
         "quantidade_alocada": "cx360_alocada",
         "quantidade_reservada": "cx360_reservada",
         "quantidade_nao_atendida_pedido": "cx360_nao_atendida_pedido",
@@ -1657,6 +1679,8 @@ def main():
     comparacao["ovos_por_caixa"] = comparacao["embalagem"].apply(extrair_ovos_por_caixa)
     colunas_qtd_cxfisica = {
         "quantidade_produzida": "cxfisica_produzida",
+        "quantidade_estorno_eac": "cxfisica_estorno_eac",
+        "quantidade_produzida_liquida_modelo": "cxfisica_produzida_liquida_modelo",
         "quantidade_alocada": "cxfisica_alocada",
         "quantidade_reservada": "cxfisica_reservada",
         "quantidade_nao_atendida_pedido": "cxfisica_nao_atendida_pedido",
@@ -1673,10 +1697,13 @@ def main():
     # Ordem de colunas para exportação: quantidades agrupadas (ovos, cx360, cxfisica)
     colunas_ordenadas = [
         "item_id", "item", "descricao", "embalagem", "ovos_por_caixa", "classe",
-        "quantidade_produzida", "quantidade_alocada", "quantidade_reservada", "quantidade_nao_atendida_pedido",
+        "quantidade_produzida", "quantidade_estorno_eac", "quantidade_produzida_liquida_modelo",
+        "quantidade_alocada", "quantidade_reservada", "quantidade_nao_atendida_pedido",
         "diferenca_aloc_menos_prod", "diferenca_absoluta",
-        "cx360_produzida", "cx360_alocada", "cx360_reservada", "cx360_nao_atendida_pedido", "cx360_diferenca",
-        "cxfisica_produzida", "cxfisica_alocada", "cxfisica_reservada", "cxfisica_nao_atendida_pedido", "cxfisica_diferenca",
+        "cx360_produzida", "cx360_estorno_eac", "cx360_produzida_liquida_modelo",
+        "cx360_alocada", "cx360_reservada", "cx360_nao_atendida_pedido", "cx360_diferenca",
+        "cxfisica_produzida", "cxfisica_estorno_eac", "cxfisica_produzida_liquida_modelo",
+        "cxfisica_alocada", "cxfisica_reservada", "cxfisica_nao_atendida_pedido", "cxfisica_diferenca",
         "periodo_label", "data_producao",
         "preco", "custo_ytd", "margem_unitaria", "margem_unitaria_cx360", "margem_por_ovo",
         "tem_demanda_historica", "demanda_max", "limite_demanda_historica",
@@ -1740,7 +1767,9 @@ def main():
     granularidade = config.get("modelo", {}).get("granularidade_demanda", "S").upper() if config else "S"
     gran_desc = {"D": "Dia", "S": "Semana", "M": "Mês"}.get(granularidade, "Semana")
     print(f"  {gran_desc}: {periodo_label}")
-    print(f"  Producao total: {producao['quantidade_produzida'].sum():,.0f} unidades")
+    print(f"  Producao total (bruta/ACA): {producao['quantidade_produzida'].sum():,.0f} unidades")
+    if "quantidade_produzida_liquida_modelo" in producao.columns:
+        print(f"  Producao total liquida (ACA-EAC): {producao['quantidade_produzida_liquida_modelo'].sum():,.0f} unidades")
     print(f"  Alocacao total: {alocacao['quantidade_alocada'].sum():,.0f} unidades")
     if config:
         producao_bruta_path = _resolver_caminho(config, "producao_bruta", INPUT_PATH / "PRODUÇÃO DIA.xlsx")
