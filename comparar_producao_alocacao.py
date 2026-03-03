@@ -650,7 +650,8 @@ def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, periodo
     if "quantidade_produzida_liquida_modelo" in comparacao.columns:
         comparacao["quantidade_produzida_liquida_modelo"] = comparacao["quantidade_produzida_liquida_modelo"].fillna(0)
     comparacao["quantidade_alocada"] = comparacao["quantidade_alocada"].fillna(0)
-    comparacao["diferenca_aloc_menos_prod"] = comparacao["quantidade_alocada"] - comparacao["quantidade_produzida"]
+    base_prod_diferenca = "quantidade_produzida_liquida_modelo" if "quantidade_produzida_liquida_modelo" in comparacao.columns else "quantidade_produzida"
+    comparacao["diferenca_aloc_menos_prod"] = comparacao["quantidade_alocada"] - comparacao[base_prod_diferenca]
     comparacao["diferenca_absoluta"] = comparacao["diferenca_aloc_menos_prod"].abs()   
 
     comparacao["origem_dado"] = comparacao.apply(
@@ -712,7 +713,8 @@ def agregar_comparacao_por_item(
     # Agrupar
     por_item = comparacao.groupby("item", as_index=False).agg(agg_dict)
     # Recalcular diferenças
-    por_item["diferenca_aloc_menos_prod"] = por_item["quantidade_alocada"] - por_item["quantidade_produzida"]
+    base_prod_diferenca = "quantidade_produzida_liquida_modelo" if "quantidade_produzida_liquida_modelo" in por_item.columns else "quantidade_produzida"
+    por_item["diferenca_aloc_menos_prod"] = por_item["quantidade_alocada"] - por_item[base_prod_diferenca]
     por_item["diferenca_absoluta"] = por_item["diferenca_aloc_menos_prod"].abs()
     # tipo: se misto (reserva + otimização) -> "misto"
     if "tipo" in comparacao.columns:
