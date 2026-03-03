@@ -524,8 +524,8 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
 
     df_prod["embalagem"] = df_prod["Desc Item"].apply(extrair_embalagem_descricao)
     df_prod["qtd_embalagem"] = df_prod["embalagem"].apply(calcular_qtd_embalagem)
-    # Produção bruta: somente movimentos positivos (ACA).
-    df_prod["quantidade"] = df_prod["Quantidade"].clip(lower=0) * df_prod["qtd_embalagem"]
+    # Produção bruta (ACA): movimentos positivos após aplicar sinal (EAC já negativado).
+    df_prod["quantidade"] = quantidade_assinada.clip(lower=0) * df_prod["qtd_embalagem"]
     # Estorno EAC em volume positivo para rastreabilidade.
     df_prod["quantidade_estorno_eac"] = (-quantidade_assinada.clip(upper=0)) * df_prod["qtd_embalagem"]
     # Produção líquida efetivamente disponível ao modelo (ACA - EAC).
@@ -536,7 +536,8 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
         (df_prod["item"].notna())
         & (df_prod["embalagem"].notna())
         & (df_prod["quantidade"].notna())
-        & (df_prod["quantidade"] > 0)
+        & (df_prod["quantidade_estorno_eac"].notna())
+        & ((df_prod["quantidade"] > 0) | (df_prod["quantidade_estorno_eac"] > 0))
     ].copy()
     df_prod["item"] = df_prod["item"].astype(int)
 

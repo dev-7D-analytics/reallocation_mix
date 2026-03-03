@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Dict, Any
 
 from output.metadados_output import aplicar_colunas_estabelecimento
+from output.producao_rastreabilidade import obter_producao_classe_rastreabilidade
 
 
 def criar_aba_estatisticas(
@@ -130,6 +131,12 @@ def salvar_resultados(
     
     if len(resultado.resultado) > 0:
         resultado_export = resultado.resultado.copy()
+        prod_trace = obter_producao_classe_rastreabilidade(config)
+        if len(prod_trace) > 0 and 'classe' in resultado_export.columns:
+            resultado_export = resultado_export.merge(prod_trace, on='classe', how='left')
+            for col in ['producao_bruta_classe', 'producao_estorno_eac_classe', 'producao_liquida_classe']:
+                if col in resultado_export.columns:
+                    resultado_export[col] = pd.to_numeric(resultado_export[col], errors='coerce').fillna(0.0)
         if 'margem_unitaria' in resultado_export.columns and 'margem_unitaria_cx360' not in resultado_export.columns:
             resultado_export['margem_unitaria_cx360'] = resultado_export['margem_unitaria']
         resultado_export = aplicar_colunas_estabelecimento(resultado_export, config)
@@ -141,6 +148,11 @@ def salvar_resultados(
         # CSV resumo por classe
         resumo_csv_path = output_dir / f'resumo_por_classe_{timestamp}.csv'
         resumo_export = resultado.resumo_classe.copy()
+        if len(prod_trace) > 0 and 'classe' in resumo_export.columns:
+            resumo_export = resumo_export.merge(prod_trace, on='classe', how='left')
+            for col in ['producao_bruta_classe', 'producao_estorno_eac_classe', 'producao_liquida_classe']:
+                if col in resumo_export.columns:
+                    resumo_export[col] = pd.to_numeric(resumo_export[col], errors='coerce').fillna(0.0)
         resumo_export = aplicar_colunas_estabelecimento(resumo_export, config)
         if len(resultado.resumo_classe) > 0:
             resumo_export.to_csv(resumo_csv_path, index=False)

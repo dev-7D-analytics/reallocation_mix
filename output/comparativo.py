@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Dict
 
 from output.metadados_output import aplicar_colunas_estabelecimento
+from output.producao_rastreabilidade import obter_producao_classe_rastreabilidade
 
 
 def calcular_comparativo_baseline(
@@ -68,6 +69,10 @@ def calcular_comparativo_baseline(
 
     # Determinar se usa demanda histórica
     considerar_demanda = config.get('modelo', {}).get('considerar_demanda_historica', False)
+    prod_trace = obter_producao_classe_rastreabilidade(config)
+    prod_trace_map = {}
+    if len(prod_trace) > 0:
+        prod_trace_map = prod_trace.set_index("classe").to_dict(orient="index")
 
     # Volume alocado por classe (apenas otimizável)
     if 'classe' in resultado.columns:
@@ -271,6 +276,9 @@ def calcular_comparativo_baseline(
                 'reserva_pedidos_classe': reserva_por_classe.get(classe, 0),
                 # Classe: produção e volume otimizável
                 'producao_total_classe': float(producao_por_classe[classe]),
+                'producao_bruta_classe': float(prod_trace_map.get(classe, {}).get('producao_bruta_classe', 0.0)),
+                'producao_estorno_eac_classe': float(prod_trace_map.get(classe, {}).get('producao_estorno_eac_classe', 0.0)),
+                'producao_liquida_classe': float(prod_trace_map.get(classe, {}).get('producao_liquida_classe', float(producao_por_classe[classe]))),
                 'volume_classe': qtd_producao,
                 # Demanda histórica
                 'limite_demanda_historica': row_base.get('limite_demanda_historica', None),
@@ -336,6 +344,9 @@ def calcular_comparativo_baseline(
                 'prod_disponivel_depois': prod_depois,
                 'reserva_pedidos_classe': reserva_por_classe.get(classe_res, 0),
                 'producao_total_classe': float(producao_por_classe[classe_res]) if classe_res in producao_por_classe.index else 0,
+                'producao_bruta_classe': float(prod_trace_map.get(classe_res, {}).get('producao_bruta_classe', 0.0)),
+                'producao_estorno_eac_classe': float(prod_trace_map.get(classe_res, {}).get('producao_estorno_eac_classe', 0.0)),
+                'producao_liquida_classe': float(prod_trace_map.get(classe_res, {}).get('producao_liquida_classe', float(producao_por_classe[classe_res]) if classe_res in producao_por_classe.index else 0.0)),
                 'volume_classe': 0,  # não participa da otimização
                 'limite_demanda_historica': None,
                 'volume_historico_total': 0,
@@ -461,7 +472,7 @@ def _gerar_auditoria_baseline(
         'ordem_prioridade', 'prod_disponivel_antes', 'prod_disponivel_depois',
         'reserva_pedidos_classe',
         # Classe: produção e volume otimizável
-        'producao_total_classe', 'volume_classe',
+        'producao_total_classe', 'producao_bruta_classe', 'producao_estorno_eac_classe', 'producao_liquida_classe', 'volume_classe',
         # Demanda e proporção histórica
         'limite_demanda_historica', 'volume_historico_total', 'soma_vol_hist_classe',
         'proporcao_historica',
@@ -494,6 +505,9 @@ def _gerar_auditoria_baseline(
     # === ABA 2: Resumo por Classe ===
     resumo = df_audit.groupby('classe').agg(
         producao_total_classe=('producao_total_classe', 'first'),
+        producao_bruta_classe=('producao_bruta_classe', 'first'),
+        producao_estorno_eac_classe=('producao_estorno_eac_classe', 'first'),
+        producao_liquida_classe=('producao_liquida_classe', 'first'),
         reserva_pedidos_classe=('reserva_pedidos_classe', 'first'),
         volume_classe=('volume_classe', 'first'),
         num_skus=('item_id', 'nunique'),
@@ -532,7 +546,8 @@ def _gerar_auditoria_baseline(
     
     # Linha de totais
     cols_soma = [
-        'producao_total_classe', 'reserva_pedidos_classe', 'volume_classe', 'num_skus',
+        'producao_total_classe', 'producao_bruta_classe', 'producao_estorno_eac_classe', 'producao_liquida_classe',
+        'reserva_pedidos_classe', 'volume_classe', 'num_skus',
         'soma_volume_baseline', 'receita_baseline_classe', 'custo_baseline_classe', 'margem_baseline_classe',
         'soma_volume_otimizado', 'receita_otimizada_classe', 'custo_otimizado_classe', 'margem_otimizada_classe',
         'ganho_absoluto',
