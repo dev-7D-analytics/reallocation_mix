@@ -48,4 +48,5 @@ Thumbs.db
 teste_*.log
 execucao_*.log
 validar_resultados.py
+scripts/
 
