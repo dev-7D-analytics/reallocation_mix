@@ -52,6 +52,18 @@ def configurar_logging() -> logging.Logger:
     return logging.getLogger(__name__)
 
 
+def _preparar_output_dir_rodada(config: dict, logger: logging.Logger) -> Path:
+    """Cria um diretório único de saída para a rodada e injeta no config em memória."""
+    paths_cfg = config.setdefault("paths", {})
+    base_output_dir = Path(paths_cfg.get("output_dir", "resultados"))
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_output_dir = base_output_dir / timestamp
+    run_output_dir.mkdir(parents=True, exist_ok=True)
+    paths_cfg["output_dir"] = str(run_output_dir)
+    logger.info(f"  Diretório de saída da rodada: {run_output_dir.resolve()}")
+    return run_output_dir
+
+
 def main():
     """Função principal - orquestra ETL e Otimização."""
     
@@ -62,6 +74,7 @@ def main():
     logger.info("="*80)
     
     config = carregar_config()
+    run_output_dir = _preparar_output_dir_rodada(config, logger)
     
     # 2. ETL - Carregamento e transformação de dados
     logger.info("\n>>> FASE 1: ETL")
@@ -421,6 +434,7 @@ def main():
         semana_ref = config.get('dados', {}).get('semana_ref')
         if semana_ref:
             cmd.extend(['--year-week', str(semana_ref)])
+        cmd.extend(['--output-dir', str(run_output_dir)])
         rc = subprocess.run(cmd, cwd=str(Path(__file__).resolve().parent), check=False).returncode
         if rc == 0:
             comparacao_ok = True
@@ -443,6 +457,7 @@ def main():
     logger.info("\n" + "="*80)
     logger.info("EXECUÇÃO CONCLUÍDA")
     logger.info("="*80)
+    logger.info(f"  Outputs da rodada: {run_output_dir.resolve()}")
     
     return resultado
 

@@ -18,6 +18,13 @@ from output.metadados_output import aplicar_colunas_estabelecimento
 from output.producao_rastreabilidade import obter_producao_classe_rastreabilidade
 
 
+def _resolver_output_dir(config: dict) -> Path:
+    """Resolve diretório de saída a partir do config com fallback legado."""
+    output_dir = Path(config.get("paths", {}).get("output_dir", "resultados"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
 def calcular_comparativo_baseline(
     resultado: pd.DataFrame,
     df_base: pd.DataFrame,
@@ -453,8 +460,7 @@ def _gerar_auditoria_baseline(
     - Parâmetros: configuração usada no cálculo
     """
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_dir = Path('resultados')
-    output_dir.mkdir(exist_ok=True)
+    output_dir = _resolver_output_dir(config)
     path = output_dir / f'auditoria_baseline_{timestamp}.xlsx'
     
     df_audit = pd.DataFrame(auditoria_classes)

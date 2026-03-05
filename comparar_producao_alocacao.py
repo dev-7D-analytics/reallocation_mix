@@ -15,7 +15,6 @@ from output.metadados_output import aplicar_colunas_estabelecimento
 
 INPUT_PATH = Path("inputs")
 SHEET_NAME = "CE0302"
-RESULTS_DIR = Path("resultados")
 DEFAULT_YEAR_WEEK = None
 CONFIG_PATH = Path("config.yaml")
 DEFAULT_PRECOS_PATH = INPUT_PATH / "precos_sku_embalagem.csv"
@@ -61,6 +60,18 @@ def _carregar_config(config_path: Path = CONFIG_PATH) -> Dict:
 def _resolver_caminho(config: Dict, chave: str, default: Path) -> Path:
     """Read path from config or fallback to default."""
     return Path(config.get("paths", {}).get(chave, default))
+
+
+def _resolver_output_dir(config: Optional[Dict], output_dir_override: Optional[str] = None) -> Path:
+    """Resolve diretório de saída com prioridade para argumento CLI."""
+    if output_dir_override:
+        output_dir = Path(output_dir_override)
+    elif config:
+        output_dir = Path(config.get("paths", {}).get("output_dir", "resultados"))
+    else:
+        output_dir = Path("resultados")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
 
 
 def _carregar_precos(config: Dict) -> pd.DataFrame:
@@ -243,7 +254,10 @@ def _carregar_skus_ativos_completo(config: Dict) -> pd.DataFrame:
         return pd.DataFrame(columns=["item", "descricao_cadastro", "tipo_cadastro", "status_cadastro"])
 
 
-def _carregar_demanda_historica_completa(caminho: Optional[Path] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def _carregar_demanda_historica_completa(
+    caminho: Optional[Path] = None,
+    output_dir: Optional[Path] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Carrega demanda histórica completa a partir de demanda_historica_*.xlsx em resultados/.
     
@@ -252,7 +266,8 @@ def _carregar_demanda_historica_completa(caminho: Optional[Path] = None) -> Tupl
         df_param com colunas parametro, valor (aba Parametros do Excel).
     """
     if caminho is None:
-        candidatos = sorted(RESULTS_DIR.glob("demanda_historica_*.xlsx"))
+        search_dir = output_dir or Path("resultados")
+        candidatos = sorted(search_dir.glob("demanda_historica_*.xlsx"))
         if not candidatos:
             return pd.DataFrame(columns=["item", "descricao", "classe", "demanda_max"]), pd.DataFrame(columns=["parametro", "valor"])
         caminho = candidatos[-1]
@@ -589,18 +604,23 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
     return prod_agg, periodo_label
 
 
-def carregar_alocacao(arquivo_resultado: Optional[str], sep: str = ",", decimal: str = ".") -> Tuple[pd.DataFrame, Path]:
+def carregar_alocacao(
+    arquivo_resultado: Optional[str],
+    output_dir: Path,
+    sep: str = ",",
+    decimal: str = ".",
+) -> Tuple[pd.DataFrame, Path]:
     """Load model allocation results aggregated by item_id."""
     if arquivo_resultado:
         csv_path = Path(arquivo_resultado)
     else:
         # Tentar primeiro arquivos resultado_realocacao_completo (nome padrão)
-        candidatos = sorted(RESULTS_DIR.glob("resultado_realocacao_completo_*.csv"))
+        candidatos = sorted(output_dir.glob("resultado_realocacao_completo_*.csv"))
         if not candidatos:
             # Fallback para resultado_otimizacao (nome antigo)
-            candidatos = sorted(RESULTS_DIR.glob("resultado_otimizacao_*.csv"))
+            candidatos = sorted(output_dir.glob("resultado_otimizacao_*.csv"))
         if not candidatos:
-            raise FileNotFoundError(f"Nenhum resultado encontrado em {RESULTS_DIR.resolve()}")
+            raise FileNotFoundError(f"Nenhum resultado encontrado em {output_dir.resolve()}")
         csv_path = candidatos[-1]
 
     df_aloc = pd.read_csv(csv_path)
@@ -815,6 +835,10 @@ def _parse_args() -> argparse.Namespace:
         help="Caminho para um CSV de resultado_realocacao_completo_*.csv; padrao e o arquivo mais recente em resultados/.",
     )
     parser.add_argument(
+        "--output-dir",
+        help="Diretório de saída/entrada da rodada. Se vazio, usa config.paths.output_dir ou resultados/.",
+    )
+    parser.add_argument(
         "--sep",
         default=",",
     )
@@ -830,10 +854,16 @@ def main():
     year_week = args.year_week or None
 
     config = _carregar_config()
+    output_dir = _resolver_output_dir(config, args.output_dir)
     if year_week is None and config:
         year_week = config.get("dados", {}).get("semana_ref")
     producao, periodo_label = carregar_producao(year_week, config)
-    alocacao, caminho_resultado = carregar_alocacao(args.resultado, sep=args.sep, decimal=args.decimal)
+    alocacao, caminho_resultado = carregar_alocacao(
+        args.resultado,
+        output_dir=output_dir,
+        sep=args.sep,
+        decimal=args.decimal,
+    )
     precos = _carregar_precos(config)
     custos = _carregar_custos(config)
     
@@ -890,7 +920,9 @@ def main():
         pass
 
     # Carregar demanda histórica completa (todos os SKUs com limite) do Excel demanda_historica_*.xlsx
-    df_demanda_historica, df_param_demanda = _carregar_demanda_historica_completa(None)
+    df_demanda_historica, df_param_demanda = _carregar_demanda_historica_completa(
+        None, output_dir=output_dir
+    )
 
     comparacao = construir_comparacao(producao, alocacao, periodo_label, config)
     
@@ -1448,11 +1480,10 @@ def main():
         print(f"  SKUs sem producao: {skus_sem_producao}")
         print(f"  Outros motivos: {len(pedidos_ignorados) - skus_sem_producao}")
 
-    RESULTS_DIR.mkdir(exist_ok=True)
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path_csv = RESULTS_DIR / f"comparacao_producao_alocacao_{periodo_label}_{timestamp}.csv"
-    output_path_xlsx = RESULTS_DIR / f"comparacao_producao_alocacao_{periodo_label}_{timestamp}.xlsx"
+    output_path_csv = output_dir / f"comparacao_producao_alocacao_{periodo_label}_{timestamp}.csv"
+    output_path_xlsx = output_dir / f"comparacao_producao_alocacao_{periodo_label}_{timestamp}.xlsx"
     
     # Reordenar colunas por categoria lógica para facilitar leitura
     # 1. Identificação | 2. Período | 3. Quantidades | 4. Financeiro unitário
@@ -1758,8 +1789,8 @@ def main():
         df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
         df_pedidos_ignorados = df_pedidos_ignorados.sort_values('quantidade_total_pedida', ascending=False)
         df_pedidos_ignorados = aplicar_colunas_estabelecimento(df_pedidos_ignorados, config)
-        output_pedidos_ignorados_csv = RESULTS_DIR / f"pedidos_ignorados_{periodo_label}_{timestamp}.csv"
-        output_pedidos_ignorados_xlsx = RESULTS_DIR / f"pedidos_ignorados_{periodo_label}_{timestamp}.xlsx"
+        output_pedidos_ignorados_csv = output_dir / f"pedidos_ignorados_{periodo_label}_{timestamp}.csv"
+        output_pedidos_ignorados_xlsx = output_dir / f"pedidos_ignorados_{periodo_label}_{timestamp}.xlsx"
         df_pedidos_ignorados.to_csv(output_pedidos_ignorados_csv, index=False, encoding="utf-8")
         try:
             df_pedidos_ignorados.to_excel(output_pedidos_ignorados_xlsx, index=False, engine='openpyxl')

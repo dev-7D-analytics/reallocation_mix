@@ -26,7 +26,6 @@ import yaml
 from output.metadados_output import aplicar_colunas_estabelecimento
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RESULTS_DIR = PROJECT_ROOT / "resultados"
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 
@@ -35,8 +34,17 @@ def _carregar_config() -> Dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def _mais_recente(padrao: str) -> Optional[Path]:
-    arquivos = sorted(RESULTS_DIR.glob(padrao), key=lambda p: p.stat().st_mtime)
+def _resolver_output_dir(config: Dict[str, Any]) -> Path:
+    """Resolve diretório de saída a partir do config com fallback legado."""
+    output_dir = Path(config.get("paths", {}).get("output_dir", "resultados"))
+    if not output_dir.is_absolute():
+        output_dir = PROJECT_ROOT / output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
+def _mais_recente(output_dir: Path, padrao: str) -> Optional[Path]:
+    arquivos = sorted(output_dir.glob(padrao), key=lambda p: p.stat().st_mtime)
     return arquivos[-1] if arquivos else None
 
 
@@ -88,8 +96,8 @@ def _parametros_dow_colunas(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _carregar_comparacao() -> Optional[pd.DataFrame]:
-    path = _mais_recente("comparacao_producao_alocacao_*.csv")
+def _carregar_comparacao(output_dir: Path) -> Optional[pd.DataFrame]:
+    path = _mais_recente(output_dir, "comparacao_producao_alocacao_*.csv")
     if path is None:
         print("[AVISO] Nenhum arquivo comparacao_producao_alocacao encontrado.")
         return None
@@ -108,8 +116,8 @@ def _carregar_comparacao() -> Optional[pd.DataFrame]:
     return df
 
 
-def _carregar_auditoria() -> Optional[pd.DataFrame]:
-    path = _mais_recente("auditoria_baseline_*.xlsx")
+def _carregar_auditoria(output_dir: Path) -> Optional[pd.DataFrame]:
+    path = _mais_recente(output_dir, "auditoria_baseline_*.xlsx")
     if path is None:
         print("[AVISO] Nenhum arquivo auditoria_baseline encontrado.")
         return None
@@ -125,8 +133,8 @@ def _carregar_auditoria() -> Optional[pd.DataFrame]:
     return df
 
 
-def _carregar_dow() -> Optional[pd.DataFrame]:
-    path = _mais_recente("distribuicao_historica_dow_*.xlsx")
+def _carregar_dow(output_dir: Path) -> Optional[pd.DataFrame]:
+    path = _mais_recente(output_dir, "distribuicao_historica_dow_*.xlsx")
     if path is None:
         print("[AVISO] Nenhum arquivo distribuicao_historica_dow encontrado.")
         return None
@@ -212,13 +220,14 @@ def gerar_consolidado_pbi(
 
     if config is None:
         config = _carregar_config()
+    output_dir = _resolver_output_dir(config)
     semana_ref = config.get("dados", {}).get("semana_ref", "sem_ref")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     log("\n[1/4] Carregando outputs...")
-    df_comp = _carregar_comparacao()
-    df_audit = _carregar_auditoria()
-    df_dow = _carregar_dow()
+    df_comp = _carregar_comparacao(output_dir)
+    df_audit = _carregar_auditoria(output_dir)
+    df_dow = _carregar_dow(output_dir)
 
     if df_comp is None:
         log("[ERRO] Sem arquivo de comparacao. Execute o pipeline antes.")
@@ -262,13 +271,11 @@ def gerar_consolidado_pbi(
 
     # ── Exportar ──
     log("\n[4/4] Exportando...")
-    RESULTS_DIR.mkdir(exist_ok=True)
-
-    path_csv = RESULTS_DIR / f"pbi_consolidado_sku_{semana_ref}_{timestamp}.csv"
+    path_csv = output_dir / f"pbi_consolidado_sku_{semana_ref}_{timestamp}.csv"
     df_sku.to_csv(path_csv, index=False, encoding="utf-8")
     log(f"  CSV: {path_csv.name}")
 
-    path_xlsx = RESULTS_DIR / f"pbi_consolidado_{semana_ref}_{timestamp}.xlsx"
+    path_xlsx = output_dir / f"pbi_consolidado_{semana_ref}_{timestamp}.xlsx"
     with pd.ExcelWriter(path_xlsx, engine="openpyxl") as writer:
         df_sku.to_excel(writer, sheet_name="consolidado_sku", index=False)
         if len(df_diaria) > 0:

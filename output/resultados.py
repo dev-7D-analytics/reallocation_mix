@@ -19,6 +19,13 @@ from output.metadados_output import aplicar_colunas_estabelecimento
 from output.producao_rastreabilidade import obter_producao_classe_rastreabilidade
 
 
+def _resolver_output_dir(config: dict) -> Path:
+    """Resolve diretório de saída a partir do config com fallback legado."""
+    output_dir = Path(config.get("paths", {}).get("output_dir", "resultados"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
 def criar_aba_estatisticas(
     resultado: pd.DataFrame,
     resumo_classe: pd.DataFrame,
@@ -123,8 +130,7 @@ def salvar_resultados(
     Também salva demanda histórica em Excel (histórico completo).
     """
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_dir = Path('resultados')
-    output_dir.mkdir(exist_ok=True)
+    output_dir = _resolver_output_dir(config)
     
     # Salvar demanda histórica em Excel (histórico completo)
     path_demanda = salvar_demanda_historica(resultado_etl, config, logger, timestamp)
@@ -290,8 +296,7 @@ def salvar_demanda_historica(resultado_etl, config: dict, logger: logging.Logger
     df_demanda = df_demanda[[c for c in col_order if c in df_demanda.columns]]
     df_demanda = aplicar_colunas_estabelecimento(df_demanda, config)
     
-    output_dir = Path('resultados')
-    output_dir.mkdir(exist_ok=True)
+    output_dir = _resolver_output_dir(config)
     path_xlsx = output_dir / f'demanda_historica_{timestamp}.xlsx'
     
     modelo_cfg = config.get('modelo', {})
