@@ -14,7 +14,7 @@ realocando volume de produção entre SKUs da mesma classe biológica de ovos.
 ```
 realocacao-git/
 ├── config.yaml                          # Configuração central (parâmetros, paths)
-├── main.py                              # Orquestrador: ETL -> Otimização -> Output -> Comparação -> PBI
+├── main.py                              # Orquestrador: ETL -> Otimização -> Output -> DOW -> Comparação -> PBI
 ├── executar_pipeline.sh                 # Shell script para rodar pipeline completo (Linux/Mac)
 ├── executar_pipeline.bat                # Batch script para rodar pipeline completo (Windows)
 ├── requirements.txt                     # Dependências Python
@@ -46,7 +46,7 @@ realocacao-git/
 │   └── formulacao_modelo.tex            # Formulação matemática (LaTeX)
 │
 ├── inputs/                              # Bases de dados (não versionadas)
-└── resultados/                          # Outputs gerados (não versionados)
+└── resultados/                          # Outputs gerados (não versionados, por rodada em subpastas timestamp)
 ```
 
 ## Fluxo de dependências
@@ -200,12 +200,11 @@ Se os nomes dos arquivos forem diferentes, ajustar a seção `paths:` do `config
 # Ativar ambiente virtual (se não estiver ativo)
 source venv/bin/activate
 
-# Pipeline completo (8 passos: preparação + otimização + relatório)
+# Pipeline completo (7 passos: preparação + main com outputs)
 ./executar_pipeline.sh
 
 # Opções:
 ./executar_pipeline.sh --sem-preparacao   # Pula passos 1-6 (inputs já prontos)
-./executar_pipeline.sh --sem-relatorio    # Pula passo 8 (sem relatório comparativo)
 ```
 
 #### Windows (CMD ou PowerShell)
@@ -242,20 +241,20 @@ python main.py                                 # 7. ETL + Otimização + Output 
 
 ### 5. Resultados
 
-Arquivos gerados na pasta `resultados/`.
+Arquivos gerados em `resultados/<YYYYMMDD_HHMMSS>/` (uma subpasta por rodada).
 
 ## Outputs gerados
 
 | Arquivo | Descrição |
 |---|---|
-| `resultado_realocacao_completo_*.csv` | Alocação detalhada por item_id |
-| `resultado_realocacao_completo_*.xlsx` | Excel com abas: Detalhado, Resumo por Classe, Estatísticas, Pedidos Ignorados |
-| `auditoria_baseline_*.xlsx` | Auditoria: Detalhe por SKU, Resumo por Classe, Parâmetros |
-| `demanda_historica_*.xlsx` | Limites de demanda histórica calculados |
-| `comparacao_producao_alocacao_*.xlsx` | Comparação produção real vs alocação do modelo (inclui `quantidade_nao_atendida_pedido`) |
-| `distribuicao_historica_dow_*.xlsx` | Distribuição histórica diária por SKU (DOW) |
-| `pbi_consolidado_sku_*.csv` | Consolidação SKU para BI (flat, inclui `quantidade_nao_atendida_pedido`) |
-| `pbi_consolidado_*.xlsx` | Consolidação BI com abas: consolidado_sku, distribuicao_diaria, parametros (inclui `quantidade_nao_atendida_pedido` na aba consolidado_sku) |
+| `<rodada_ts>/resultado_realocacao_completo_*.csv` | Alocação detalhada por item_id |
+| `<rodada_ts>/resultado_realocacao_completo_*.xlsx` | Excel com abas: Detalhado, Resumo por Classe, Estatísticas, Pedidos Ignorados |
+| `<rodada_ts>/auditoria_baseline_*.xlsx` | Auditoria: Detalhe por SKU, Resumo por Classe, Parâmetros |
+| `<rodada_ts>/demanda_historica_*.xlsx` | Limites de demanda histórica calculados |
+| `<rodada_ts>/comparacao_producao_alocacao_*.xlsx` | Comparação produção real vs alocação do modelo (inclui `quantidade_nao_atendida_pedido`) |
+| `<rodada_ts>/distribuicao_historica_dow_*.xlsx` | Distribuição histórica diária por SKU (DOW) |
+| `<rodada_ts>/pbi_consolidado_sku_*.csv` | Consolidação SKU para BI (flat, inclui `quantidade_nao_atendida_pedido`) |
+| `<rodada_ts>/pbi_consolidado_*.xlsx` | Consolidação BI com abas: consolidado_sku, distribuicao_diaria, parametros (inclui `quantidade_nao_atendida_pedido` na aba consolidado_sku) |
 
 ## Configuração relevante (`config.yaml`)
 
