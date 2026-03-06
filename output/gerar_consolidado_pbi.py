@@ -4,10 +4,12 @@ Gera arquivo consolidado PBI-ready a partir dos outputs do modelo.
 
 Saidas:
   - CSV:  resultados/pbi_consolidado_sku_<semana>.csv   (aba 1 flat)
-  - XLSX: resultados/pbi_consolidado_<semana>.xlsx       (3 abas)
+  - CSV:  resultados/pbi_skus_fora_otimizacao_<semana>.csv (quando houver)
+  - XLSX: resultados/pbi_consolidado_<semana>.xlsx       (3-4 abas)
       Aba 1 - consolidado_sku   : 1 linha por SKU (comparacao + auditoria + DOW resumido + parametros)
       Aba 2 - distribuicao_diaria: 1 linha por SKU x dia (DOW detalhado + parametros DOW)
       Aba 3 - parametros         : tabela chave-valor com todos os parametros utilizados
+      Aba 4 - skus_fora_otimizacao: SKUs ativos que ficaram fora da otimização e motivo principal
 
 Uso:
   python3 output/gerar_consolidado_pbi.py
@@ -142,6 +144,15 @@ def _carregar_dow(output_dir: Path) -> Optional[pd.DataFrame]:
     return pd.read_excel(path, sheet_name="distribuicao_sku_dia")
 
 
+def _carregar_skus_fora_otimizacao(output_dir: Path) -> Optional[pd.DataFrame]:
+    path = _mais_recente(output_dir, "skus_fora_otimizacao_*.csv")
+    if path is None:
+        print("[AVISO] Nenhum arquivo skus_fora_otimizacao encontrado.")
+        return None
+    print(f"  SKUs fora:  {path.name}")
+    return pd.read_csv(path)
+
+
 def _merge_auditoria(df_comp: pd.DataFrame, df_audit: pd.DataFrame) -> pd.DataFrame:
     """Adiciona colunas da auditoria baseline ao comparacao, por item."""
     colunas_audit = [
@@ -228,6 +239,7 @@ def gerar_consolidado_pbi(
     df_comp = _carregar_comparacao(output_dir)
     df_audit = _carregar_auditoria(output_dir)
     df_dow = _carregar_dow(output_dir)
+    df_fora = _carregar_skus_fora_otimizacao(output_dir)
 
     if df_comp is None:
         log("[ERRO] Sem arquivo de comparacao. Execute o pipeline antes.")
@@ -269,11 +281,24 @@ def gerar_consolidado_pbi(
     df_params = aplicar_colunas_estabelecimento(df_params, config)
     log(f"  Parametros: {len(df_params)} linhas")
 
+    # ── Aba 4: skus_fora_otimizacao ──
+    if df_fora is not None and len(df_fora) > 0:
+        df_fora = aplicar_colunas_estabelecimento(df_fora, config)
+        log(f"  SKUs fora da otimizacao: {len(df_fora)} linhas")
+    else:
+        df_fora = pd.DataFrame()
+        log("  SKUs fora da otimizacao: nao disponivel/vazio.")
+
     # ── Exportar ──
     log("\n[4/4] Exportando...")
     path_csv = output_dir / f"pbi_consolidado_sku_{semana_ref}_{timestamp}.csv"
     df_sku.to_csv(path_csv, index=False, encoding="utf-8")
     log(f"  CSV: {path_csv.name}")
+    path_fora_csv = None
+    if len(df_fora) > 0:
+        path_fora_csv = output_dir / f"pbi_skus_fora_otimizacao_{semana_ref}_{timestamp}.csv"
+        df_fora.to_csv(path_fora_csv, index=False, encoding="utf-8")
+        log(f"  CSV SKUs fora: {path_fora_csv.name}")
 
     path_xlsx = output_dir / f"pbi_consolidado_{semana_ref}_{timestamp}.xlsx"
     with pd.ExcelWriter(path_xlsx, engine="openpyxl") as writer:
@@ -281,6 +306,8 @@ def gerar_consolidado_pbi(
         if len(df_diaria) > 0:
             df_diaria.to_excel(writer, sheet_name="distribuicao_diaria", index=False)
         df_params.to_excel(writer, sheet_name="parametros", index=False)
+        if len(df_fora) > 0:
+            df_fora.to_excel(writer, sheet_name="skus_fora_otimizacao", index=False)
     log(f"  XLSX: {path_xlsx.name}")
 
     log("\n[OK] Consolidado PBI gerado com sucesso.")
@@ -288,14 +315,18 @@ def gerar_consolidado_pbi(
     if len(df_diaria) > 0:
         log(f"  Aba distribuicao_diaria: {len(df_diaria)} linhas (SKU x dia)")
     log(f"  Aba parametros:          {len(df_params)} parametros")
+    if len(df_fora) > 0:
+        log(f"  Aba skus_fora_otimizacao: {len(df_fora)} linhas")
 
     return {
         "path_csv": str(path_csv),
         "path_xlsx": str(path_xlsx),
+        "path_csv_skus_fora_otimizacao": str(path_fora_csv) if path_fora_csv else None,
         "linhas_consolidado_sku": len(df_sku),
         "colunas_consolidado_sku": len(df_sku.columns),
         "linhas_distribuicao_diaria": len(df_diaria),
         "linhas_parametros": len(df_params),
+        "linhas_skus_fora_otimizacao": len(df_fora),
     }
 
 

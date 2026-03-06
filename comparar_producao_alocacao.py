@@ -786,6 +786,77 @@ def agregar_comparacao_por_item(
     return por_item
 
 
+def construir_skus_fora_otimizacao(comparacao: pd.DataFrame, config: Optional[Dict] = None) -> pd.DataFrame:
+    """
+    Cria tabela de SKUs fora da otimização com motivo principal.
+
+    Regra base:
+      - fora_otimizacao = tipo != 'otimizacao' OU quantidade_alocada <= 0
+    """
+    if len(comparacao) == 0:
+        return pd.DataFrame()
+
+    base = comparacao.copy()
+    if "quantidade_alocada" not in base.columns:
+        base["quantidade_alocada"] = 0.0
+    if "tipo" not in base.columns:
+        base["tipo"] = "desconhecido"
+
+    fora_mask = (
+        base["tipo"].astype(str).str.lower() != "otimizacao"
+    ) | (
+        pd.to_numeric(base["quantidade_alocada"], errors="coerce").fillna(0.0) <= 0
+    )
+    df = base[fora_mask].copy()
+    if len(df) == 0:
+        return pd.DataFrame()
+
+    qtd_prod_liq = pd.to_numeric(df.get("quantidade_produzida_liquida_modelo", 0.0), errors="coerce").fillna(0.0)
+    qtd_aloc = pd.to_numeric(df.get("quantidade_alocada", 0.0), errors="coerce").fillna(0.0)
+    qtd_res = pd.to_numeric(df.get("quantidade_reservada", 0.0), errors="coerce").fillna(0.0)
+    tem_preco = pd.to_numeric(df.get("preco", np.nan), errors="coerce").notna()
+    tem_custo = pd.to_numeric(df.get("custo_ytd", np.nan), errors="coerce").notna()
+    emb = df.get("embalagem", pd.Series(index=df.index, dtype=object)).astype(str)
+    tem_embalagem = (~emb.isna()) & (~emb.isin(["SEM_EMBALAGEM", "RESERVA", "nan", "None", ""]))
+    tem_demanda = df.get("tem_demanda_historica", pd.Series(False, index=df.index)).fillna(False).astype(bool)
+    sku_restrito = df.get("sku_restrito", pd.Series(False, index=df.index)).fillna(False).astype(bool)
+    considerar_demanda = bool((config or {}).get("modelo", {}).get("considerar_demanda_historica", False))
+
+    def _motivo_principal(i: int) -> str:
+        if sku_restrito.loc[i]:
+            return "bloqueado_por_regra"
+        if qtd_prod_liq.loc[i] <= 0:
+            return "sem_producao_no_periodo"
+        if qtd_aloc.loc[i] <= 0 and qtd_res.loc[i] > 0:
+            return "somente_reserva_pedido"
+        if not tem_preco.loc[i]:
+            return "sem_preco"
+        if not tem_custo.loc[i]:
+            return "sem_custo"
+        if not tem_embalagem.loc[i]:
+            return "sem_embalagem_mapeada"
+        if considerar_demanda and (not tem_demanda.loc[i]):
+            return "sem_demanda_historica"
+        return "fora_otimizacao_sem_motivo_claro"
+
+    df["motivo_fora_otimizacao"] = [_motivo_principal(i) for i in df.index]
+    df["fora_otimizacao"] = True
+
+    colunas_saida = [
+        "estabelecimento", "estabelecimentos",
+        "item_id", "item", "descricao", "classe", "tipo", "origem_dado",
+        "quantidade_produzida_liquida_modelo", "quantidade_alocada", "quantidade_reservada",
+        "tem_pedido", "quantidade_nao_atendida_pedido",
+        "preco", "custo_ytd", "margem_unitaria",
+        "tem_demanda_historica", "limite_demanda_historica",
+        "sku_restrito", "motivo_fora_otimizacao", "fora_otimizacao",
+    ]
+    cols = [c for c in colunas_saida if c in df.columns]
+    if "item" in df.columns:
+        df["item"] = pd.to_numeric(df["item"], errors="coerce")
+    return df[cols].sort_values(["motivo_fora_otimizacao", "item"], na_position="last").reset_index(drop=True)
+
+
 def _adicionar_descricao(df: pd.DataFrame, config: Optional[Dict] = None) -> pd.DataFrame:
     """Adiciona coluna de descrição dos itens a partir da base de faturamento."""
     try:
@@ -1754,9 +1825,13 @@ def main():
         df_demanda_historica = aplicar_colunas_estabelecimento(df_demanda_historica, config)
     if len(df_param_demanda) > 0:
         df_param_demanda = aplicar_colunas_estabelecimento(df_param_demanda, config)
+    df_skus_fora_otimizacao = construir_skus_fora_otimizacao(comparacao, config)
 
     # Salvar CSV (única tabela: uma linha por SKU, quantidade_reservada na coluna específica)
     comparacao.to_csv(output_path_csv, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
+    output_fora_otimizacao_csv = output_dir / f"skus_fora_otimizacao_{periodo_label}_{timestamp}.csv"
+    if len(df_skus_fora_otimizacao) > 0:
+        df_skus_fora_otimizacao.to_csv(output_fora_otimizacao_csv, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
     
     # Salvar Excel
     try:
@@ -1774,6 +1849,9 @@ def main():
                 df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
                 df_pedidos_ignorados = df_pedidos_ignorados.sort_values('quantidade_total_pedida', ascending=False)
                 df_pedidos_ignorados.to_excel(writer, sheet_name='Pedidos Ignorados', index=False)
+            # Aba(s) seguinte(s): SKUs fora da otimizacao
+            if len(df_skus_fora_otimizacao) > 0:
+                df_skus_fora_otimizacao.to_excel(writer, sheet_name='SKUs Fora Otimizacao', index=False)
     except ImportError:
         print("[AVISO] openpyxl nao instalado. Salve apenas CSV.")
         comparacao.to_excel(output_path_xlsx, index=False, engine='openpyxl')
@@ -1818,9 +1896,13 @@ def main():
         abas_list.append("Parametros Demanda")
     if len(pedidos_ignorados) > 0:
         abas_list.append("Pedidos Ignorados")
+    if len(df_skus_fora_otimizacao) > 0:
+        abas_list.append("SKUs Fora Otimizacao")
     num_abas = len(abas_list)
     print(f"    - CSV: {output_path_csv}")
     print(f"    - Excel: {output_path_xlsx} (com {num_abas} aba" + ("s" if num_abas > 1 else "") + ": " + ", ".join(abas_list) + ")")
+    if len(df_skus_fora_otimizacao) > 0:
+        print(f"    - SKUs fora da otimizacao CSV: {output_fora_otimizacao_csv}")
     if len(pedidos_ignorados) > 0:
         print(f"    - Pedidos ignorados CSV: {output_pedidos_ignorados_csv}")
         print(f"    - Pedidos ignorados Excel: {output_pedidos_ignorados_xlsx}")
