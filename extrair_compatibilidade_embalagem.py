@@ -165,6 +165,97 @@ def extrair_embalagem_descricao(descricao: str) -> str:
             num_bj = match.group(1)
             num_un = match.group(2)
             return f"CX {num_bj} BJ {num_un} UN"
+
+    # -------------------------------------------------------------------------
+    # EXTENSÕES (sem regressão):
+    # Os padrões originais acima permanecem intactos. Os blocos abaixo só rodam
+    # quando nada foi capturado antes, ampliando cobertura para variações novas.
+    # -------------------------------------------------------------------------
+
+    # Normalização auxiliar para padrões com abreviações e barras
+    desc_norm = desc_upper
+    desc_norm = re.sub(r'\bBANDEJAS?\b', 'BJ', desc_norm)
+    desc_norm = re.sub(r'\bBDJ\b', 'BJ', desc_norm)
+    desc_norm = re.sub(r'\bBD\b', 'BJ', desc_norm)
+    desc_norm = re.sub(r'\bBAND\.?\b', 'BJ', desc_norm)
+    desc_norm = re.sub(r'\bUNDS?\b', 'UN', desc_norm)
+    desc_norm = re.sub(r'BJ\.', 'BJ', desc_norm)
+    desc_norm = re.sub(r'\s+', ' ', desc_norm).strip()
+
+    # Padrão 7: CX/10 BJ COM 30 UN | CX 3BJ 10UN | CX/10 BJ 30UN
+    # Aceita BJ/BD, barra opcional e espaços opcionais (ex.: "3BJ", "10UN")
+    padrao7 = r'CX\s*(?:/|COM|C/|C)?\s*(\d+)\s*(?:BJ|BD)\s*(?:COM|DE)?\s*(\d+)(?:\s*UN)?'
+    match = re.search(padrao7, desc_norm)
+    if match:
+        num_bj = match.group(1)
+        num_un = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+
+    # Padrão 8: CX C 24BJ DE 10 UN | CX C 24BJ 10UN
+    # (variação com "C" abreviado e "24BJ" sem espaço)
+    padrao8 = r'CX\s+C\s*(\d+)\s*BJ\s+(?:DE|COM)?\s*(\d+)\s*UN?'
+    match = re.search(padrao8, desc_norm)
+    if match:
+        num_bj = match.group(1)
+        num_un = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+
+    # Padrão 8b: C/18UN CX/20UN (ordem invertida, sem BJ explícito)
+    # Interpreta como 20 bandejas de 18 unidades.
+    padrao8b = r'C/\s*(\d+)\s*UN.*?CX\s*/\s*(\d+)\s*UN'
+    match = re.search(padrao8b, desc_norm)
+    if match:
+        num_un = match.group(1)
+        num_bj = match.group(2)
+        return f"CX {num_bj} BJ {num_un} UN"
+
+    # Padrão 8c: CX C/ 12UN (sem BJ explícito)
+    # Interpreta como 1 bandeja com 12 unidades por caixa.
+    padrao8c = r'CX\s*(?:C/|C|COM)\s*(\d+)\s*UN\b'
+    match = re.search(padrao8c, desc_norm)
+    if match:
+        num_un = match.group(1)
+        return f"CX 1 BJ {num_un} UN"
+
+    # Padrão 9: CX 30 DUZIAS | CX/30 DZ | CX COM 30 DZ
+    # Normaliza dúzia para BJ 12 UN para manter compatibilidade downstream.
+    padrao9 = r'CX\s*(?:/|COM|C/)?\s*(\d+)\s*(?:DUZIAS?|DUZIA|DZ|DZS)\b'
+    match = re.search(padrao9, desc_norm)
+    if match:
+        num_bj = match.group(1)
+        return f"CX {num_bj} BJ 12 UN"
+
+    # Padrão 9b: CX/60 MEIA DZ | CX 30 MEIA DUZIA
+    # Meia dúzia = 6 ovos por bandeja.
+    padrao9b = r'CX\s*(?:/|COM|C/)?\s*(\d+)\s*MEIA\s*(?:DUZIA|DZ)\b'
+    match = re.search(padrao9b, desc_norm)
+    if match:
+        num_bj = match.group(1)
+        return f"CX {num_bj} BJ 6 UN"
+
+    # Padrão 9c: MEIA DZ 60 ESTOJOS (sem CX explícito)
+    # Interpreta quantidade de estojos como bandejas equivalentes.
+    padrao9c = r'MEIA\s*(?:DUZIA|DZ)\s*(\d+)\s*ESTOJ'
+    match = re.search(padrao9c, desc_norm)
+    if match:
+        num_bj = match.group(1)
+        return f"CX {num_bj} BJ 6 UN"
+
+    # Padrão 9d: 1440 DZ (sem CX explícito)
+    padrao9d = r'\b(\d+)\s*(?:DUZIAS?|DUZIA|DZ|DZS)\b'
+    match = re.search(padrao9d, desc_norm)
+    if match and 'CX' not in desc_norm:
+        num_bj = match.group(1)
+        return f"CX {num_bj} BJ 12 UN"
+
+    # Padrão 10: CX180 | CX240 | CX360 (total de ovos na caixa)
+    # Converte para formato canônico: CX 1 BJ <total> UN
+    padrao10 = r'\bCX\s*(\d{2,4})\b'
+    match = re.search(padrao10, desc_norm)
+    if match:
+        total_ovos = int(match.group(1))
+        if total_ovos > 0:
+            return f"CX 1 BJ {total_ovos} UN"
     
     # Se não encontrou padrão, retornar None
     return None
