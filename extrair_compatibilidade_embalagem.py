@@ -8,10 +8,24 @@ import numpy as np
 from pathlib import Path
 import re
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 try:
     import yaml
 except ImportError:
     yaml = None
+
+
+OVERRIDE_COLUNAS = [
+    "item",
+    "descricao",
+    "descricao_normalizada",
+    "embalagem",
+    "qtd_embalagem",
+    "ativo",
+    "origem",
+    "observacao",
+    "updated_at",
+]
 
 def load_config(config_path: str = "config.yaml") -> dict:
     """
@@ -282,6 +296,260 @@ def calcular_qtd_embalagem(embalagem: str) -> int:
     
     return None
 
+
+def normalizar_descricao_chave(descricao: str) -> str:
+    """
+    Normaliza descrição para chave técnica de deduplicação/lookup.
+    """
+    if pd.isna(descricao) or descricao is None:
+        return ""
+    texto = str(descricao).upper().strip()
+    texto = re.sub(r"\s+", " ", texto)
+    return texto
+
+
+def _resolver_path_override(config: Dict) -> Path:
+    path = config.get("paths", {}).get("embalagens_override", "inputs/embalagens_override.xlsx")
+    return Path(path)
+
+
+def _carregar_override(path_override: Path) -> pd.DataFrame:
+    """
+    Carrega override editável, garantindo schema mínimo.
+    """
+    if path_override.exists():
+        df = pd.read_excel(path_override, sheet_name="override")
+    else:
+        df = pd.DataFrame(columns=OVERRIDE_COLUNAS)
+
+    # Garantir todas as colunas previstas (sem apagar custom cols)
+    for col in OVERRIDE_COLUNAS:
+        if col not in df.columns:
+            df[col] = None
+
+    # Padronizar campos
+    df["item"] = pd.to_numeric(df["item"], errors="coerce")
+    df["descricao"] = df["descricao"].astype(str).replace("nan", "").fillna("")
+    df["descricao_normalizada"] = df["descricao_normalizada"].fillna("").astype(str)
+    sem_chave = df["descricao_normalizada"].str.strip() == ""
+    df.loc[sem_chave, "descricao_normalizada"] = df.loc[sem_chave, "descricao"].apply(normalizar_descricao_chave)
+    # Permite cadastro mínimo (item + embalagem) mesmo sem descrição.
+    sem_chave = df["descricao_normalizada"].str.strip() == ""
+    df.loc[sem_chave & df["item"].notna(), "descricao_normalizada"] = (
+        "__ITEM__" + df.loc[sem_chave & df["item"].notna(), "item"].astype(int).astype(str)
+    )
+
+    df["embalagem"] = df["embalagem"].astype(str).replace("nan", "").fillna("")
+    df["qtd_embalagem"] = pd.to_numeric(df["qtd_embalagem"], errors="coerce")
+    qtd_calc = df["embalagem"].apply(calcular_qtd_embalagem)
+    df["qtd_embalagem"] = df["qtd_embalagem"].fillna(qtd_calc)
+
+    # ativo default true
+    ativos = df["ativo"].astype(str).str.strip().str.lower()
+    map_bool = {"true": True, "1": True, "sim": True, "yes": True, "y": True, "false": False, "0": False, "nao": False, "não": False, "no": False, "n": False}
+    df["ativo"] = ativos.map(map_bool)
+    df["ativo"] = df["ativo"].fillna(True)
+
+    # origem default manual
+    df["origem"] = df["origem"].fillna("manual")
+    df["observacao"] = df["observacao"].fillna("")
+    df["updated_at"] = df["updated_at"].fillna("")
+    return df
+
+
+def _validar_override(df_override: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Retorna (validos, inconsistencias).
+    """
+    if len(df_override) == 0:
+        return df_override.copy(), pd.DataFrame(columns=OVERRIDE_COLUNAS + ["motivo_inconsistencia"])
+
+    df = df_override.copy()
+    motivos: List[str] = []
+    for _, row in df.iterrows():
+        if pd.isna(row["item"]):
+            motivos.append("item_invalido")
+            continue
+        if str(row["embalagem"]).strip() == "":
+            motivos.append("embalagem_vazia")
+            continue
+        if pd.isna(row["qtd_embalagem"]) or float(row["qtd_embalagem"]) <= 0:
+            motivos.append("qtd_embalagem_invalida")
+            continue
+        motivos.append("")
+
+    df["motivo_inconsistencia"] = motivos
+    inconsist = df[df["motivo_inconsistencia"] != ""].copy()
+    validos = df[df["motivo_inconsistencia"] == ""].copy()
+    if "motivo_inconsistencia" in validos.columns:
+        validos = validos.drop(columns=["motivo_inconsistencia"])
+    return validos, inconsist
+
+
+def _aplicar_fallback_override(
+    df_fat: pd.DataFrame,
+    col_desc: str,
+    df_override_validos: pd.DataFrame,
+) -> Tuple[pd.DataFrame, Dict[str, int]]:
+    """
+    Aplica fallback de embalagem via override para casos não capturados no regex.
+    Prioridade:
+      1) chave item + descricao_normalizada
+      2) item com cadastro único ativo
+    """
+    out = df_fat.copy()
+    out["descricao_normalizada"] = out[col_desc].apply(normalizar_descricao_chave)
+    out["fonte_embalagem"] = np.where(out["embalagem"].notna(), "regex", "nao_encontrada")
+
+    stats = {
+        "fallback_override_chave": 0,
+        "fallback_override_item": 0,
+    }
+
+    if len(df_override_validos) == 0:
+        return out, stats
+
+    ov = df_override_validos.copy()
+    ov["item"] = ov["item"].astype(int)
+    ov["descricao_normalizada"] = ov["descricao_normalizada"].astype(str)
+
+    # 1) Fallback por chave item + descricao_normalizada
+    ov_chave = ov.drop_duplicates(subset=["item", "descricao_normalizada"], keep="last")
+    mapa_emb_chave = {
+        (int(r["item"]), str(r["descricao_normalizada"])): r["embalagem"]
+        for _, r in ov_chave.iterrows()
+    }
+    mapa_qtd_chave = {
+        (int(r["item"]), str(r["descricao_normalizada"])): int(r["qtd_embalagem"])
+        for _, r in ov_chave.iterrows()
+    }
+
+    mask_sem_regex = out["embalagem"].isna() & out["item"].notna()
+    for idx in out[mask_sem_regex].index:
+        key = (int(out.at[idx, "item"]), str(out.at[idx, "descricao_normalizada"]))
+        emb = mapa_emb_chave.get(key)
+        if emb:
+            out.at[idx, "embalagem"] = emb
+            out.at[idx, "qtd_embalagem"] = mapa_qtd_chave.get(key)
+            out.at[idx, "fonte_embalagem"] = "override_chave"
+            stats["fallback_override_chave"] += 1
+
+    # 2) Fallback por item (somente quando item tem 1 embalagem ativa no override)
+    mask_ainda_sem = out["embalagem"].isna() & out["item"].notna()
+    if mask_ainda_sem.any():
+        ov_item_cnt = ov.groupby("item")["embalagem"].nunique().reset_index(name="n")
+        itens_unicos = set(ov_item_cnt[ov_item_cnt["n"] == 1]["item"].astype(int).tolist())
+        ov_item_unico = ov[ov["item"].isin(itens_unicos)].drop_duplicates(subset=["item"], keep="last")
+        mapa_emb_item = {int(r["item"]): r["embalagem"] for _, r in ov_item_unico.iterrows()}
+        mapa_qtd_item = {int(r["item"]): int(r["qtd_embalagem"]) for _, r in ov_item_unico.iterrows()}
+        for idx in out[mask_ainda_sem].index:
+            item = int(out.at[idx, "item"])
+            emb = mapa_emb_item.get(item)
+            if emb:
+                out.at[idx, "embalagem"] = emb
+                out.at[idx, "qtd_embalagem"] = mapa_qtd_item.get(item)
+                out.at[idx, "fonte_embalagem"] = "override_item"
+                stats["fallback_override_item"] += 1
+
+    return out, stats
+
+
+def _atualizar_override_com_auto(
+    df_override_existente: pd.DataFrame,
+    df_fat: pd.DataFrame,
+    col_desc: str,
+) -> Tuple[pd.DataFrame, int]:
+    """
+    Faz append de novos padrões automáticos (regex) no override, sem sobrescrever existentes.
+    """
+    base = df_override_existente.copy()
+    if len(base) == 0:
+        base = pd.DataFrame(columns=OVERRIDE_COLUNAS)
+
+    for col in OVERRIDE_COLUNAS:
+        if col not in base.columns:
+            base[col] = None
+
+    # Chave de unicidade: item + descricao_normalizada + embalagem
+    existentes = set(
+        (
+            int(r["item"]) if pd.notna(r["item"]) else -1,
+            str(r["descricao_normalizada"]),
+            str(r["embalagem"]),
+        )
+        for _, r in base.iterrows()
+        if pd.notna(r["item"]) and str(r["descricao_normalizada"]).strip() != "" and str(r["embalagem"]).strip() != ""
+    )
+
+    auto = df_fat[df_fat["embalagem_auto"].notna() & df_fat["item"].notna()].copy()
+    if len(auto) == 0:
+        return base, 0
+
+    auto["descricao_norm"] = auto[col_desc].apply(normalizar_descricao_chave)
+    auto_seed = (
+        auto.groupby(["item", "descricao_norm", "embalagem_auto"], as_index=False)
+        .agg(qtd_embalagem=("qtd_embalagem", "first"), descricao=(col_desc, "first"))
+    )
+
+    novos = []
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for _, r in auto_seed.iterrows():
+        key = (int(r["item"]), str(r["descricao_norm"]), str(r["embalagem_auto"]))
+        if key in existentes:
+            continue
+        novos.append(
+            {
+                "item": int(r["item"]),
+                "descricao": r["descricao"],
+                "descricao_normalizada": r["descricao_norm"],
+                "embalagem": r["embalagem_auto"],
+                "qtd_embalagem": r["qtd_embalagem"],
+                "ativo": True,
+                "origem": "auto_seed",
+                "observacao": "",
+                "updated_at": ts,
+            }
+        )
+        existentes.add(key)
+
+    if len(novos) == 0:
+        return base, 0
+
+    df_novos = pd.DataFrame(novos)
+    if len(base) == 0:
+        out = df_novos.copy()
+    else:
+        out = pd.concat([base, df_novos], ignore_index=True)
+    return out, len(df_novos)
+
+
+def _salvar_override(
+    path_override: Path,
+    df_override: pd.DataFrame,
+    df_inconsistencias: pd.DataFrame,
+    auditoria: Dict[str, int],
+) -> None:
+    """
+    Salva planilha de override preservando aba editável e auditoria operacional.
+    """
+    path_override.parent.mkdir(exist_ok=True, parents=True)
+    df_override_export = df_override.copy()
+    for col in OVERRIDE_COLUNAS:
+        if col not in df_override_export.columns:
+            df_override_export[col] = None
+    df_override_export = df_override_export[OVERRIDE_COLUNAS]
+
+    df_auditoria = pd.DataFrame([auditoria])
+    with pd.ExcelWriter(path_override, engine="openpyxl") as writer:
+        df_override_export.to_excel(writer, sheet_name="override", index=False)
+        if len(df_inconsistencias) > 0:
+            df_inconsistencias.to_excel(writer, sheet_name="inconsistencias", index=False)
+        else:
+            pd.DataFrame(columns=OVERRIDE_COLUNAS + ["motivo_inconsistencia"]).to_excel(
+                writer, sheet_name="inconsistencias", index=False
+            )
+        df_auditoria.to_excel(writer, sheet_name="auditoria", index=False)
+
 def main():
     print("="*80)
     print("EXTRAÇÃO DE COMPATIBILIDADE SKU x EMBALAGEM")
@@ -365,8 +633,34 @@ def main():
     tem_cx = df_fat[col_desc].str.contains('CX', case=False, na=False).sum()
     print(f"  Registros com 'CX' na descrição: {tem_cx:,} ({tem_cx/len(df_fat)*100:.1f}%)")
     
-    df_fat['embalagem'] = df_fat[col_desc].apply(extrair_embalagem_descricao)
+    df_fat['embalagem_auto'] = df_fat[col_desc].apply(extrair_embalagem_descricao)
+    df_fat['embalagem'] = df_fat['embalagem_auto']
     df_fat['qtd_embalagem'] = df_fat['embalagem'].apply(calcular_qtd_embalagem)
+
+    # Fallback manual via inputs/embalagens_override.xlsx (sem sobrescrever regex)
+    path_override = _resolver_path_override(config)
+    df_override = _carregar_override(path_override)
+    df_override_validos, df_override_incons = _validar_override(df_override)
+    df_fat, stats_override = _aplicar_fallback_override(df_fat, col_desc, df_override_validos)
+    # Recalcular qtd para casos preenchidos via override
+    mask_qtd_na = df_fat["qtd_embalagem"].isna() & df_fat["embalagem"].notna()
+    if mask_qtd_na.any():
+        df_fat.loc[mask_qtd_na, "qtd_embalagem"] = df_fat.loc[mask_qtd_na, "embalagem"].apply(calcular_qtd_embalagem)
+
+    # Atualizar override com novos padrões automáticos, preservando entradas existentes
+    df_override_atualizado, novos_auto_seed = _atualizar_override_com_auto(df_override, df_fat, col_desc)
+    df_override_validos_final, df_override_incons_final = _validar_override(df_override_atualizado)
+    auditoria_override = {
+        "data_geracao": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "override_total_linhas": len(df_override_atualizado),
+        "override_validas": len(df_override_validos_final),
+        "override_inconsistencias": len(df_override_incons_final),
+        "fallback_override_chave": stats_override["fallback_override_chave"],
+        "fallback_override_item": stats_override["fallback_override_item"],
+        "novos_auto_seed_adicionados": novos_auto_seed,
+        "capturas_regex": int((df_fat["fonte_embalagem"] == "regex").sum()) if "fonte_embalagem" in df_fat.columns else 0,
+    }
+    _salvar_override(path_override, df_override_atualizado, df_override_incons_final, auditoria_override)
     
     # Estatísticas após extração
     embalagens_extraidas = df_fat['embalagem'].notna().sum()
@@ -436,7 +730,10 @@ def main():
         'embalagens_unicas': [df_compat['embalagem'].nunique()],
         'volume_total_vendido': [df_compat['volume_total_vendido'].sum()],
         'receita_total': [df_compat['receita_total'].sum()],
-        'descricoes_nao_capturadas': [len(df_sem_embalagem)]
+        'descricoes_nao_capturadas': [len(df_sem_embalagem)],
+        'fallback_override_chave': [stats_override.get("fallback_override_chave", 0)],
+        'fallback_override_item': [stats_override.get("fallback_override_item", 0)],
+        'novos_auto_seed_adicionados': [novos_auto_seed],
     }
     
     df_auditoria = pd.DataFrame(relatorio_auditoria)
@@ -456,6 +753,13 @@ def main():
     print(f"  SKUs únicos: {df_compat['item'].nunique():,}")
     print(f"  Embalagens únicas: {df_compat['embalagem'].nunique():,}")
     print(f"\n[OK] Relatorio de auditoria salvo: {path_auditoria}")
+    print(f"[OK] Override de embalagens atualizado: {path_override}")
+    print(
+        "  Override: "
+        f"{stats_override.get('fallback_override_chave', 0)} por chave, "
+        f"{stats_override.get('fallback_override_item', 0)} por item, "
+        f"{novos_auto_seed} novos auto_seed"
+    )
     
     # Estatísticas
     print("\n" + "="*80)

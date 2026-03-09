@@ -89,6 +89,55 @@ Após a geração automática, os seguintes CSVs podem ser editados manualmente 
 
 Os CSVs já saem com os cálculos aplicados (ex: fator multiplicativo na demanda, média ponderada no custo). O modelo lê diretamente desses arquivos.
 
+### Atenção: o que pode ser sobrescrito
+
+Os scripts de preparação (passos 1-6) **reescrevem** arquivos em `inputs/`. Em especial:
+
+- `extrair_precos_embalagem.py` reescreve `inputs/precos_sku_embalagem.csv`
+- `gerar_custos_sku.py` reescreve `inputs/custos_sku.csv`
+- `gerar_demanda_historica.py` reescreve `inputs/demanda_historica.csv`
+- `gerar_pedidos_clientes.py` reescreve `inputs/pedidos_clientes.csv`
+- `gerar_producao_classe.py` reescreve `inputs/producao_classe.csv`
+
+Se você editou manualmente algum desses CSVs e quer preservar as mudanças, **não rode os passos 1-6**.
+
+### Override manual de embalagem (fallback)
+
+Além da extração automática por regex, o pipeline suporta fallback manual via:
+
+- `inputs/embalagens_override.xlsx` (aba `override`, editável)
+
+Uso esperado:
+
+1. O script tenta extrair embalagem automaticamente da descrição.
+2. Se não encontrar, consulta o `embalagens_override.xlsx`.
+3. Se houver cadastro válido para o SKU, usa a embalagem do override.
+4. Se não houver, permanece como não capturado (aparece na auditoria).
+
+Campos mínimos para cadastro manual seguro (aba `override`):
+
+- **Obrigatórios para o usuário**: `item`, `embalagem`
+- **Opcionais**: `ativo`, `observacao`
+- **Preenchidos/derivados pelo sistema**: `descricao`, `descricao_normalizada`, `qtd_embalagem`, `origem`, `updated_at`
+
+Schema da aba `override`:
+
+- `item` (int)
+- `descricao` (str)
+- `descricao_normalizada` (str)
+- `embalagem` (str, formato canônico ex.: `CX 12 BJ 30 UN`)
+- `qtd_embalagem` (int)
+- `ativo` (bool)
+- `origem` (str: `manual` ou `auto_seed`)
+- `observacao` (str, opcional)
+- `updated_at` (datetime)
+
+Observações:
+
+- O arquivo é atualizado sem apagar cadastros existentes.
+- Novos padrões capturados automaticamente podem ser adicionados como `auto_seed`.
+- O arquivo contém abas auxiliares de auditoria e inconsistências para suporte operacional.
+
 ### Mapa de impacto: base atualizada -> scripts a re-executar
 
 | Base de dados atualizada | Scripts a re-executar (na ordem) |
@@ -102,6 +151,46 @@ Os CSVs já saem com os cálculos aplicados (ex: fator multiplicativo na demanda
 | `ESTAB CORRIGIDO.xlsx` (estab. corrigido) | `gerar_demanda_historica.py` -> `main.py` |
 | `config.yaml` (parâmetros) | `main.py` (e geradores de input se janela/granularidade mudaram) |
 | Edição manual de CSV (preço/custo/demanda) | `main.py` |
+
+### Fluxos recomendados de execução (didático)
+
+#### Fluxo A — Rodada completa com recálculo de tudo (padrão)
+
+Use quando houve troca de bases brutas (`parquet/xlsx`) e você quer regenerar todos os inputs.
+
+```bash
+source venv/bin/activate
+./executar_pipeline.sh
+```
+
+Efeito: recalcula e sobrescreve inputs intermediários (passos 1-6), depois roda `main.py`.
+
+#### Fluxo B — Preservar CSVs editáveis e só otimizar
+
+Use quando você alterou manualmente `precos/custos/demanda/pedidos/producao` em `inputs/` e **não quer sobrescrever**.
+
+```bash
+source venv/bin/activate
+./executar_pipeline.sh --sem-preparacao
+```
+
+Efeito: pula passos 1-6 e executa apenas a etapa de otimização/report (`main.py`) usando os CSVs já existentes.
+
+#### Fluxo C — Reprocessamento parcial por tipo de mudança
+
+Use quando só uma fonte foi alterada.
+
+- Mudou faturamento: rode `extrair_compatibilidade_embalagem.py`, `extrair_precos_embalagem.py`, `gerar_demanda_historica.py`, depois `main.py`.
+- Mudou carteira: rode `gerar_pedidos_clientes.py`, depois `main.py`.
+- Mudou produção diária: rode `gerar_producao_classe.py`, depois `main.py`.
+- Mudou somente parâmetro de otimização no `config.yaml` (sem mudar bases): rode `main.py` (ou `./executar_pipeline.sh --sem-preparacao`).
+
+### Checklist rápido antes de rodar
+
+1. Ativou o ambiente virtual (`source venv/bin/activate`)?
+2. Vai preservar CSV manual? Se sim, use `--sem-preparacao`.
+3. Confirmou `config.yaml` (estabelecimento, semana/data de referência, granularidade)?
+4. Conferiu se os arquivos de `inputs/` existem para o período escolhido?
 
 ## Entradas esperadas (configuradas em `config.yaml`)
 
@@ -118,6 +207,7 @@ Os CSVs já saem com os cálculos aplicados (ex: fator multiplicativo na demanda
 | `paths.faturamento` | `inputs/manti_fat_*.parquet` | Faturamento histórico (para demanda, preços e enriquecimento) |
 | `paths.producao_bruta` | `inputs/PRODUÇÃO DIA.xlsx` | Produção diária bruta (aba CE0302) |
 | `paths.skus_restritos` | `inputs/skus_restritos.xlsx` | Filtro de SKUs ativos/permitidos |
+| `paths.embalagens_override` (opcional) | `inputs/embalagens_override.xlsx` | Fallback manual de embalagem quando regex não captura |
 | `paths.estab_corrigido` | `inputs/ESTAB CORRIGIDO.xlsx` | Correção de estabelecimento |
 
 ## Instalação e execução
@@ -213,12 +303,11 @@ source venv/bin/activate
 REM Ativar ambiente virtual
 venv\Scripts\activate
 
-REM Pipeline completo (8 passos)
+REM Pipeline completo (7 passos: preparação + main com outputs)
 executar_pipeline.bat
 
 REM Opções:
 executar_pipeline.bat --sem-preparacao   &REM Pula passos 1-6 (inputs já prontos)
-executar_pipeline.bat --sem-relatorio    &REM Pula passo 8 (sem relatório comparativo)
 ```
 
 #### Passo a passo manual (qualquer SO)
@@ -252,9 +341,11 @@ Arquivos gerados em `resultados/<YYYYMMDD_HHMMSS>/` (uma subpasta por rodada).
 | `<rodada_ts>/auditoria_baseline_*.xlsx` | Auditoria: Detalhe por SKU, Resumo por Classe, Parâmetros |
 | `<rodada_ts>/demanda_historica_*.xlsx` | Limites de demanda histórica calculados |
 | `<rodada_ts>/comparacao_producao_alocacao_*.xlsx` | Comparação produção real vs alocação do modelo (inclui `quantidade_nao_atendida_pedido`) |
+| `<rodada_ts>/skus_fora_otimizacao_*.csv` | SKUs fora da otimização com motivo principal |
 | `<rodada_ts>/distribuicao_historica_dow_*.xlsx` | Distribuição histórica diária por SKU (DOW) |
 | `<rodada_ts>/pbi_consolidado_sku_*.csv` | Consolidação SKU para BI (flat, inclui `quantidade_nao_atendida_pedido`) |
-| `<rodada_ts>/pbi_consolidado_*.xlsx` | Consolidação BI com abas: consolidado_sku, distribuicao_diaria, parametros (inclui `quantidade_nao_atendida_pedido` na aba consolidado_sku) |
+| `<rodada_ts>/pbi_skus_fora_otimizacao_*.csv` | SKUs fora da otimização para consumo no BI |
+| `<rodada_ts>/pbi_consolidado_*.xlsx` | Consolidação BI com abas: consolidado_sku, distribuicao_diaria, parametros, skus_fora_otimizacao (inclui `quantidade_nao_atendida_pedido` na aba consolidado_sku) |
 
 ## Configuração relevante (`config.yaml`)
 
