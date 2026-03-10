@@ -7,29 +7,29 @@ dados:
   # Ano e mês de referência para custo, preço e demanda histórica
   ano_custo: 2026
   ano_preco: 2026
-  mes_custo: 2                    # Mês final da janela de referência
-  mes_preco: 2                    # Mês final da janela de preços
+  mes_custo: 3                    # Mês final da janela de referência
+  mes_preco: 3                    # Mês final da janela de preços
   meses_janela_custo: 6           # Janela em meses para cálculo de custo e demanda histórica
   meses_janela_preco: 6           # Janela em meses para cálculo de preço médio
   # Estabelecimentos
-  estab_custo: 100                # Estabelecimento para busca de custos
-  estab_preco: 100                # Estabelecimento para busca de preços
+  estab_custo: 410                # Estabelecimento para busca de custos
+  estab_preco: 410                # Estabelecimento para busca de preços
   estabelecimentos:               # Lista de estabelecimentos a considerar
-  - 100
+  - 410
   # Filtros de preço
   percentil_inferior_preco: 1     # Percentil inferior para remoção de outliers de preço
   percentil_superior_preco: 99    # Percentil superior para remoção de outliers de preço
   remover_outliers_preco: true    # Ativa remoção de outliers no cálculo de preço médio
   # Outros filtros
-  semana_ref: 2026-07             # Semana de referência para produção (usado quando granularidade = S)
-  data_ref: '2026-02-11'          # Data de referência para produção (usado quando granularidade = D ou M)
+  semana_ref: 2026-10             # Semana de referência para produção (usado quando granularidade = S)
+  data_ref: '2026-03-03'          # Data de referência para produção (usado quando granularidade = D ou M)
   # Referências independentes para PEDIDOS (granularidade segue modelo.granularidade_demanda)
-  pedidos_semana_ref: 2026-08     # Referência semanal para pedidos (usado quando granularidade = S)
-  pedidos_data_ref: '2026-02-11'  # Referência diária/mensal para pedidos (usado quando granularidade = D ou M)
+  pedidos_semana_ref: 2026-11     # Referência semanal para pedidos (usado quando granularidade = S)
+  pedidos_data_ref: '2026-03-11'  # Referência diária/mensal para pedidos (usado quando granularidade = D ou M)
   # Distribuição histórica por dia da semana (DOW) - usada apenas quando granularidade = S
   # Se não informados, o código faz fallback para ano_custo/mes_custo/meses_janela_custo
   dow_ano_ref: 2026               # Ano de referência da janela histórica DOW
-  dow_mes_ref: 2                  # Mês final da janela histórica DOW
+  dow_mes_ref: 3                  # Mês final da janela histórica DOW
   dow_meses_janela: 6             # Janela em meses para cálculo do perfil DOW
   sku_minimo_transacoes: 1        # Mínimo de transações para considerar um SKU
   tipo_estoque: DISPONIVEL PARA VENDA  # Tipo de estoque a filtrar
@@ -54,7 +54,7 @@ modelo:
 # --- Regras de negócio ---
 negocio:
   filtrar_granjas:                # Estabelecimentos a considerar na demanda histórica
-  - '100'
+  - '410'
 
 # --- Caminhos dos arquivos ---
 paths:
@@ -71,6 +71,11 @@ paths:
   producao_bruta: inputs/PRODUÇÃO DIA.xlsx
   skus_restritos: inputs/skus_restritos.xlsx
 
+# --- Fallbacks operacionais (usados apenas em cenários extremos) ---
+fallbacks:
+  custo_medio_geral: 132.82         # Usado quando não há custo válido na base do ETL
+  qtd_ovos_por_caixa: 360           # Referência de embalagem para fallback de custo
+
 # --- Configuração do solver (OR-Tools) ---
 solver:
   solver_type: SCIP_MIXED_INTEGER_PROGRAMMING  # Tipo de solver (SCIP para inteiro/misto, GLOP para linear)
@@ -80,12 +85,3 @@ solver:
   gap_percentage: 0.001           # Gap de otimalidade (0.001 = 0.1%) - SCIP only
   dual_tolerance: 1.0e-07         # Tolerância dual (precisão numérica) - SCIP only
   primal_tolerance: 1.0e-07       # Tolerância primal (precisão numérica) - SCIP only
-
-# --- Metadados ---
-meta:
-  autor: 7D
-  versao_modelo: '1.0'
-  data_criacao: '2025-12-08'
-  descricao: Modelo de otimização de mix diário (SKU x Embalagem) sem clientes
-  changelog:
-  - '2025-12-08: Versão inicial - mix diário sem clientes'

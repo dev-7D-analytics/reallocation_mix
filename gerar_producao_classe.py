@@ -19,7 +19,14 @@ from pathlib import Path
 from datetime import datetime
 import yaml
 
-from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
+from extrair_compatibilidade_embalagem import (
+    extrair_embalagem_descricao,
+    calcular_qtd_embalagem,
+    normalizar_descricao_chave,
+    _carregar_override,
+    _resolver_path_override,
+    _validar_override,
+)
 
 def carregar_config(config_path='config.yaml'):
     """Carrega configuracoes do YAML."""
@@ -84,8 +91,61 @@ def main():
         df_prod.loc[mask_aca, col_qtd] = df_prod.loc[mask_aca, col_qtd].abs()
         print(f"  Ajuste ACA/EAC: {mask_aca.sum()} ACA, {mask_eac.sum()} EAC (EAC negativado)")
 
-    # Calcular embalagem e quantidade em ovos
+    # Calcular embalagem com mesma lógica do pipeline/comparador:
+    # regex automático + fallback de override manual.
     df_prod['embalagem'] = df_prod["Desc Item"].apply(extrair_embalagem_descricao)
+    if col_item in df_prod.columns:
+        try:
+            path_override = _resolver_path_override(config)
+            df_override = _carregar_override(path_override)
+            df_override_validos, _ = _validar_override(df_override)
+            if len(df_override_validos) > 0:
+                ov = df_override_validos[df_override_validos["ativo"] == True].copy()
+                if len(ov) > 0:
+                    ov["item"] = pd.to_numeric(ov["item"], errors="coerce")
+                    ov = ov[ov["item"].notna()].copy()
+                    ov["item"] = ov["item"].astype(int)
+                    ov["descricao_normalizada"] = ov["descricao_normalizada"].astype(str)
+
+                    df_prod[col_item] = pd.to_numeric(df_prod[col_item], errors="coerce")
+                    df_prod["descricao_normalizada"] = df_prod["Desc Item"].apply(normalizar_descricao_chave)
+
+                    ov_chave = ov.drop_duplicates(subset=["item", "descricao_normalizada"], keep="last")
+                    mapa_emb_chave = {
+                        (int(r["item"]), str(r["descricao_normalizada"])): r["embalagem"]
+                        for _, r in ov_chave.iterrows()
+                    }
+                    mask_sem_regex = df_prod["embalagem"].isna() & df_prod[col_item].notna()
+                    aplic_chave = 0
+                    for idx in df_prod[mask_sem_regex].index:
+                        key = (int(df_prod.at[idx, col_item]), str(df_prod.at[idx, "descricao_normalizada"]))
+                        emb = mapa_emb_chave.get(key)
+                        if emb:
+                            df_prod.at[idx, "embalagem"] = emb
+                            aplic_chave += 1
+
+                    # Fallback por item (somente quando item tem embalagem ativa única no override)
+                    ov_item_cnt = ov.groupby("item")["embalagem"].nunique().reset_index(name="n")
+                    itens_unicos = set(ov_item_cnt[ov_item_cnt["n"] == 1]["item"].astype(int).tolist())
+                    ov_item_unico = ov[ov["item"].isin(itens_unicos)].drop_duplicates(subset=["item"], keep="last")
+                    mapa_emb_item = {int(r["item"]): r["embalagem"] for _, r in ov_item_unico.iterrows()}
+                    mask_ainda_sem = df_prod["embalagem"].isna() & df_prod[col_item].notna()
+                    aplic_item = 0
+                    for idx in df_prod[mask_ainda_sem].index:
+                        item = int(df_prod.at[idx, col_item])
+                        emb = mapa_emb_item.get(item)
+                        if emb:
+                            df_prod.at[idx, "embalagem"] = emb
+                            aplic_item += 1
+
+                    if aplic_chave > 0 or aplic_item > 0:
+                        print(
+                            f"  Fallback override embalagem aplicado "
+                            f"(chave={aplic_chave}, item={aplic_item})"
+                        )
+        except Exception as e:
+            print(f"  [AVISO] Falha ao aplicar override de embalagem: {e}")
+
     df_prod['qtd_embalagem'] = df_prod['embalagem'].apply(calcular_qtd_embalagem)
     df_prod['quantidade'] = df_prod[col_qtd] * df_prod['qtd_embalagem']
     

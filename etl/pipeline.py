@@ -605,7 +605,14 @@ class ETLPipeline:
             return pd.DataFrame(columns=['item', 'demanda_max'])
         
         # Importar funções necessárias
-        from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
+        from extrair_compatibilidade_embalagem import (
+            calcular_qtd_embalagem,
+            extrair_embalagem_descricao,
+            normalizar_descricao_chave,
+            _carregar_override,
+            _resolver_path_override,
+            _validar_override,
+        )
         
         df_fat = pd.read_parquet(path)
         
@@ -823,13 +830,20 @@ class ETLPipeline:
                 ovos_ref_geral = df_base['qtd_ovos_por_caixa'].mean()
                 usou_fallback_hardcoded = False
             else:
-                custo_medio_geral = 132.82  # FALLBACK HARDCODED
-                ovos_ref_geral = 360  # FALLBACK HARDCODED
+                fallback_cfg = self.config.get('fallbacks', {})
+                custo_medio_geral = float(fallback_cfg.get('custo_medio_geral', 132.82))
+                ovos_ref_geral = float(fallback_cfg.get('qtd_ovos_por_caixa', 360))
                 usou_fallback_hardcoded = True
                 self.logger.warning("=" * 80)
-                self.logger.warning("ALERTA: Usando valores HARDCODED pois df_base está vazio!")
-                self.logger.warning(f"  - Custo médio geral: R$ {custo_medio_geral:.2f} (HARDCODED)")
-                self.logger.warning(f"  - Ovos por caixa referência: {ovos_ref_geral} (HARDCODED)")
+                self.logger.warning("ALERTA: Usando fallback de custo pois df_base está vazio!")
+                self.logger.warning(
+                    f"  - Custo médio geral: R$ {custo_medio_geral:.2f} "
+                    "(config.fallbacks.custo_medio_geral)"
+                )
+                self.logger.warning(
+                    f"  - Ovos por caixa referência: {ovos_ref_geral:.0f} "
+                    "(config.fallbacks.qtd_ovos_por_caixa)"
+                )
                 self.logger.warning("=" * 80)
             
             # Criar índices para busca rápida
@@ -960,15 +974,37 @@ class ETLPipeline:
             df_base['preco'] = df_base['preco'].fillna(df_base['item'].map(preco_por_item))
             df_base.loc[mask_sem_preco_1 & df_base['preco'].notna(), 'origem_preco'] = 'preco_por_item'
         
-        # Se ainda não tiver preço, usar média GERAL (como o modelo original)
-        preco_medio_geral = dados.precos['preco'].mean()
+        # Se ainda não tiver preço, usar média da classe (quando disponível).
+        # Isso reduz distorção em classes com comportamento de preço diferente da média geral.
         mask_sem_preco_2 = df_base['preco'].isna()
-        if mask_sem_preco_2.any():
-            df_base.loc[mask_sem_preco_2, 'preco'] = preco_medio_geral
-            df_base.loc[mask_sem_preco_2, 'origem_preco'] = 'preco_medio_geral'
-            self.logger.warning(f"  ALERTA: {mask_sem_preco_2.sum()} item_ids sem preço direto - usando preço médio geral (R$ {preco_medio_geral:.2f})")
+        if mask_sem_preco_2.any() and 'classe' in df_base.columns:
+            preco_medio_classe = (
+                df_base[df_base['preco'].notna()]
+                .groupby('classe', as_index=True)['preco']
+                .mean()
+            )
+            preco_fill_classe = df_base.loc[mask_sem_preco_2, 'classe'].map(preco_medio_classe)
+            df_base.loc[mask_sem_preco_2, 'preco'] = df_base.loc[mask_sem_preco_2, 'preco'].fillna(preco_fill_classe)
+            mask_aplic_classe = mask_sem_preco_2 & df_base['preco'].notna()
+            df_base.loc[mask_aplic_classe, 'origem_preco'] = 'preco_medio_classe'
+            if mask_aplic_classe.any():
+                self.logger.warning(
+                    f"  ALERTA: {int(mask_aplic_classe.sum())} item_ids sem preço direto "
+                    "usaram preço médio da classe"
+                )
+
+        # Fallback final: média geral (mantém robustez quando a classe também não tem referência)
+        preco_medio_geral = dados.precos['preco'].mean()
+        mask_sem_preco_3 = df_base['preco'].isna()
+        if mask_sem_preco_3.any():
+            df_base.loc[mask_sem_preco_3, 'preco'] = preco_medio_geral
+            df_base.loc[mask_sem_preco_3, 'origem_preco'] = 'preco_medio_geral'
+            self.logger.warning(
+                f"  ALERTA: {int(mask_sem_preco_3.sum())} item_ids sem preço direto "
+                f"- usando preço médio geral (R$ {preco_medio_geral:.2f})"
+            )
             # Listar os SKUs afetados
-            skus_sem_preco = df_base.loc[mask_sem_preco_2, 'item_id'].tolist()
+            skus_sem_preco = df_base.loc[mask_sem_preco_3, 'item_id'].tolist()
             for sku in skus_sem_preco[:5]:
                 self.logger.warning(f"    - {sku}")
             if len(skus_sem_preco) > 5:
@@ -1120,7 +1156,14 @@ class ETLPipeline:
         IMPORTANTE: Apenas SKUs com embalagem válida (extraível) são considerados,
         para manter consistência com a lógica de comparação.
         """
-        from extrair_compatibilidade_embalagem import extrair_embalagem_descricao, calcular_qtd_embalagem
+        from extrair_compatibilidade_embalagem import (
+            extrair_embalagem_descricao,
+            calcular_qtd_embalagem,
+            normalizar_descricao_chave,
+            _carregar_override,
+            _resolver_path_override,
+            _validar_override,
+        )
         
         path = Path(self.config['paths'].get('producao_bruta', 'inputs/PRODUÇÃO DIA.xlsx'))
         
@@ -1167,8 +1210,77 @@ class ETLPipeline:
                 df.loc[mask_eac, 'Quantidade'] = -df.loc[mask_eac, 'Quantidade'].abs()
                 df.loc[mask_aca, 'Quantidade'] = df.loc[mask_aca, 'Quantidade'].abs()
 
-            # Extrair embalagem e calcular quantidade (mesma lógica da comparação)
+            # Extrair embalagem e calcular quantidade.
+            # Se o regex não capturar, aplicar fallback via override manual.
+            col_item = 'Cod Item' if 'Cod Item' in df.columns else 'CODIGO ITEM'
             df['embalagem'] = df['Desc Item'].apply(extrair_embalagem_descricao)
+            if col_item in df.columns:
+                try:
+                    path_override = _resolver_path_override(self.config)
+                    df_override = _carregar_override(path_override)
+                    df_override_validos, _ = _validar_override(df_override)
+                    if len(df_override_validos) > 0:
+                        ov = df_override_validos[df_override_validos["ativo"] == True].copy()
+                        if len(ov) > 0:
+                            ov["item"] = pd.to_numeric(ov["item"], errors="coerce")
+                            ov = ov[ov["item"].notna()].copy()
+                            ov["item"] = ov["item"].astype(int)
+                            ov["descricao_normalizada"] = ov["descricao_normalizada"].astype(str)
+
+                            df[col_item] = pd.to_numeric(df[col_item], errors='coerce')
+                            df["descricao_normalizada"] = df["Desc Item"].apply(normalizar_descricao_chave)
+
+                            ov_chave = ov.drop_duplicates(subset=["item", "descricao_normalizada"], keep="last")
+                            mapa_emb_chave = {
+                                (int(r["item"]), str(r["descricao_normalizada"])): r["embalagem"]
+                                for _, r in ov_chave.iterrows()
+                            }
+                            mapa_qtd_chave = {
+                                (int(r["item"]), str(r["descricao_normalizada"])): int(r["qtd_embalagem"])
+                                for _, r in ov_chave.iterrows()
+                                if pd.notna(r["qtd_embalagem"])
+                            }
+
+                            mask_sem_regex = df["embalagem"].isna() & df[col_item].notna()
+                            aplic_chave = 0
+                            for idx in df[mask_sem_regex].index:
+                                key = (int(df.at[idx, col_item]), str(df.at[idx, "descricao_normalizada"]))
+                                emb = mapa_emb_chave.get(key)
+                                if emb:
+                                    df.at[idx, "embalagem"] = emb
+                                    if key in mapa_qtd_chave:
+                                        df.at[idx, "qtd_embalagem"] = mapa_qtd_chave[key]
+                                    aplic_chave += 1
+
+                            # Fallback por item (somente quando item tem embalagem ativa única no override)
+                            ov_item_cnt = ov.groupby("item")["embalagem"].nunique().reset_index(name="n")
+                            itens_unicos = set(ov_item_cnt[ov_item_cnt["n"] == 1]["item"].astype(int).tolist())
+                            ov_item_unico = ov[ov["item"].isin(itens_unicos)].drop_duplicates(subset=["item"], keep="last")
+                            mapa_emb_item = {int(r["item"]): r["embalagem"] for _, r in ov_item_unico.iterrows()}
+                            mapa_qtd_item = {
+                                int(r["item"]): int(r["qtd_embalagem"])
+                                for _, r in ov_item_unico.iterrows()
+                                if pd.notna(r["qtd_embalagem"])
+                            }
+                            mask_ainda_sem = df["embalagem"].isna() & df[col_item].notna()
+                            aplic_item = 0
+                            for idx in df[mask_ainda_sem].index:
+                                item = int(df.at[idx, col_item])
+                                emb = mapa_emb_item.get(item)
+                                if emb:
+                                    df.at[idx, "embalagem"] = emb
+                                    if item in mapa_qtd_item:
+                                        df.at[idx, "qtd_embalagem"] = mapa_qtd_item[item]
+                                    aplic_item += 1
+
+                            if aplic_chave > 0 or aplic_item > 0:
+                                self.logger.info(
+                                    f"  _obter_skus_producao: fallback override aplicado "
+                                    f"(chave={aplic_chave}, item={aplic_item})"
+                                )
+                except Exception as e:
+                    self.logger.warning(f"  _obter_skus_producao: falha ao aplicar override ({e})")
+
             df['qtd_embalagem'] = df['embalagem'].apply(calcular_qtd_embalagem)
             df['quantidade'] = df['Quantidade'] * df['qtd_embalagem']
             
@@ -1179,7 +1291,6 @@ class ETLPipeline:
             ].copy()
 
             # Agregar por item para obter produção líquida (ACA - EAC)
-            col_item = 'Cod Item' if 'Cod Item' in df.columns else 'CODIGO ITEM'
             if col_item in df.columns:
                 df[col_item] = pd.to_numeric(df[col_item], errors='coerce')
                 df_agg = df.groupby(col_item, as_index=False)['quantidade'].sum()

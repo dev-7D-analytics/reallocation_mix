@@ -192,6 +192,18 @@ Use quando só uma fonte foi alterada.
 3. Confirmou `config.yaml` (estabelecimento, semana/data de referência, granularidade)?
 4. Conferiu se os arquivos de `inputs/` existem para o período escolhido?
 
+### Fallbacks de custo (configuráveis)
+
+Para evitar valores hardcoded no código, o ETL lê fallback de custo em `config.yaml`:
+
+```yaml
+fallbacks:
+  custo_medio_geral: 132.82
+  qtd_ovos_por_caixa: 360
+```
+
+Esses parâmetros só são usados em cenário extremo (base de custo vazia no ETL).
+
 ## Entradas esperadas (configuradas em `config.yaml`)
 
 | Parâmetro | Arquivo | Descrição |

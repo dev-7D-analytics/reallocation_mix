@@ -7,8 +7,12 @@ import numpy as np
 import pandas as pd
 
 from extrair_compatibilidade_embalagem import (
+    _carregar_override,
+    _resolver_path_override,
+    _validar_override,
     calcular_qtd_embalagem,
     extrair_embalagem_descricao,
+    normalizar_descricao_chave,
 )
 from output.metadados_output import aplicar_colunas_estabelecimento
 
@@ -72,6 +76,71 @@ def _resolver_output_dir(config: Optional[Dict], output_dir_override: Optional[s
         output_dir = Path("resultados")
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
+
+
+def _carregar_mapas_override(config: Optional[Dict]) -> Tuple[Dict[Tuple[int, str], str], Dict[int, str]]:
+    """
+    Carrega mapas de override de embalagem:
+      - mapa por chave (item, descricao_normalizada)
+      - mapa por item (apenas quando item tem embalagem ativa única)
+    """
+    if not config:
+        return {}, {}
+    try:
+        path_override = _resolver_path_override(config)
+        df_override = _carregar_override(path_override)
+        df_validos, _ = _validar_override(df_override)
+        if len(df_validos) == 0:
+            return {}, {}
+
+        ov = df_validos[df_validos["ativo"] == True].copy()
+        if len(ov) == 0:
+            return {}, {}
+        ov["item"] = pd.to_numeric(ov["item"], errors="coerce")
+        ov = ov[ov["item"].notna()].copy()
+        ov["item"] = ov["item"].astype(int)
+        ov["descricao_normalizada"] = ov["descricao_normalizada"].astype(str)
+
+        ov_chave = ov.drop_duplicates(subset=["item", "descricao_normalizada"], keep="last")
+        mapa_chave = {
+            (int(r["item"]), str(r["descricao_normalizada"])): str(r["embalagem"])
+            for _, r in ov_chave.iterrows()
+            if str(r["embalagem"]).strip() != ""
+        }
+
+        ov_item_cnt = ov.groupby("item")["embalagem"].nunique().reset_index(name="n")
+        itens_unicos = set(ov_item_cnt[ov_item_cnt["n"] == 1]["item"].astype(int).tolist())
+        ov_item_unico = ov[ov["item"].isin(itens_unicos)].drop_duplicates(subset=["item"], keep="last")
+        mapa_item = {
+            int(r["item"]): str(r["embalagem"])
+            for _, r in ov_item_unico.iterrows()
+            if str(r["embalagem"]).strip() != ""
+        }
+        return mapa_chave, mapa_item
+    except Exception:
+        return {}, {}
+
+
+def _resolver_embalagem_com_override(
+    item: Optional[Union[int, float]],
+    descricao: Optional[str],
+    mapa_override_chave: Dict[Tuple[int, str], str],
+    mapa_override_item: Dict[int, str],
+) -> Optional[str]:
+    emb = extrair_embalagem_descricao(descricao) if pd.notna(descricao) else None
+    if emb:
+        return emb
+    if item is None or pd.isna(item):
+        return None
+    try:
+        item_int = int(item)
+    except Exception:
+        return None
+    desc_norm = normalizar_descricao_chave(descricao) if pd.notna(descricao) else ""
+    emb = mapa_override_chave.get((item_int, desc_norm))
+    if emb:
+        return emb
+    return mapa_override_item.get(item_int)
 
 
 def _carregar_precos(config: Dict) -> pd.DataFrame:
@@ -537,7 +606,17 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
         quantidade_assinada.loc[mask_eac] = -quantidade_assinada.loc[mask_eac].abs()
         quantidade_assinada.loc[mask_aca] = quantidade_assinada.loc[mask_aca].abs()
 
-    df_prod["embalagem"] = df_prod["Desc Item"].apply(extrair_embalagem_descricao)
+    mapa_override_chave, mapa_override_item = _carregar_mapas_override(config)
+    df_prod["item"] = pd.to_numeric(df_prod["Cod Item"], errors="coerce")
+    df_prod["embalagem"] = df_prod.apply(
+        lambda row: _resolver_embalagem_com_override(
+            row.get("item"),
+            row.get("Desc Item"),
+            mapa_override_chave,
+            mapa_override_item,
+        ),
+        axis=1,
+    )
     df_prod["qtd_embalagem"] = df_prod["embalagem"].apply(calcular_qtd_embalagem)
     # Produção bruta (ACA): movimentos positivos após aplicar sinal (EAC já negativado).
     df_prod["quantidade"] = quantidade_assinada.clip(lower=0) * df_prod["qtd_embalagem"]
@@ -546,7 +625,6 @@ def carregar_producao(year_week: Optional[str], config: Optional[Dict] = None) -
     # Produção líquida efetivamente disponível ao modelo (ACA - EAC).
     df_prod["quantidade_produzida_liquida_modelo"] = quantidade_assinada * df_prod["qtd_embalagem"]
 
-    df_prod["item"] = pd.to_numeric(df_prod["Cod Item"], errors="coerce")
     df_prod = df_prod[
         (df_prod["item"].notna())
         & (df_prod["embalagem"].notna())
@@ -829,6 +907,8 @@ def construir_skus_fora_otimizacao(comparacao: pd.DataFrame, config: Optional[Di
             return "sem_producao_no_periodo"
         if qtd_aloc.loc[i] <= 0 and qtd_res.loc[i] > 0:
             return "somente_reserva_pedido"
+        if (not tem_preco.loc[i]) and (not tem_custo.loc[i]):
+            return "sem_preco_e_sem_custo"
         if not tem_preco.loc[i]:
             return "sem_preco"
         if not tem_custo.loc[i]:
@@ -942,9 +1022,11 @@ def main():
     precos_por_item_externo = {}
     custos_por_item_externo = {}
     if len(precos) > 0 and "item" in precos.columns and "preco" in precos.columns:
-        precos_por_item_externo = precos.groupby("item")["preco"].first().to_dict()
+        # Agregação determinística para evitar dependência da ordem de linhas.
+        precos_por_item_externo = precos.groupby("item", as_index=True)["preco"].mean().to_dict()
     if len(custos) > 0 and "item" in custos.columns and "custo_ytd" in custos.columns:
-        custos_por_item_externo = custos.groupby("item")["custo_ytd"].first().to_dict()
+        # Agregação determinística para evitar dependência da ordem de linhas.
+        custos_por_item_externo = custos.groupby("item", as_index=True)["custo_ytd"].mean().to_dict()
     
     # Carregar informações para mapeamento
     pedidos = _carregar_pedidos(config)
@@ -1041,11 +1123,10 @@ def main():
             precos_resultado = precos_resultado[precos_resultado['preco'].notna()].drop_duplicates('item_id')
             
             # Criar mapeamento por item (SKU) para fallback quando há mismatch de embalagem
-            # Usar qualquer preço disponível do SKU (não apenas se todos forem iguais)
+            # Usar agregação determinística por SKU para evitar dependência da ordem.
             precos_por_item = df_aloc_completo[['item', 'preco']].copy()
             precos_por_item = precos_por_item[precos_por_item['preco'].notna()]
-            # Pegar o primeiro preço disponível para cada SKU
-            precos_por_item = precos_por_item.groupby('item')['preco'].first().to_dict()
+            precos_por_item = precos_por_item.groupby('item', as_index=True)['preco'].mean().to_dict()
         
         if 'custo_ytd' in df_aloc_completo.columns and 'item_id' in df_aloc_completo.columns:
             df_aloc_completo['item_id'] = df_aloc_completo['item_id'].astype(str)
@@ -1053,11 +1134,10 @@ def main():
             custos_resultado = custos_resultado[custos_resultado['custo_ytd'].notna()].drop_duplicates('item_id')
             
             # Criar mapeamento por item (SKU) para fallback quando há mismatch de embalagem
-            # Usar qualquer custo disponível do SKU (não apenas se todos forem iguais)
+            # Usar agregação determinística por SKU para evitar dependência da ordem.
             custos_por_item = df_aloc_completo[['item', 'custo_ytd']].copy()
             custos_por_item = custos_por_item[custos_por_item['custo_ytd'].notna()]
-            # Pegar o primeiro custo disponível para cada SKU
-            custos_por_item = custos_por_item.groupby('item')['custo_ytd'].first().to_dict()
+            custos_por_item = custos_por_item.groupby('item', as_index=True)['custo_ytd'].mean().to_dict()
     except Exception as e:
         pass
     
@@ -1654,6 +1734,7 @@ def main():
         
         if len(skus_ausentes) > 0:
             print(f"\n[INFO] Adicionando {len(skus_ausentes)} SKUs ativos que não apareceram no output:")
+            mapa_override_chave, mapa_override_item = _carregar_mapas_override(config)
             
             # Carregar classes para mapear SKU -> classe
             classes_path = _resolver_caminho(config, "classes", INPUT_PATH / "base_skus_classes.xlsx")
@@ -1683,9 +1764,12 @@ def main():
                 classe = classe_por_item.get(sku, 'SEM_CLASSE')
                 
                 # Buscar embalagem da descrição
-                embalagem = None
-                if descricao_cadastro:
-                    embalagem = extrair_embalagem_descricao(descricao_cadastro)
+                embalagem = _resolver_embalagem_com_override(
+                    sku,
+                    descricao_cadastro,
+                    mapa_override_chave,
+                    mapa_override_item,
+                )
                 
                 # Criar item_id
                 if embalagem:
