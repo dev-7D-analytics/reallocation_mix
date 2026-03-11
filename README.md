@@ -222,6 +222,23 @@ Esses parâmetros só são usados em cenário extremo (base de custo vazia no ET
 | `paths.embalagens_override` (opcional) | `inputs/embalagens_override.xlsx` | Fallback manual de embalagem quando regex não captura |
 | `paths.estab_corrigido` | `inputs/ESTAB CORRIGIDO.xlsx` | Correção de estabelecimento |
 
+## Base física da otimização (auditoria)
+
+A partir do ETL, o pipeline salva a base consolidada usada pelo solver em:
+
+- `resultados/<timestamp_rodada>/base_otimizacao_<timestamp>.parquet`
+- `resultados/<timestamp_rodada>/base_otimizacao_<timestamp>.csv`
+- `resultados/<timestamp_rodada>/base_otimizacao_<timestamp>.xlsx`
+
+Esse dataset contém os campos de rastreabilidade já usados internamente, por exemplo:
+
+- `origem_preco`, `origem_custo`, `origem_embalagem`
+- `usa_custo_medio_classe`, `tem_demanda_historica`
+- `limite_demanda_historica`, `producao_disponivel_otimizacao_classe`
+
+O `main.py` persiste essa base e o `Otimizador` passa a consumi-la diretamente
+(com retrocompatibilidade para DataFrame em memória).
+
 ## Instalação e execução
 
 ### 1. Instalar Python 3.9+

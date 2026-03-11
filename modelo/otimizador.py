@@ -15,9 +15,10 @@ Data: 2025-01-30
 
 import pandas as pd
 import numpy as np
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Union
 from dataclasses import dataclass
 import logging
+from pathlib import Path
 from ortools.linear_solver import pywraplp
 
 
@@ -46,7 +47,7 @@ class Otimizador:
     
     def __init__(
         self, 
-        base_otimizacao: pd.DataFrame,
+        base_otimizacao: Union[pd.DataFrame, str, Path],
         producao_por_classe: pd.Series,
         producao_excedente_por_classe: Dict[str, float],
         pedidos_garantidos_por_sku: Dict[int, float],
@@ -58,23 +59,58 @@ class Otimizador:
         
         Args:
             base_otimizacao: DataFrame com dados preparados pelo ETL
+                OU caminho para arquivo físico (.parquet/.csv) com a base consolidada.
             producao_por_classe: Série com produção total por classe
             producao_excedente_por_classe: Dicionário com produção excedente por classe
             pedidos_garantidos_por_sku: Dicionário com pedidos garantidos por SKU
             config: Dicionário de configuração
             logger: Logger opcional
         """
-        self.df_base = base_otimizacao.copy()
+        self.logger = logger or self._criar_logger()
+        self.config = config
+        self.df_base = self._carregar_base_otimizacao(base_otimizacao)
         self.producao_por_classe = producao_por_classe
         self.producao_excedente = producao_excedente_por_classe
         self.pedidos_garantidos = pedidos_garantidos_por_sku
-        self.config = config
-        self.logger = logger or self._criar_logger()
         
         # Estado do solver
         self.solver: Optional[pywraplp.Solver] = None
         self.variaveis: Dict[str, pywraplp.Variable] = {}
         self.status: Optional[int] = None
+
+    def _carregar_base_otimizacao(self, base_otimizacao: Union[pd.DataFrame, str, Path]) -> pd.DataFrame:
+        """Carrega base de otimização a partir de DataFrame ou arquivo físico."""
+        if isinstance(base_otimizacao, pd.DataFrame):
+            df_base = base_otimizacao.copy()
+            self.logger.info("  Base otimização recebida em memória (DataFrame).")
+        else:
+            path = Path(base_otimizacao)
+            if not path.exists():
+                raise FileNotFoundError(f"Arquivo de base_otimizacao não encontrado: {path}")
+
+            if path.suffix.lower() == ".parquet":
+                df_base = pd.read_parquet(path)
+            elif path.suffix.lower() == ".csv":
+                df_base = pd.read_csv(path)
+            else:
+                raise ValueError(
+                    f"Formato de base_otimizacao não suportado ({path.suffix}). "
+                    "Use .parquet ou .csv."
+                )
+            self.logger.info(f"  Base otimização carregada de arquivo: {path}")
+
+        required_cols = [
+            'item_id', 'item', 'classe', 'margem_unitaria',
+            'qtd_ovos_por_caixa', 'producao_disponivel_otimizacao_classe'
+        ]
+        missing = [c for c in required_cols if c not in df_base.columns]
+        if missing:
+            raise ValueError(
+                f"base_otimizacao sem colunas obrigatórias: {missing}. "
+                f"Colunas encontradas: {list(df_base.columns)}"
+            )
+
+        return df_base
     
     def _criar_logger(self) -> logging.Logger:
         """Cria logger padrão."""

@@ -64,6 +64,41 @@ def _preparar_output_dir_rodada(config: dict, logger: logging.Logger) -> Path:
     return run_output_dir
 
 
+def _persistir_base_otimizacao(
+    df_base: pd.DataFrame,
+    output_dir: Path,
+    logger: logging.Logger,
+) -> Path:
+    """
+    Persiste a base consolidada do ETL para auditoria e reprodutibilidade.
+
+    Arquivos gerados:
+      - base_otimizacao_YYYYMMDD_HHMMSS.parquet (principal)
+      - base_otimizacao_YYYYMMDD_HHMMSS.csv     (apoio humano)
+      - base_otimizacao_YYYYMMDD_HHMMSS.xlsx    (apoio auditoria manual)
+    """
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    path_parquet = output_dir / f'base_otimizacao_{timestamp}.parquet'
+    path_csv = output_dir / f'base_otimizacao_{timestamp}.csv'
+    path_xlsx = output_dir / f'base_otimizacao_{timestamp}.xlsx'
+
+    df_export = df_base.copy()
+    # Padroniza ordenação para facilitar diff/auditoria entre rodadas.
+    col_sort = ['classe', 'item', 'item_id']
+    by = [c for c in col_sort if c in df_export.columns]
+    if by:
+        df_export = df_export.sort_values(by=by).reset_index(drop=True)
+
+    df_export.to_parquet(path_parquet, index=False)
+    # CSV como camada de inspeção manual.
+    df_export.to_csv(path_csv, index=False)
+    # Excel para facilitar conferência manual por áreas de negócio.
+    df_export.to_excel(path_xlsx, index=False, sheet_name='base_otimizacao')
+
+    logger.info(f"  Base de otimização persistida: {path_parquet.name} (+ CSV + XLSX)")
+    return path_parquet
+
+
 def main():
     """Função principal - orquestra ETL e Otimização."""
     
@@ -86,11 +121,14 @@ def main():
     logger.info(f"\n  Contrato ETL -> Otimização:")
     logger.info(f"    Linhas: {len(df_base)}")
     logger.info(f"    Colunas: {list(df_base.columns)}")
+
+    # Persistir base física para auditoria e para consumo explícito do otimizador.
+    path_base_otimizacao = _persistir_base_otimizacao(df_base, run_output_dir, logger)
     
     # 3. Otimização - Criação e resolução do modelo
     logger.info("\n>>> FASE 2: OTIMIZAÇÃO")
     otimizador = Otimizador(
-        base_otimizacao=df_base,
+        base_otimizacao=path_base_otimizacao,
         producao_por_classe=resultado_etl.producao_por_classe,
         producao_excedente_por_classe=resultado_etl.producao_excedente_por_classe,
         pedidos_garantidos_por_sku=resultado_etl.pedidos_garantidos_por_sku,
