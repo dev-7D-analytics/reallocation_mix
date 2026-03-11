@@ -869,7 +869,11 @@ def construir_skus_fora_otimizacao(comparacao: pd.DataFrame, config: Optional[Di
     Cria tabela de SKUs fora da otimização com motivo principal.
 
     Regra base:
-      - fora_otimizacao = tipo != 'otimizacao' OU quantidade_alocada <= 0
+      - fora_otimizacao = quantidade_alocada <= 0
+
+    Observação:
+      Após agregação por item, o campo `tipo` pode virar `misto` (ex.: produção + alocação).
+      Nesse caso, usar `tipo != 'otimizacao'` gera falso positivo de "fora" para SKUs já alocados.
     """
     if len(comparacao) == 0:
         return pd.DataFrame()
@@ -880,11 +884,8 @@ def construir_skus_fora_otimizacao(comparacao: pd.DataFrame, config: Optional[Di
     if "tipo" not in base.columns:
         base["tipo"] = "desconhecido"
 
-    fora_mask = (
-        base["tipo"].astype(str).str.lower() != "otimizacao"
-    ) | (
-        pd.to_numeric(base["quantidade_alocada"], errors="coerce").fillna(0.0) <= 0
-    )
+    qtd_aloc_base = pd.to_numeric(base["quantidade_alocada"], errors="coerce").fillna(0.0)
+    fora_mask = qtd_aloc_base <= 0
     df = base[fora_mask].copy()
     if len(df) == 0:
         return pd.DataFrame()
@@ -892,13 +893,39 @@ def construir_skus_fora_otimizacao(comparacao: pd.DataFrame, config: Optional[Di
     qtd_prod_liq = pd.to_numeric(df.get("quantidade_produzida_liquida_modelo", 0.0), errors="coerce").fillna(0.0)
     qtd_aloc = pd.to_numeric(df.get("quantidade_alocada", 0.0), errors="coerce").fillna(0.0)
     qtd_res = pd.to_numeric(df.get("quantidade_reservada", 0.0), errors="coerce").fillna(0.0)
+    margem = pd.to_numeric(df.get("margem_unitaria", np.nan), errors="coerce")
+    limite_demanda = pd.to_numeric(df.get("limite_demanda_historica", np.nan), errors="coerce")
     tem_preco = pd.to_numeric(df.get("preco", np.nan), errors="coerce").notna()
     tem_custo = pd.to_numeric(df.get("custo_ytd", np.nan), errors="coerce").notna()
     emb = df.get("embalagem", pd.Series(index=df.index, dtype=object)).astype(str)
     tem_embalagem = (~emb.isna()) & (~emb.isin(["SEM_EMBALAGEM", "RESERVA", "nan", "None", ""]))
     tem_demanda = df.get("tem_demanda_historica", pd.Series(False, index=df.index)).fillna(False).astype(bool)
     sku_restrito = df.get("sku_restrito", pd.Series(False, index=df.index)).fillna(False).astype(bool)
+    classe_df = df.get("classe", pd.Series("SEM_CLASSE", index=df.index)).fillna("SEM_CLASSE")
     considerar_demanda = bool((config or {}).get("modelo", {}).get("considerar_demanda_historica", False))
+
+    # Métricas por classe para explicar casos de decisão do solver (competição intra-classe).
+    # Importante: calcular na base completa (comparacao), não apenas no subconjunto "fora",
+    # para enxergar os itens da classe que efetivamente receberam alocação.
+    classe_base = base.get("classe", pd.Series("SEM_CLASSE", index=base.index)).fillna("SEM_CLASSE")
+    agg_classe = pd.DataFrame(
+        {
+            "classe": classe_base,
+            "qtd_prod_liq": pd.to_numeric(base.get("quantidade_produzida_liquida_modelo", 0.0), errors="coerce").fillna(0.0),
+            "qtd_aloc": pd.to_numeric(base.get("quantidade_alocada", 0.0), errors="coerce").fillna(0.0),
+            "qtd_res": pd.to_numeric(base.get("quantidade_reservada", 0.0), errors="coerce").fillna(0.0),
+            "margem": pd.to_numeric(base.get("margem_unitaria", np.nan), errors="coerce"),
+        }
+    )
+    prod_classe = agg_classe.groupby("classe")["qtd_prod_liq"].sum()
+    aloc_classe = agg_classe.groupby("classe")["qtd_aloc"].sum()
+    res_classe = agg_classe.groupby("classe")["qtd_res"].sum()
+    margem_max_aloc_classe = (
+        agg_classe[agg_classe["qtd_aloc"] > 0]
+        .groupby("classe")["margem"]
+        .max()
+        .to_dict()
+    )
 
     def _motivo_principal(i: int) -> str:
         if sku_restrito.loc[i]:
@@ -915,8 +942,28 @@ def construir_skus_fora_otimizacao(comparacao: pd.DataFrame, config: Optional[Di
             return "sem_custo"
         if not tem_embalagem.loc[i]:
             return "sem_embalagem_mapeada"
+        if considerar_demanda:
+            lim_i = limite_demanda.loc[i]
+            if pd.notna(lim_i) and lim_i <= 0:
+                return "limite_demanda_historica_zero"
         if considerar_demanda and (not tem_demanda.loc[i]):
             return "sem_demanda_historica"
+        classe_i = classe_df.loc[i]
+        prod_cls = float(prod_classe.get(classe_i, 0.0))
+        aloc_cls = float(aloc_classe.get(classe_i, 0.0))
+        res_cls = float(res_classe.get(classe_i, 0.0))
+        # Não sobrou volume para otimizar na classe após reservas.
+        if aloc_cls <= 0 and res_cls > 0 and prod_cls <= res_cls:
+            return "classe_sem_excedente_pos_reserva"
+        # Classe com alocação, porém item perdeu competição para outros da mesma classe.
+        # Inclui casos de margem menor e empate de margem (desempate interno do solver).
+        margem_ref = margem_max_aloc_classe.get(classe_i, np.nan)
+        if aloc_cls > 0 and pd.notna(margem.loc[i]) and pd.notna(margem_ref):
+            tol = 1e-9
+            if margem.loc[i] < (margem_ref - tol):
+                return "priorizacao_margem_intraclasse"
+            if abs(margem.loc[i] - margem_ref) <= tol:
+                return "empate_margem_desempate_solver_intraclasse"
         return "fora_otimizacao_sem_motivo_claro"
 
     df["motivo_fora_otimizacao"] = [_motivo_principal(i) for i in df.index]
