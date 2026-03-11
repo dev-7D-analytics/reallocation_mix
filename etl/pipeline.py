@@ -790,6 +790,8 @@ class ETLPipeline:
         # Começar pela base de custos
         df_base = dados.custos[['item_id', 'item', 'embalagem', 'custo_ytd']].copy()
         df_base['item'] = df_base['item'].astype(int)
+        if 'origem_custo' not in df_base.columns:
+            df_base['origem_custo'] = 'custo_direto'
         
         # Filtrar por SKUs na produção
         if len(skus_producao) > 0:

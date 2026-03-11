@@ -346,6 +346,10 @@ class Otimizador:
                 'producao_total': row['producao_total'],
                 'tem_demanda_historica': row.get('tem_demanda_historica', False),
                 'usa_custo_medio_classe': row.get('usa_custo_medio_classe', False),
+                # Rastreabilidade de insumos (sem alterar semântica do modelo).
+                'origem_preco': row.get('origem_preco', None),
+                'origem_custo': row.get('origem_custo', None),
+                'origem_embalagem': row.get('origem_embalagem', None),
                 'tipo': 'otimizacao',
             })
         

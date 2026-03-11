@@ -1038,6 +1038,10 @@ def main():
     usa_custo_medio_classe_por_item_id = {}  # item_id -> True/False
     limite_demanda_por_item = {}  # item -> limite_demanda_historica
     margem_por_ovo_por_item = {}  # item -> margem_por_ovo (R$/ovo - métrica otimizada)
+    origem_preco_por_item_id = {}  # item_id -> origem_preco canônica do modelo
+    origem_custo_por_item_id = {}  # item_id -> origem_custo canônica do modelo
+    origem_preco_por_item = {}  # item -> origem_preco canônica do modelo
+    origem_custo_por_item = {}  # item -> origem_custo canônica do modelo
     df_demanda_historica = pd.DataFrame(columns=["item", "descricao", "classe", "demanda_max"])
     df_param_demanda = pd.DataFrame(columns=["parametro", "valor"])
     deficit_pedido_por_item = {}
@@ -1049,6 +1053,42 @@ def main():
             df_aloc_completo = df_aloc_completo[df_aloc_completo['item'].notna()].copy()
             df_aloc_completo['item'] = df_aloc_completo['item'].astype(int)
             skus_com_demanda = set(df_aloc_completo[df_aloc_completo['tem_demanda_historica'] == True]['item'].unique())
+
+        # Capturar origem de preço/custo já consolidada no resultado do modelo.
+        if 'item_id' in df_aloc_completo.columns:
+            df_aloc_completo['item_id'] = df_aloc_completo['item_id'].astype(str).str.strip()
+            if 'origem_preco' in df_aloc_completo.columns:
+                tmp = (
+                    df_aloc_completo[['item_id', 'origem_preco']]
+                    .dropna(subset=['origem_preco'])
+                    .drop_duplicates('item_id')
+                )
+                origem_preco_por_item_id = tmp.set_index('item_id')['origem_preco'].to_dict()
+            if 'origem_custo' in df_aloc_completo.columns:
+                tmp = (
+                    df_aloc_completo[['item_id', 'origem_custo']]
+                    .dropna(subset=['origem_custo'])
+                    .drop_duplicates('item_id')
+                )
+                origem_custo_por_item_id = tmp.set_index('item_id')['origem_custo'].to_dict()
+        if 'item' in df_aloc_completo.columns:
+            df_aloc_completo['item'] = pd.to_numeric(df_aloc_completo['item'], errors='coerce')
+            df_tmp_item = df_aloc_completo[df_aloc_completo['item'].notna()].copy()
+            df_tmp_item['item'] = df_tmp_item['item'].astype(int)
+            if 'origem_preco' in df_tmp_item.columns:
+                tmp = (
+                    df_tmp_item[['item', 'origem_preco']]
+                    .dropna(subset=['origem_preco'])
+                    .drop_duplicates('item')
+                )
+                origem_preco_por_item = tmp.set_index('item')['origem_preco'].to_dict()
+            if 'origem_custo' in df_tmp_item.columns:
+                tmp = (
+                    df_tmp_item[['item', 'origem_custo']]
+                    .dropna(subset=['origem_custo'])
+                    .drop_duplicates('item')
+                )
+                origem_custo_por_item = tmp.set_index('item')['origem_custo'].to_dict()
         
         # Extrair limite_demanda_historica por item (SKU)
         if 'limite_demanda_historica' in df_aloc_completo.columns and 'item' in df_aloc_completo.columns:
@@ -1316,6 +1356,30 @@ def main():
             if mask_sem_custo.any():
                 comparacao.loc[mask_sem_custo, "custo_ytd"] = comparacao.loc[mask_sem_custo, "item"].map(custos_por_item_externo)
                 comparacao.loc[(mask_sem_custo) & (comparacao["custo_ytd"].notna()), "custo_origem"] = "arquivo_externo_por_item"
+
+    # Priorizar a rastreabilidade canônica calculada no próprio resultado do modelo.
+    # Mantém os mesmos nomes de colunas consumidos pelo PBI.
+    if len(origem_preco_por_item_id) > 0:
+        origem_preco_item_id_series = comparacao["item_id"].map(origem_preco_por_item_id)
+        mask = origem_preco_item_id_series.notna()
+        comparacao.loc[mask, "preco_origem"] = origem_preco_item_id_series.loc[mask]
+    if len(origem_preco_por_item) > 0:
+        mask = comparacao["preco_origem"].isna()
+        if mask.any():
+            origem_preco_item_series = comparacao.loc[mask, "item"].map(origem_preco_por_item)
+            mask_set = origem_preco_item_series.notna()
+            comparacao.loc[origem_preco_item_series.index[mask_set], "preco_origem"] = origem_preco_item_series.loc[mask_set]
+
+    if len(origem_custo_por_item_id) > 0:
+        origem_custo_item_id_series = comparacao["item_id"].map(origem_custo_por_item_id)
+        mask = origem_custo_item_id_series.notna()
+        comparacao.loc[mask, "custo_origem"] = origem_custo_item_id_series.loc[mask]
+    if len(origem_custo_por_item) > 0:
+        mask = comparacao["custo_origem"].isna()
+        if mask.any():
+            origem_custo_item_series = comparacao.loc[mask, "item"].map(origem_custo_por_item)
+            mask_set = origem_custo_item_series.notna()
+            comparacao.loc[origem_custo_item_series.index[mask_set], "custo_origem"] = origem_custo_item_series.loc[mask_set]
     
     # Calcular margem unitária (em R$/CX360, base normalizada)
     comparacao["margem_unitaria"] = comparacao["preco"] - comparacao["custo_ytd"]
