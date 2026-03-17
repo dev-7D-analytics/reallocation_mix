@@ -353,6 +353,7 @@ python gerar_producao_classe.py                # 6. Produção por classe
 python main.py                                 # 7. ETL + Otimização + Output + DOW + Comparação + PBI
 # python comparar_producao_alocacao.py         # (opcional) gerar relatório comparativo avulso
 # python output/gerar_consolidado_pbi.py       # (opcional) gerar consolidado PBI avulso
+# python output/concatenar_pbi_consolidados.py --input-dir resultados/pbi_concat  # (opcional) concatena PBIs
 ```
 
 > **Nota**: No Windows use `python` em vez de `python3`. No Linux/Mac use `python3` ou `python` (depende da instalação). Os CSVs gerados nos passos 2-6 podem ser editados manualmente antes de rodar o passo 7.
@@ -360,6 +361,12 @@ python main.py                                 # 7. ETL + Otimização + Output 
 ### 5. Resultados
 
 Arquivos gerados em `resultados/<YYYYMMDD_HHMMSS>/` (uma subpasta por rodada).
+
+Ao iniciar `main.py`, o projeto também garante automaticamente a pasta:
+
+- `resultados/pbi_concat`
+
+Essa pasta é usada para armazenar/organizar concatenações manuais de múltiplos `pbi_consolidado_*.xlsx`.
 
 ## Outputs gerados
 
@@ -376,6 +383,25 @@ Arquivos gerados em `resultados/<YYYYMMDD_HHMMSS>/` (uma subpasta por rodada).
 | `<rodada_ts>/pbi_skus_fora_otimizacao_*.csv` | SKUs fora da otimização para consumo no BI |
 | `<rodada_ts>/pbi_consolidado_*.xlsx` | Consolidação BI com abas: consolidado_sku, distribuicao_diaria, parametros, skus_fora_otimizacao (inclui `quantidade_nao_atendida_pedido` na aba consolidado_sku) |
 
+### Concatenação de múltiplos PBIs
+
+Para consolidar vários arquivos `pbi_consolidado_*.xlsx` (por exemplo, um por estabelecimento) em um único workbook:
+
+```bash
+python output/concatenar_pbi_consolidados.py --input-dir resultados/pbi_concat
+```
+
+Saída padrão:
+
+- `resultados/pbi_concat/pbi_consolidado_concat_<YYYYMMDD_HHMMSS>.xlsx`
+
+O script:
+
+- concatena por aba (`consolidado_sku`, `distribuicao_diaria`, `parametros`, `skus_fora_otimizacao`);
+- inclui colunas de rastreabilidade (`arquivo_origem_pbi`, `periodo_origem_pbi`, `timestamp_origem_pbi`);
+- cria aba `consolidacao_info` com resumo da consolidação;
+- ignora arquivos temporários e concat anteriores (`~$*`, `*:Zone.Identifier`, `pbi_consolidado_concat_*`).
+
 ## Configuração relevante (`config.yaml`)
 
 - **Objetivo**: `modelo.tipo_objetivo` = `maximizar_margem` (padrão)
@@ -387,6 +413,20 @@ Arquivos gerados em `resultados/<YYYYMMDD_HHMMSS>/` (uma subpasta por rodada).
 - **Cap de reserva**: `modelo.capar_reserva_na_producao` (True limita reservas à produção disponível, priorizando por margem)
 - **Demanda histórica**: `modelo.considerar_demanda_historica`, `granularidade_demanda` (M/S/D), `tipo_calculo_demanda` (`percentil`, `maximo`, `media`)
 - **Solver**: `solver.solver_type`, `time_limit_ms`, `num_threads`
+
+### Convenções de período nos outputs
+
+- Referências **semanais** nos nomes/labels de output usam `YYYY_WW` (ex.: `2026_09`).
+- Referências **diárias/mensais** permanecem `YYYY-MM-DD` / `YYYY-MM`.
+
+### Visibilidade de tipo no comparador
+
+Sem criar novas colunas, o campo `tipo` no comparador pode trazer composição explícita quando houver múltiplas naturezas no mesmo item após agregação por SKU, por exemplo:
+
+- `otimizacao_e_reserva`
+- `otimizacao_e_cadastro`
+
+Isso substitui o rótulo genérico `misto` para facilitar leitura/filtro no PBI.
 
 ### Regras de filtro de pedidos por período
 

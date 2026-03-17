@@ -56,6 +56,13 @@ def calcular_comparativo_baseline(
     # Métricas otimizadas: APENAS volume otimizável (excluir reserva e OUTROS)
     margem_otimizada = df_otimizavel['margem_total'].sum() if len(df_otimizavel) > 0 else 0
     custo_otimizado = df_otimizavel['custo_total'].sum() if len(df_otimizavel) > 0 and 'custo_total' in df_otimizavel.columns else 0
+    volume_otimizado_total = df_otimizavel['quantidade'].sum() if len(df_otimizavel) > 0 and 'quantidade' in df_otimizavel.columns else 0
+    producao_liquida_total = float(producao_por_classe.sum()) if len(producao_por_classe) > 0 else 0.0
+    taxa_alocacao_sobre_producao = (
+        (volume_otimizado_total / producao_liquida_total) * 100
+        if producao_liquida_total > 0
+        else None
+    )
 
     # Métricas de reserva (pedidos garantidos) - reportadas separadamente
     reserva_volume = df_reserva_resultado['quantidade'].sum() if len(df_reserva_resultado) > 0 else 0
@@ -394,6 +401,11 @@ def calcular_comparativo_baseline(
     logger.info(f"  Custo Baseline:   R$ {custo_baseline:,.2f}")
     logger.info(f"  Custo Otimizado:  R$ {custo_otimizado:,.2f}")
     logger.info(f"  Variação Custo: R$ {reducao_custo:,.2f} ({reducao_custo_pct:.2f}%)")
+    taxa_aloc_str = f"{taxa_alocacao_sobre_producao:.2f}%" if taxa_alocacao_sobre_producao is not None else "N/A"
+    logger.info(
+        f"  Taxa alocação sobre produção líquida: {taxa_aloc_str} "
+        f"({volume_otimizado_total:,.0f} / {producao_liquida_total:,.0f} ovos)"
+    )
 
     logger.info("")
     logger.info("-"*80)
@@ -434,6 +446,9 @@ def calcular_comparativo_baseline(
         'custo_otimizado': custo_otimizado,
         'reducao_custo': reducao_custo,
         'reducao_custo_pct': reducao_custo_pct,
+        'volume_otimizado_total': volume_otimizado_total,
+        'producao_liquida_total': producao_liquida_total,
+        'taxa_alocacao_sobre_producao_pct': taxa_alocacao_sobre_producao,
         'reserva_volume_pedido': reserva_volume_pedido,
         'reserva_volume_atendido': reserva_volume,
         'reserva_deficit': reserva_deficit,

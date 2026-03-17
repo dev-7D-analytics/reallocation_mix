@@ -31,6 +31,29 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 
+def _normalizar_tipo_calculo_demanda(valor: Any) -> Any:
+    """Padroniza grafia do tipo de cálculo de demanda para 'maximo'."""
+    if pd.isna(valor):
+        return valor
+    txt = str(valor).strip().lower()
+    mapa = {
+        "maxima": "maximo",
+        "máxima": "maximo",
+        "máximo": "maximo",
+    }
+    return mapa.get(txt, txt)
+
+
+def _formatar_ano_semana_saida(valor: Any) -> Any:
+    """Formata rótulo semanal YYYY-WW -> YYYY_WW para exibição/nomes de output."""
+    if pd.isna(valor):
+        return valor
+    txt = str(valor).strip()
+    if len(txt) == 7 and txt[4] == "-" and txt[:4].isdigit() and txt[5:].isdigit():
+        return txt.replace("-", "_")
+    return valor
+
+
 def _carregar_config() -> Dict[str, Any]:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
@@ -56,9 +79,17 @@ def _extrair_parametros_flat(config: Dict[str, Any]) -> pd.DataFrame:
     for secao, conteudo in config.items():
         if isinstance(conteudo, dict):
             for chave, valor in conteudo.items():
+                chave_saida = chave
+                # Uniformização de grafia para exibição na aba parametros (não muda schema tabular).
+                if secao == "modelo" and chave == "fator_demanda_maxima":
+                    chave_saida = "fator_demanda_maximo"
+                if secao == "modelo" and chave == "tipo_calculo_demanda":
+                    valor = _normalizar_tipo_calculo_demanda(valor)
+                if secao == "dados" and chave in {"semana_ref", "pedidos_semana_ref"}:
+                    valor = _formatar_ano_semana_saida(valor)
                 if isinstance(valor, (list, dict)):
                     valor = str(valor)
-                rows.append({"secao": secao, "parametro": chave, "valor": valor})
+                rows.append({"secao": secao, "parametro": chave_saida, "valor": valor})
         else:
             rows.append({"secao": "", "parametro": secao, "valor": conteudo})
     return pd.DataFrame(rows)
@@ -70,11 +101,11 @@ def _parametros_modelo_colunas(config: Dict[str, Any]) -> Dict[str, Any]:
     modelo = config.get("modelo", {})
     solver = config.get("solver", {})
     return {
-        "param_semana_ref": dados.get("semana_ref"),
+        "param_semana_ref": _formatar_ano_semana_saida(dados.get("semana_ref")),
         "param_ano_custo": dados.get("ano_custo"),
         "param_mes_custo": dados.get("mes_custo"),
         "param_meses_janela_custo": dados.get("meses_janela_custo"),
-        "param_tipo_calculo_demanda": modelo.get("tipo_calculo_demanda"),
+        "param_tipo_calculo_demanda": _normalizar_tipo_calculo_demanda(modelo.get("tipo_calculo_demanda")),
         "param_fator_demanda_maxima": modelo.get("fator_demanda_maxima"),
         "param_granularidade_demanda": modelo.get("granularidade_demanda"),
         "param_considerar_demanda_historica": modelo.get("considerar_demanda_historica"),
@@ -94,7 +125,7 @@ def _parametros_dow_colunas(config: Dict[str, Any]) -> Dict[str, Any]:
         "param_dow_ano_ref": dados.get("dow_ano_ref", dados.get("ano_custo")),
         "param_dow_mes_ref": dados.get("dow_mes_ref", dados.get("mes_custo")),
         "param_dow_meses_janela": dados.get("dow_meses_janela", dados.get("meses_janela_custo")),
-        "param_semana_ref": dados.get("semana_ref"),
+        "param_semana_ref": _formatar_ano_semana_saida(dados.get("semana_ref")),
     }
 
 
@@ -115,6 +146,8 @@ def _carregar_comparacao(output_dir: Path) -> Optional[pd.DataFrame]:
             df["quantidade_nao_atendida_pedido"] = pd.to_numeric(df["deficit_pedido"], errors="coerce").fillna(0.0)
         else:
             df["quantidade_nao_atendida_pedido"] = 0.0
+    if "tipo_calculo_demanda" in df.columns:
+        df["tipo_calculo_demanda"] = df["tipo_calculo_demanda"].map(_normalizar_tipo_calculo_demanda)
     return df
 
 
@@ -233,6 +266,7 @@ def gerar_consolidado_pbi(
         config = _carregar_config()
     output_dir = _resolver_output_dir(config)
     semana_ref = config.get("dados", {}).get("semana_ref", "sem_ref")
+    semana_ref_saida = _formatar_ano_semana_saida(semana_ref)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     log("\n[1/4] Carregando outputs...")
@@ -291,16 +325,16 @@ def gerar_consolidado_pbi(
 
     # ── Exportar ──
     log("\n[4/4] Exportando...")
-    path_csv = output_dir / f"pbi_consolidado_sku_{semana_ref}_{timestamp}.csv"
+    path_csv = output_dir / f"pbi_consolidado_sku_{semana_ref_saida}_{timestamp}.csv"
     df_sku.to_csv(path_csv, index=False, encoding="utf-8")
     log(f"  CSV: {path_csv.name}")
     path_fora_csv = None
     if len(df_fora) > 0:
-        path_fora_csv = output_dir / f"pbi_skus_fora_otimizacao_{semana_ref}_{timestamp}.csv"
+        path_fora_csv = output_dir / f"pbi_skus_fora_otimizacao_{semana_ref_saida}_{timestamp}.csv"
         df_fora.to_csv(path_fora_csv, index=False, encoding="utf-8")
         log(f"  CSV SKUs fora: {path_fora_csv.name}")
 
-    path_xlsx = output_dir / f"pbi_consolidado_{semana_ref}_{timestamp}.xlsx"
+    path_xlsx = output_dir / f"pbi_consolidado_{semana_ref_saida}_{timestamp}.xlsx"
     with pd.ExcelWriter(path_xlsx, engine="openpyxl") as writer:
         df_sku.to_excel(writer, sheet_name="consolidado_sku", index=False)
         if len(df_diaria) > 0:

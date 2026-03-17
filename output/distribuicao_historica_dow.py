@@ -47,6 +47,16 @@ def _get_week_start(semana_ref: str) -> date:
     return datetime.fromisocalendar(int(ano), int(semana), 1).date()
 
 
+def _formatar_ano_semana_saida(valor: Any) -> Any:
+    """Formata rótulo semanal YYYY-WW -> YYYY_WW para exibição/nomes de output."""
+    if pd.isna(valor):
+        return valor
+    txt = str(valor).strip()
+    if len(txt) == 7 and txt[4] == "-" and txt[:4].isdigit() and txt[5:].isdigit():
+        return txt.replace("-", "_")
+    return txt
+
+
 def _periodos_mensais(ano_ref: int, mes_ref: int, meses_janela: int) -> List[Tuple[int, int]]:
     periodos: List[Tuple[int, int]] = []
     for i in range(meses_janela):
@@ -253,6 +263,7 @@ def gerar_distribuicao_historica_dow(
     if not semana_ref:
         logger.warning("  DOW: semana_ref não definida, saída não gerada.")
         return None
+    semana_ref_saida = _formatar_ano_semana_saida(semana_ref)
 
     logger.info("\n>>> FASE 5: DISTRIBUIÇÃO HISTÓRICA DOW")
 
@@ -380,7 +391,7 @@ def gerar_distribuicao_historica_dow(
                     log_zero = "SKU nunca produzido neste dia da semana"
 
             linhas_distrib.append({
-                "semana_alvo": semana_ref,
+                "semana_alvo": semana_ref_saida,
                 "classe": classe,
                 "item": item,
                 "descricao": descricao,
@@ -448,7 +459,7 @@ def gerar_distribuicao_historica_dow(
     # V1: fechamento por SKU (soma 7 dias == volume_modelo)
     v1 = df_consolidado.copy()
     v1["regra"] = "Fechamento SKU-semana"
-    v1["chave"] = semana_ref + "|" + v1["item"].astype(str) + "|" + v1["classe"]
+    v1["chave"] = str(semana_ref_saida) + "|" + v1["item"].astype(str) + "|" + v1["classe"]
     v1["item_descricao"] = v1["item"].map(map_descricao).fillna("")
     v1["valor_esperado"] = v1["volume_modelo_semanal"]
     v1["valor_calculado"] = v1["volume_semana_estimado"]
@@ -464,7 +475,7 @@ def gerar_distribuicao_historica_dow(
         calc = float(vol_classe_dow.get(classe, 0))
         v2_rows.append({
             "regra": "Fechamento classe-semana",
-            "chave": f"{semana_ref}|{classe}",
+            "chave": f"{semana_ref_saida}|{classe}",
             "item_descricao": "",
             "valor_esperado": esp,
             "valor_calculado": calc,
@@ -486,7 +497,7 @@ def gerar_distribuicao_historica_dow(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(config.get("paths", {}).get("output_dir", "resultados"))
     output_dir.mkdir(exist_ok=True)
-    out_path = output_dir / f"distribuicao_historica_dow_{semana_ref}_{timestamp}.xlsx"
+    out_path = output_dir / f"distribuicao_historica_dow_{semana_ref_saida}_{timestamp}.xlsx"
 
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
         df_distrib.to_excel(writer, sheet_name="distribuicao_sku_dia", index=False)

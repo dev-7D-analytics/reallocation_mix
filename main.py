@@ -64,6 +64,27 @@ def _preparar_output_dir_rodada(config: dict, logger: logging.Logger) -> Path:
     return run_output_dir
 
 
+def _garantir_dir_concat_pbi(config: dict, logger: logging.Logger) -> Path:
+    """
+    Garante diretório estável para concatenação manual dos PBIs.
+
+    Observação:
+    - Usa o diretório base de saída (pai do output_dir da rodada atual).
+    - Exemplo: resultados/pbi_concat
+    """
+    output_dir_cfg = Path(config.get("paths", {}).get("output_dir", "resultados"))
+    base_output_dir = output_dir_cfg.parent if output_dir_cfg.name.isdigit() or "_" in output_dir_cfg.name else output_dir_cfg
+    # Em execuções normais, output_dir já estará em resultados/<timestamp>.
+    # Nesse caso, queremos sempre o pai (resultados) para centralizar concatenação.
+    if output_dir_cfg.name.startswith("20") and "_" in output_dir_cfg.name:
+        base_output_dir = output_dir_cfg.parent
+
+    concat_dir = base_output_dir / "pbi_concat"
+    concat_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"  Diretório de concatenação PBI garantido: {concat_dir.resolve()}")
+    return concat_dir
+
+
 def _persistir_base_otimizacao(
     df_base: pd.DataFrame,
     output_dir: Path,
@@ -110,6 +131,7 @@ def main():
     
     config = carregar_config()
     run_output_dir = _preparar_output_dir_rodada(config, logger)
+    _garantir_dir_concat_pbi(config, logger)
     
     # 2. ETL - Carregamento e transformação de dados
     logger.info("\n>>> FASE 1: ETL")

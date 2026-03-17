@@ -78,6 +78,28 @@ def _resolver_output_dir(config: Optional[Dict], output_dir_override: Optional[s
     return output_dir
 
 
+def _formatar_ano_semana_saida(valor: object) -> object:
+    """Formata rótulo semanal de YYYY-WW para YYYY_WW nos outputs."""
+    if pd.isna(valor):
+        return valor
+    txt = str(valor).strip()
+    if len(txt) == 7 and txt[4] == "-" and txt[:4].isdigit() and txt[5:].isdigit():
+        return txt.replace("-", "_")
+    return txt
+
+
+def _formatar_periodo_saida(periodo_label: str, granularidade: str) -> str:
+    """
+    Normaliza rótulo de período para saída.
+    - Semanal (S): YYYY-WW -> YYYY_WW
+    - Diário/Mensal: mantém formato original.
+    """
+    gran = str(granularidade or "").upper()
+    if gran == "S":
+        return str(_formatar_ano_semana_saida(periodo_label))
+    return str(periodo_label)
+
+
 def _carregar_mapas_override(config: Optional[Dict]) -> Tuple[Dict[Tuple[int, str], str], Dict[int, str]]:
     """
     Carrega mapas de override de embalagem:
@@ -774,6 +796,22 @@ def construir_comparacao(producao: pd.DataFrame, alocacao: pd.DataFrame, periodo
     return comparacao.sort_values("diferenca_absoluta", ascending=False).reset_index(drop=True)
 
 
+def _normalizar_tipo_calculo_demanda(valor: object) -> object:
+    """
+    Padroniza grafia do tipo de cálculo de demanda para evitar variações
+    ('maxima', 'máxima', 'máximo') nos outputs.
+    """
+    if pd.isna(valor):
+        return valor
+    txt = str(valor).strip().lower()
+    mapa = {
+        "maxima": "maximo",
+        "máxima": "maximo",
+        "máximo": "maximo",
+    }
+    return mapa.get(txt, txt)
+
+
 def agregar_comparacao_por_item(
     comparacao: pd.DataFrame,
     lookup_item_id_por_item: Optional[Dict[Union[int, float], str]] = None,
@@ -814,9 +852,38 @@ def agregar_comparacao_por_item(
     base_prod_diferenca = "quantidade_produzida_liquida_modelo" if "quantidade_produzida_liquida_modelo" in por_item.columns else "quantidade_produzida"
     por_item["diferenca_aloc_menos_prod"] = por_item["quantidade_alocada"] - por_item[base_prod_diferenca]
     por_item["diferenca_absoluta"] = por_item["diferenca_aloc_menos_prod"].abs()
-    # tipo: se misto (reserva + otimização) -> "misto"
+    # tipo: composição explícita quando há múltiplos tipos no mesmo item.
+    # Ex.: "otimizacao_e_reserva" ao invés de "misto".
     if "tipo" in comparacao.columns:
-        tipos_por_item = comparacao.groupby("item")["tipo"].apply(lambda s: "misto" if s.nunique() > 1 else s.iloc[0])
+        def _tipo_composto(s: pd.Series) -> str:
+            tipos = (
+                s.dropna()
+                .astype(str)
+                .str.strip()
+                .str.lower()
+                .replace({"nan": None, "none": None, "": None})
+                .dropna()
+                .unique()
+                .tolist()
+            )
+            if len(tipos) == 0:
+                return "desconhecido"
+            if len(tipos) == 1:
+                return tipos[0]
+
+            prioridade = [
+                "otimizacao",
+                "reserva",
+                "cadastro",
+                "outros",
+                "desconhecido",
+            ]
+            ordenados = [t for t in prioridade if t in tipos]
+            extras = sorted([t for t in tipos if t not in prioridade])
+            tokens = ordenados + extras
+            return "_e_".join(tokens)
+
+        tipos_por_item = comparacao.groupby("item")["tipo"].apply(_tipo_composto)
         por_item["tipo"] = por_item["item"].map(tipos_por_item)
     # origem_dado: "Ambos" se há linha com produção e linha com alocação (ou alguma "Ambos")
     if "origem_dado" in comparacao.columns:
@@ -872,8 +939,9 @@ def construir_skus_fora_otimizacao(comparacao: pd.DataFrame, config: Optional[Di
       - fora_otimizacao = quantidade_alocada <= 0
 
     Observação:
-      Após agregação por item, o campo `tipo` pode virar `misto` (ex.: produção + alocação).
-      Nesse caso, usar `tipo != 'otimizacao'` gera falso positivo de "fora" para SKUs já alocados.
+      Após agregação por item, o campo `tipo` pode virar composto
+      (ex.: `otimizacao_e_reserva`), então não deve ser usado como único critério
+      para classificar "fora da otimização".
     """
     if len(comparacao) == 0:
         return pd.DataFrame()
@@ -1056,6 +1124,8 @@ def main():
     if year_week is None and config:
         year_week = config.get("dados", {}).get("semana_ref")
     producao, periodo_label = carregar_producao(year_week, config)
+    granularidade_output = config.get("modelo", {}).get("granularidade_demanda", "S").upper() if config else "S"
+    periodo_label_saida = _formatar_periodo_saida(periodo_label, granularidade_output)
     alocacao, caminho_resultado = carregar_alocacao(
         args.resultado,
         output_dir=output_dir,
@@ -1164,7 +1234,7 @@ def main():
         None, output_dir=output_dir
     )
 
-    comparacao = construir_comparacao(producao, alocacao, periodo_label, config)
+    comparacao = construir_comparacao(producao, alocacao, periodo_label_saida, config)
     
     # Garantir tipos numéricos nas colunas-chave (compatibilidade pandas 2.x)
     for col_num in ['preco', 'custo_ytd', 'margem_unitaria', 'margem_unitaria_cx360', 'margem_por_ovo', 'limite_demanda_historica']:
@@ -1473,7 +1543,7 @@ def main():
                     'descricao': None,  # Será preenchido depois
                     'embalagem': None,
                     'classe': classe,
-                    'periodo_label': periodo_label,
+                    'periodo_label': periodo_label_saida,
                     'data_producao': producao['data_producao'].iloc[0] if len(producao) > 0 else pd.NaT,
                     'quantidade_produzida': 0,
                     'quantidade_estorno_eac': 0,
@@ -1635,6 +1705,8 @@ def main():
     else:
         for col in ["periodo_demanda_mes_ref", "periodo_demanda_ano_ref", "periodo_demanda_janela_meses", "tipo_calculo_demanda", "granularidade_demanda"]:
             comparacao[col] = None
+    if "tipo_calculo_demanda" in comparacao.columns:
+        comparacao["tipo_calculo_demanda"] = comparacao["tipo_calculo_demanda"].map(_normalizar_tipo_calculo_demanda)
     
     # 5. margem_por_ovo: Margem por ovo (R$/ovo) - do resultado do modelo quando disponível
     # Primeiro: por item_id (valor exato do output da otimização); depois por item (outra embalagem)
@@ -1744,8 +1816,8 @@ def main():
 
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path_csv = output_dir / f"comparacao_producao_alocacao_{periodo_label}_{timestamp}.csv"
-    output_path_xlsx = output_dir / f"comparacao_producao_alocacao_{periodo_label}_{timestamp}.xlsx"
+    output_path_csv = output_dir / f"comparacao_producao_alocacao_{periodo_label_saida}_{timestamp}.csv"
+    output_path_xlsx = output_dir / f"comparacao_producao_alocacao_{periodo_label_saida}_{timestamp}.xlsx"
     
     # Reordenar colunas por categoria lógica para facilitar leitura
     # 1. Identificação | 2. Período | 3. Quantidades | 4. Financeiro unitário
@@ -1916,7 +1988,7 @@ def main():
                     'quantidade_alocada': 0.0,
                     'quantidade_reservada': 0.0,
                     'quantidade_nao_atendida_pedido': 0.0,
-                    'periodo_label': periodo_label,
+                    'periodo_label': periodo_label_saida,
                     'data_producao': producao['data_producao'].iloc[0] if len(producao) > 0 else pd.NaT,
                     'diferenca_aloc_menos_prod': 0.0,
                     'diferenca_absoluta': 0.0,
@@ -1958,6 +2030,23 @@ def main():
                     comparacao[col] = None
             comparacao = pd.concat([comparacao, df_ausentes], ignore_index=True)
             print(f"  Total: {len(skus_ausentes)} SKUs adicionados ao output")
+
+    # Garantir que SKUs complementares (ex.: tipo=cadastro) herdem parâmetros
+    # globais de demanda para visibilidade/filtro em comparador e PBI.
+    colunas_parametros_constantes = [
+        "periodo_demanda_mes_ref",
+        "periodo_demanda_ano_ref",
+        "periodo_demanda_janela_meses",
+        "tipo_calculo_demanda",
+        "granularidade_demanda",
+    ]
+    for col in colunas_parametros_constantes:
+        if col in comparacao.columns:
+            serie = comparacao[col]
+            if serie.isna().any():
+                nao_nulos = serie.dropna()
+                if len(nao_nulos) > 0:
+                    comparacao[col] = serie.fillna(nao_nulos.iloc[0])
 
     # Converter quantidades de ovos para caixas de 360 ovos
     OVOS_POR_CAIXA = 360
@@ -2024,7 +2113,7 @@ def main():
 
     # Salvar CSV (única tabela: uma linha por SKU, quantidade_reservada na coluna específica)
     comparacao.to_csv(output_path_csv, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
-    output_fora_otimizacao_csv = output_dir / f"skus_fora_otimizacao_{periodo_label}_{timestamp}.csv"
+    output_fora_otimizacao_csv = output_dir / f"skus_fora_otimizacao_{periodo_label_saida}_{timestamp}.csv"
     if len(df_skus_fora_otimizacao) > 0:
         df_skus_fora_otimizacao.to_csv(output_fora_otimizacao_csv, index=False, encoding="utf-8", sep=args.sep, decimal=args.decimal)
     
@@ -2062,8 +2151,8 @@ def main():
         df_pedidos_ignorados = pd.DataFrame(pedidos_ignorados)
         df_pedidos_ignorados = df_pedidos_ignorados.sort_values('quantidade_total_pedida', ascending=False)
         df_pedidos_ignorados = aplicar_colunas_estabelecimento(df_pedidos_ignorados, config)
-        output_pedidos_ignorados_csv = output_dir / f"pedidos_ignorados_{periodo_label}_{timestamp}.csv"
-        output_pedidos_ignorados_xlsx = output_dir / f"pedidos_ignorados_{periodo_label}_{timestamp}.xlsx"
+        output_pedidos_ignorados_csv = output_dir / f"pedidos_ignorados_{periodo_label_saida}_{timestamp}.csv"
+        output_pedidos_ignorados_xlsx = output_dir / f"pedidos_ignorados_{periodo_label_saida}_{timestamp}.xlsx"
         df_pedidos_ignorados.to_csv(output_pedidos_ignorados_csv, index=False, encoding="utf-8")
         try:
             df_pedidos_ignorados.to_excel(output_pedidos_ignorados_xlsx, index=False, engine='openpyxl')
@@ -2073,7 +2162,7 @@ def main():
     print("\n[OK] Comparacao concluida")
     granularidade = config.get("modelo", {}).get("granularidade_demanda", "S").upper() if config else "S"
     gran_desc = {"D": "Dia", "S": "Semana", "M": "Mês"}.get(granularidade, "Semana")
-    print(f"  {gran_desc}: {periodo_label}")
+    print(f"  {gran_desc}: {periodo_label_saida}")
     print(f"  Producao total (bruta/ACA): {producao['quantidade_produzida'].sum():,.0f} unidades")
     if "quantidade_produzida_liquida_modelo" in producao.columns:
         print(f"  Producao total liquida (ACA-EAC): {producao['quantidade_produzida_liquida_modelo'].sum():,.0f} unidades")
