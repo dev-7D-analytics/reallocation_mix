@@ -255,31 +255,116 @@ def _carregar_skus_restritos(config: Dict) -> pd.DataFrame:
     
     try:
         df_restritos = pd.read_excel(path)
-        
+        if "item" not in df_restritos.columns:
+            return pd.DataFrame(columns=["item"])
+
         # Ler lista de estabelecimentos do config
-        estabelecimentos_config = config.get('dados', {}).get('estabelecimentos', [100])
+        estabelecimentos_config = config.get("dados", {}).get("estabelecimentos", [100])
         if not isinstance(estabelecimentos_config, list):
             estabelecimentos_config = [estabelecimentos_config]
         estabelecimentos = [int(estab) for estab in estabelecimentos_config]
-        
-        # Filtrar por STATUS='ATIVO' e ESTAB na lista de estabelecimentos
-        if 'STATUS' in df_restritos.columns and 'ESTAB' in df_restritos.columns:
-            df_restritos_filtrado = df_restritos[
-                (df_restritos['STATUS'] == 'ATIVO') & 
-                (df_restritos['ESTAB'].isin(estabelecimentos))
+
+        df_restritos = df_restritos.copy()
+        df_restritos["item"] = pd.to_numeric(df_restritos["item"], errors="coerce")
+        df_restritos = df_restritos[df_restritos["item"].notna()].copy()
+        df_restritos["item"] = df_restritos["item"].astype(int)
+
+        # Alinhar com ETL: permitidos = STATUS=ATIVO + ESTAB no escopo + TIPO não excluído
+        if "STATUS" in df_restritos.columns:
+            df_restritos = df_restritos[
+                df_restritos["STATUS"].astype(str).str.strip().str.upper() == "ATIVO"
             ].copy()
-        else:
-            df_restritos_filtrado = df_restritos.copy()
-        
-        # Extrair lista de SKUs permitidos para produção no estabelecimento
-        if 'item' in df_restritos_filtrado.columns:
-            skus_restritos = df_restritos_filtrado['item'].tolist()
-            skus_restritos = [int(item) for item in skus_restritos if pd.notna(item)]
-            return pd.DataFrame({'item': skus_restritos})
-        else:
-            return pd.DataFrame(columns=["item"])
+        if "ESTAB" in df_restritos.columns:
+            df_restritos["ESTAB_num"] = pd.to_numeric(df_restritos["ESTAB"], errors="coerce")
+            df_restritos = df_restritos[df_restritos["ESTAB_num"].isin(estabelecimentos)].copy()
+        if "TIPO" in df_restritos.columns:
+            tipos_excluidos = {"EXPORTAÇÃO", "GRANEL", "MARCA PROPRIA"}
+            tipo_norm = df_restritos["TIPO"].astype(str).str.strip().str.upper()
+            df_restritos = df_restritos[~tipo_norm.isin(tipos_excluidos)].copy()
+
+        skus_permitidos = df_restritos["item"].dropna().astype(int).tolist()
+        return pd.DataFrame({"item": skus_permitidos})
     except Exception:
         return pd.DataFrame(columns=["item"])
+
+
+def _mapear_motivo_regra_por_item(config: Optional[Dict]) -> Dict[int, str]:
+    """
+    Mapeia motivo de bloqueio de regra por item usando a carteira (skus_restritos.xlsx).
+
+    Prioridade interna de regra:
+      1) ESTAB fora do escopo
+      2) STATUS inativo/no escopo sem ATIVO
+      3) TIPO excluído (GRANEL/EXPORTAÇÃO/MARCA PROPRIA)
+    """
+    if not config:
+        return {}
+
+    path = _resolver_caminho(config, "skus_restritos", INPUT_PATH / "skus_restritos.xlsx")
+    if not path.exists():
+        return {}
+
+    try:
+        df = pd.read_excel(path)
+        if "item" not in df.columns:
+            return {}
+
+        estabelecimentos_cfg = config.get("dados", {}).get("estabelecimentos", [100])
+        if not isinstance(estabelecimentos_cfg, list):
+            estabelecimentos_cfg = [estabelecimentos_cfg]
+        estabelecimentos = {int(e) for e in estabelecimentos_cfg}
+
+        df = df.copy()
+        df["item"] = pd.to_numeric(df["item"], errors="coerce")
+        df = df[df["item"].notna()].copy()
+        df["item"] = df["item"].astype(int)
+
+        if "ESTAB" in df.columns:
+            df["ESTAB_num"] = pd.to_numeric(df["ESTAB"], errors="coerce")
+        else:
+            df["ESTAB_num"] = np.nan
+        if "STATUS" in df.columns:
+            df["STATUS_norm"] = df["STATUS"].astype(str).str.strip().str.upper()
+        else:
+            df["STATUS_norm"] = "ATIVO"
+        if "TIPO" in df.columns:
+            df["TIPO_norm"] = df["TIPO"].astype(str).str.strip().str.upper()
+        else:
+            df["TIPO_norm"] = ""
+
+        tipo_reason = {
+            "GRANEL": "bloqueado_por_regra_tipo_granel",
+            "EXPORTAÇÃO": "bloqueado_por_regra_tipo_exportacao",
+            "MARCA PROPRIA": "bloqueado_por_regra_tipo_marca_propria",
+        }
+
+        motivo_por_item: Dict[int, str] = {}
+        for item, grp in df.groupby("item", dropna=False):
+            g_estab = grp[grp["ESTAB_num"].isin(estabelecimentos)] if "ESTAB" in df.columns else grp
+            if len(g_estab) == 0:
+                motivo_por_item[int(item)] = "bloqueado_por_regra_estab_fora_escopo"
+                continue
+
+            g_ativo = g_estab[g_estab["STATUS_norm"] == "ATIVO"] if "STATUS" in df.columns else g_estab
+            if len(g_ativo) == 0:
+                motivo_por_item[int(item)] = "bloqueado_por_regra_status_inativo"
+                continue
+
+            if "TIPO" in df.columns:
+                g_permitido = g_ativo[~g_ativo["TIPO_norm"].isin(set(tipo_reason.keys()))]
+                if len(g_permitido) == 0:
+                    tipos_item = set(g_ativo["TIPO_norm"].dropna().astype(str))
+                    if "GRANEL" in tipos_item:
+                        motivo_por_item[int(item)] = tipo_reason["GRANEL"]
+                    elif "EXPORTAÇÃO" in tipos_item:
+                        motivo_por_item[int(item)] = tipo_reason["EXPORTAÇÃO"]
+                    elif "MARCA PROPRIA" in tipos_item:
+                        motivo_por_item[int(item)] = tipo_reason["MARCA PROPRIA"]
+                    else:
+                        motivo_por_item[int(item)] = "bloqueado_por_regra_tipo_excluido"
+        return motivo_por_item
+    except Exception:
+        return {}
 
 
 def _carregar_skus_ativos_completo(config: Dict) -> pd.DataFrame:
@@ -969,6 +1054,7 @@ def construir_skus_fora_otimizacao(comparacao: pd.DataFrame, config: Optional[Di
     tem_embalagem = (~emb.isna()) & (~emb.isin(["SEM_EMBALAGEM", "RESERVA", "nan", "None", ""]))
     tem_demanda = df.get("tem_demanda_historica", pd.Series(False, index=df.index)).fillna(False).astype(bool)
     sku_restrito = df.get("sku_restrito", pd.Series(False, index=df.index)).fillna(False).astype(bool)
+    motivo_regra_por_item = _mapear_motivo_regra_por_item(config)
     classe_df = df.get("classe", pd.Series("SEM_CLASSE", index=df.index)).fillna("SEM_CLASSE")
     considerar_demanda = bool((config or {}).get("modelo", {}).get("considerar_demanda_historica", False))
 
@@ -996,6 +1082,11 @@ def construir_skus_fora_otimizacao(comparacao: pd.DataFrame, config: Optional[Di
     )
 
     def _motivo_principal(i: int) -> str:
+        item_i = pd.to_numeric(df.loc[i, "item"], errors="coerce") if "item" in df.columns else np.nan
+        item_i = int(item_i) if pd.notna(item_i) else None
+        motivo_regra = motivo_regra_por_item.get(item_i, None) if item_i is not None else None
+        if motivo_regra:
+            return motivo_regra
         if sku_restrito.loc[i]:
             return "bloqueado_por_regra"
         if qtd_prod_liq.loc[i] <= 0:

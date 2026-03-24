@@ -52,12 +52,27 @@ def configurar_logging() -> logging.Logger:
     return logging.getLogger(__name__)
 
 
+def _sufixo_pasta_granularidade(config: dict) -> str:
+    """
+    Sufixo apenas no nome da pasta da rodada (D=diario, S=semanal, M=mensal).
+    Le de config.modelo.granularidade_demanda; ignora se vazio ou nao reconhecido.
+    """
+    gran = str((config.get("modelo") or {}).get("granularidade_demanda", "")).strip().upper()
+    if not gran:
+        return ""
+    ch = gran[0]
+    if ch in ("D", "S", "M"):
+        return f"_{ch}"
+    return ""
+
+
 def _preparar_output_dir_rodada(config: dict, logger: logging.Logger) -> Path:
     """Cria um diretório único de saída para a rodada e injeta no config em memória."""
     paths_cfg = config.setdefault("paths", {})
     base_output_dir = Path(paths_cfg.get("output_dir", "resultados"))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_output_dir = base_output_dir / timestamp
+    nome_rodada = f"{timestamp}{_sufixo_pasta_granularidade(config)}"
+    run_output_dir = base_output_dir / nome_rodada
     run_output_dir.mkdir(parents=True, exist_ok=True)
     paths_cfg["output_dir"] = str(run_output_dir)
     logger.info(f"  Diretório de saída da rodada: {run_output_dir.resolve()}")
