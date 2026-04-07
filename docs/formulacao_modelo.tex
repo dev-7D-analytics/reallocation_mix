@@ -26,17 +26,23 @@
 %==============================================================================
 
 Este documento formaliza o modelo de otimização de mix de produção desenvolvido
-para a alocação semanal de ovos entre diferentes SKUs (\textit{Stock Keeping
+para a alocação de ovos entre diferentes SKUs (\textit{Stock Keeping
 Units}). O problema central que o modelo resolve pode ser enunciado da seguinte
 forma: \emph{dada a capacidade de produção da fábrica por classe de produto,
 como distribuir os ovos entre os SKUs de modo a maximizar a margem total de
 contribuição?}
 
+O fluxo atual suporta três granularidades de execução
+(\texttt{D}=diária, \texttt{S}=semanal, \texttt{M}=mensal), definidas em
+\texttt{modelo.granularidade\_demanda}. A formulação matemática do núcleo de
+otimização é a mesma; o que varia entre as granularidades é a referência
+temporal aplicada aos insumos e aos relatórios.
+
 A resposta a essa pergunta deve respeitar três famílias de restrições
 operacionais:
 \begin{itemize}
     \item \textbf{Capacidade de produção:} cada classe de produto possui um
-        volume máximo de produção semanal que não pode ser excedido;
+        volume máximo de produção no período de referência que não pode ser excedido;
     \item \textbf{Demanda histórica:} o volume alocado a cada SKU não deve
         ultrapassar um limite derivado do comportamento histórico de vendas,
         evitando alocações sem respaldo de mercado;
@@ -69,7 +75,7 @@ compõem a janela histórica de análise.
 \begin{align}\label{eq:auto:al:001}
 I &= \{1, 2, \ldots, n\} && \text{Conjunto de todos os SKUs} \\
 C &= \{c_1, c_2, \ldots, c_m\} && \text{Conjunto de classes de produtos} \\
-S &= \{s_1, s_2, \ldots, s_k\} && \text{Conjunto de períodos (semanas) no histórico}
+S &= \{s_1, s_2, \ldots, s_k\} && \text{Conjunto de períodos no histórico}
 \end{align}
 
 \subsection{Subconjuntos Derivados}
@@ -77,14 +83,16 @@ S &= \{s_1, s_2, \ldots, s_k\} && \text{Conjunto de períodos (semanas) no hist�
 Nem todos os SKUs participam da otimização. A partir do conjunto universal $I$,
 derivam-se subconjuntos progressivamente mais restritos: $I_c$ agrupa os SKUs
 por classe; $I_{\text{válido}}$ filtra aqueles elegíveis para otimização
-(conforme critérios de status, tipo e estabelecimento); $H$ retém apenas os
-SKUs válidos que possuem demanda histórica positiva; e $R$ identifica os SKUs
-com pedidos já confirmados, cujo volume deve ser reservado antes da otimização.
+(conforme critérios de status, tipo e estabelecimento); $H$ representa o
+conjunto efetivamente enviado ao otimizador após os filtros técnicos do ETL
+(embalagem válida, preço/custo/margem positivos e classe diferente de
+\texttt{OUTROS}); e $R$ identifica os SKUs com pedidos já confirmados, cujo
+volume deve ser reservado antes da otimização.
 
 \begin{align}\label{eq:auto:al:002}
 I_c &\subseteq I && \text{SKUs pertencentes à classe } c \\
 I_{\text{válido}} &\subseteq I && \text{SKUs válidos para otimização} \\
-H &\subseteq I_{\text{válido}} && \text{SKUs com demanda histórica válida} \\
+H &\subseteq I_{\text{válido}} && \text{SKUs efetivamente otimizados (base final do ETL)} \\
 R &\subseteq I && \text{SKUs com pedidos reservados}
 \end{align}
 
@@ -150,12 +158,12 @@ unidade base do modelo.
 
 \subsection{Dados de Produção}
 
-O volume de produção semanal por classe constitui a principal restrição de
+O volume de produção por classe no período de referência constitui a principal restrição de
 capacidade do modelo. Para cada classe $c$, o parâmetro $P_c$ representa o
-total de ovos disponíveis para alocação na semana de planejamento:
+total de ovos disponíveis para alocação no período de planejamento:
 
 \begin{equation}\label{eq:auto:002}
-P_c \in \mathbb{R}^+ \quad \text{Produção total da classe } c \text{ na semana (ovos)}
+P_c \in \mathbb{R}^+ \quad \text{Produção total da classe } c \text{ no período (ovos)}
 \end{equation}
 
 Esse valor é obtido a partir dos dados de produção da fábrica e representa a
@@ -238,13 +246,16 @@ correção, mantido em arquivo auxiliar.
 
 \subsection{Filtro por Estabelecimento}
 
-O modelo opera sobre a produção de um único estabelecimento. Após a correção,
-retêm-se apenas os registros associados ao estabelecimento de interesse
-(atualmente o estabelecimento 100):
+O modelo opera sobre um conjunto configurável de estabelecimentos. Após a
+correção, retêm-se apenas os registros associados ao(s) estabelecimento(s) de
+interesse:
 
 \begin{equation}\label{eq:auto:008}
-F_{\text{filtrado}} = \{f \in F : \text{Estab\_Corrigido}(f) = 100\}
+F_{\text{filtrado}} = \{f \in F : \text{Estab\_Corrigido}(f) \in E_{\text{cfg}}\}
 \end{equation}
+
+onde $E_{\text{cfg}}$ é o conjunto de estabelecimentos definidos em
+\texttt{config.yaml} (por exemplo, \texttt{dados.estabelecimentos}).
 
 \subsection{Janela Temporal}
 
@@ -256,8 +267,6 @@ horizonte histórico utilizado para o cálculo da demanda:
 \text{Janela} = [\text{mes\_ref} - \text{meses\_janela} + 1, \; \text{mes\_ref}]
 \end{equation}
 
-Na configuração atual, com \texttt{mes\_custo=11} e
-\texttt{meses\_janela\_custo=6}, a janela abrange de junho a novembro de 2025.
 A escolha do tamanho da janela implica um compromisso entre representatividade
 estatística (janelas maiores capturam mais variabilidade) e atualidade dos
 dados (janelas menores refletem melhor o comportamento recente).
@@ -335,7 +344,7 @@ pertinência operacional e qualidade de dados:
 
 \begin{equation}\label{eq:auto:016}
 i \in I_{\text{válido}} \iff \begin{cases}
-\text{ESTAB}_i = 100 \\
+\text{ESTAB}_i \in E_{\text{cfg}} \\
 \text{STATUS}_i = \texttt{ATIVO} \\
 \text{TIPO}_i \notin \{\texttt{GRANEL}, \texttt{Exportação}, \texttt{MARCA PROPRIA}\} \\
 \text{CLASSE}_i \neq \texttt{OUTROS} \\
@@ -364,14 +373,14 @@ resultado da otimização.
 Um pedido para o SKU $i$ é elegível para reserva quando três condições são
 satisfeitas simultaneamente: o SKU possui pedido com quantidade positiva, está
 associado a uma classe de produto válida e essa classe possui produção
-programada na semana:
+programada no período de referência:
 
 \begin{equation}\label{eq:auto:017}
 i \in R \iff (Q_i^{\text{pedido}} > 0) \land (\kappa(i) \text{ existe}) \land (P_{\kappa(i)} > 0)
 \end{equation}
 
 A exigência de que a classe tenha produção positiva evita reservar volumes para
-SKUs cuja produção não está planejada na semana em questão.
+SKUs cuja produção não está planejada no período em questão.
 
 \subsection{Quantidade Reservada}
 
@@ -418,8 +427,8 @@ solução determina a alocação ótima de volume para cada SKU.
 \subsection{Variável de Decisão}
 
 A variável de decisão $x_i$ representa a quantidade de ovos alocada ao SKU $i$
-pelo otimizador. Essa variável é definida apenas para os SKUs do conjunto $H$
-(válidos com demanda histórica):
+pelo otimizador. Essa variável é definida para os SKUs do conjunto $H$
+(base final do ETL):
 
 \begin{equation}\label{eq:auto:021}
 x_i \geq 0 \quad \text{Quantidade alocada ao SKU } i \text{ (em ovos)}
@@ -440,7 +449,7 @@ x_i \in \begin{cases}
 
 \subsection{Função Objetivo}
 
-O objetivo do modelo é maximizar a margem total de contribuição, definida como
+O objetivo operacional do modelo é maximizar a margem total de contribuição, definida como
 a soma ponderada das alocações pelos respectivos coeficientes de margem por ovo.
 Essa formulação direciona o \textit{solver} a priorizar SKUs com maior retorno
 financeiro por unidade de volume:
@@ -448,6 +457,8 @@ financeiro por unidade de volume:
 \begin{equation}\label{eq:auto:023}
 \max \; Z = \sum_{i \in H} \mu_i \cdot x_i = \sum_{i \in H} \frac{p_i - c_i}{e_i} \cdot x_i
 \end{equation}
+
+Na implementação vigente, este é o objetivo efetivamente utilizado em produção.
 
 \subsection{Restrições}
 
@@ -464,7 +475,7 @@ vincula o modelo à realidade física da fábrica:
 \sum_{i \in H : \kappa(i) = c} x_i \leq E_c \quad \forall c \in C
 \end{equation}
 
-\subsubsection{R2: Limite de Demanda Histórica}
+\subsubsection{R2: Limite de Demanda Histórica (opcional)}
 
 A segunda restrição impede que o otimizador aloque a um SKU um volume superior
 ao seu teto de demanda derivado do histórico. Essa restrição é ativável via
@@ -475,6 +486,9 @@ margem que, na prática, não teriam mercado para absorver tal volume:
 \begin{equation}\label{eq:auto:025}
 x_i \leq D_i \quad \forall i \in H
 \end{equation}
+
+Quando \texttt{considerar\_demanda\_historica = false}, essa família de
+restrições é removida do modelo.
 
 \subsubsection{R3: Não-Negatividade}
 
@@ -1071,57 +1085,61 @@ com conhecimento de causa e tome decisões informadas.
 \section{Fluxo de Execução}
 %==============================================================================
 
-O sistema é executado em cinco etapas sequenciais, cada uma encapsulada em
-um módulo Python dedicado. A separação em etapas facilita a manutenção, a
-depuração e a execução parcial do pipeline (por exemplo, reexecutar apenas
-a otimização sem reprocessar o ETL).
+O sistema é executado por um pipeline em duas camadas: preparação de entradas
+(\texttt{executar\_pipeline.sh}) e orquestração principal (\texttt{main.py}).
+A separação em etapas facilita manutenção, depuração e reexecução parcial.
 
 \begin{enumerate}
     \item \textbf{Preparação de dados} (\texttt{executar\_pipeline.sh})\\
-    Etapa inicial que extrai e consolida dados brutos em arquivos intermediários.
+    Gera/atualiza insumos editáveis (preço, produção, demanda histórica,
+    pedidos e compatibilidade de embalagem), conforme o fluxo operacional.
+
+    \item \textbf{Orquestração principal} (\texttt{main.py})\\
+    O \texttt{main.py} executa sequencialmente:
     \begin{enumerate}[label=\alph*.]
-        \item \texttt{extrair\_precos\_embalagem.py} $\rightarrow$ \texttt{precos\_sku\_embalagem.csv}
-        \item \texttt{gerar\_producao\_classe.py} $\rightarrow$ \texttt{producao\_classe.csv}
-    \end{enumerate}
-    
-    \item \textbf{ETL} (\texttt{etl/pipeline.py})\\
-    Pipeline de transformação que carrega, filtra, corrige e agrega os dados,
-    produzindo os parâmetros prontos para consumo pelo otimizador.
-    \begin{enumerate}[label=\alph*.]
-        \item Carregar produção, classes, pedidos, preços, custos
-        \item Carregar e filtrar faturamento (correção de estabelecimento)
-        \item Calcular demanda histórica e volume histórico total
-        \item Filtrar SKUs válidos (\texttt{skus\_restritos.xlsx})
-        \item Processar reservas de pedidos
-        \item Calcular produção excedente por classe
-    \end{enumerate}
-    
-    \item \textbf{Otimização} (\texttt{modelo/otimizador.py})\\
-    Construção e resolução do modelo matemático descrito na Seção~6.
-    \begin{enumerate}[label=\alph*.]
-        \item Criar solver e configurar parâmetros
-        \item Criar variáveis de decisão ($x_i$)
-        \item Adicionar restrições (capacidade + demanda)
-        \item Resolver e extrair resultados
-    \end{enumerate}
-    
-    \item \textbf{Comparativo Baseline} (\texttt{main.py})\\
-    Avaliação do ganho da otimização em relação ao cenário de referência
-    (Seção~7).
-    \begin{enumerate}[label=\alph*.]
-        \item Calcular proporção histórica por SKU/classe
-        \item Calcular margem baseline
-        \item Comparar com margem otimizada
-    \end{enumerate}
-    
-    \item \textbf{Relatório} (\texttt{comparar\_producao\_alocacao.py})\\
-    Consolidação final que reúne produção, alocação e reservas em um relatório
-    detalhado por SKU e classe.
-    \begin{enumerate}[label=\alph*.]
-        \item Consolidar dados de produção, alocação, reservas
-        \item Gerar comparativo detalhado por SKU
+        \item ETL (\texttt{etl/pipeline.py});
+        \item Otimização (\texttt{modelo/otimizador.py});
+        \item Comparativo baseline;
+        \item Persistência de resultados;
+        \item Distribuição DOW (quando granularidade semanal);
+        \item Comparador de produção vs alocação (\texttt{comparar\_producao\_alocacao.py});
+        \item Consolidação PBI (\texttt{output/gerar\_consolidado\_pbi.py}).
     \end{enumerate}
 \end{enumerate}
+
+\subsection{Persistência e rastreabilidade da rodada}
+
+Cada execução do \texttt{main.py} gera uma pasta exclusiva de rodada em
+\texttt{resultados/<timestamp\_rodada>\_<D|S|M>/}, onde o sufixo reflete
+\texttt{modelo.granularidade\_demanda} (\texttt{\_D} diário, \texttt{\_S}
+semanal, \texttt{\_M} mensal), evitando sobrescrita e garantindo
+reprodutibilidade. Nessa pasta, a base efetivamente enviada ao solver também é
+persistida fisicamente para auditoria:
+\begin{itemize}
+    \item \texttt{base\_otimizacao\_<timestamp>.parquet} (arquivo principal);
+    \item \texttt{base\_otimizacao\_<timestamp>.csv} (inspeção rápida);
+    \item \texttt{base\_otimizacao\_<timestamp>.xlsx} (validação manual).
+\end{itemize}
+
+Na implementação atual, o módulo \texttt{modelo/otimizador.py} aceita tanto o
+DataFrame em memória quanto o caminho para arquivo (\texttt{.parquet} ou
+\texttt{.csv}), mantendo o contrato ETL$\rightarrow$Otimização auditável.
+
+\subsection{Artefatos de saída da rodada}
+
+Além do resultado bruto da otimização, a rodada gera artefatos de comparação e
+consumo analítico:
+\begin{itemize}
+    \item \texttt{resultado\_realocacao\_completo\_*.xlsx/.csv};
+    \item \texttt{comparacao\_producao\_alocacao\_*.xlsx};
+    \item \texttt{skus\_fora\_otimizacao\_*.csv} (inclui \texttt{motivo\_fora\_otimizacao}
+    com discriminação de regras de carteira quando aplicável);
+    \item \texttt{pbi\_consolidado\_*.xlsx} e \texttt{pbi\_consolidado\_sku\_*.csv}.
+\end{itemize}
+
+Para granularidade semanal, a convenção de período nos outputs é
+\texttt{YYYY\_WW}. Em granularidade diária e mensal, mantêm-se respectivamente
+\texttt{YYYY-MM-DD} e \texttt{YYYY-MM}.
 
 %==============================================================================
 \section{Métricas de Saída}
@@ -1158,6 +1176,27 @@ e custo totais fornecem uma visão complementar do impacto operacional:
 \text{Custo Total} &= \sum_{i \in H} \frac{c_i}{e_i} \cdot x_i^*
 \end{align}
 
+\subsection{Campos de rastreabilidade nos outputs}
+
+Os relatórios de comparação e consolidação PBI expõem colunas adicionais para
+auditoria da decisão:
+\begin{itemize}
+    \item \texttt{origem\_preco}, \texttt{origem\_custo}, \texttt{origem\_embalagem}
+        (linhagem dos insumos por item);
+    \item \texttt{quantidade\_produzida\_bruta},
+        \texttt{quantidade\_estorno\_eac},
+        \texttt{quantidade\_produzida\_liquida\_modelo}
+        (rastreabilidade de produção);
+    \item \texttt{quantidade\_nao\_atendida\_pedido}
+        (déficit de pedido visível em comparador e PBI);
+    \item \texttt{tipo} com composições explícitas (por exemplo:
+        \texttt{otimizacao\_e\_reserva}, \texttt{otimizacao\_e\_cadastro}),
+        substituindo a classificação genérica \texttt{misto}.
+\end{itemize}
+
+Adicionalmente, o relatório \texttt{skus\_fora\_otimizacao} registra o motivo
+principal de exclusão/não alocação por SKU para apoiar análise operacional.
+
 %==============================================================================
 \section{Configuração (\texttt{config.yaml})}
 %==============================================================================
@@ -1177,18 +1216,29 @@ A tabela a seguir lista os principais parâmetros agrupados por seção:
 \midrule
 \endhead
 \texttt{dados} & \texttt{mes\_custo} & Mês final da janela de referência \\
+& \texttt{mes\_preco} & Mês final da janela de preços \\
 & \texttt{meses\_janela\_custo} & Tamanho da janela em meses \\
+& \texttt{meses\_janela\_preco} & Tamanho da janela em meses para preços \\
 & \texttt{estab\_custo} & Estabelecimento para custos \\
+& \texttt{estab\_preco} & Estabelecimento para preços \\
+& \texttt{estabelecimentos} & Lista de estabelecimentos para filtros operacionais \\
+& \texttt{semana\_ref / data\_ref} & Referência temporal da execução (semanal vs diária/mensal) \\
+& \texttt{pedidos\_semana\_ref / pedidos\_data\_ref} & Referência temporal independente para pedidos \\
+& \texttt{dow\_ano\_ref / dow\_mes\_ref / dow\_meses\_janela} & Janela dedicada para DOW (quando granularidade = S) \\
 \midrule
 \texttt{modelo} & \texttt{considerar\_demanda\_historica} & Ativa restrição R2 \\
 & \texttt{tipo\_calculo\_demanda} & Método: \texttt{media}, \texttt{maximo}, \texttt{percentil} \\
-& \texttt{fator\_demanda\_maxima} & Fator $\alpha$ aplicado ao limite \\
+& \texttt{fator\_demanda\_maxima} & Fator $\alpha$ aplicado ao limite (nos outputs aparece como \texttt{fator\_demanda\_maximo}) \\
 & \texttt{percentil\_demanda} & Percentil (só se tipo = percentil) \\
 & \texttt{granularidade\_demanda} & \texttt{S}=semanal, \texttt{M}=mensal, \texttt{D}=diário \\
 & \texttt{tipo\_objetivo} & \texttt{maximizar\_margem} ou \texttt{minimizar\_custos} \\
 & \texttt{variaveis\_continuas} & \texttt{true}=NumVar, \texttt{false}=IntVar \\
 & \texttt{atender\_pedidos} & Reservar volume para pedidos \\
 & \texttt{usar\_apenas\_excedente} & Otimizar apenas o excedente \\
+& \texttt{capar\_reserva\_na\_producao} & Limita reserva à produção da classe antes de otimizar excedente \\
+\midrule
+\texttt{fallbacks} & \texttt{custo\_medio\_geral} & Custo de contingência para cenários extremos sem custo válido \\
+& \texttt{qtd\_ovos\_por\_caixa} & Referência de embalagem para fallback operacional \\
 \midrule
 \texttt{solver} & \texttt{solver\_type} & Tipo de solver (SCIP, GLOP) \\
 & \texttt{time\_limit\_ms} & Tempo máximo em ms \\
@@ -1196,6 +1246,217 @@ A tabela a seguir lista os principais parâmetros agrupados por seção:
 & \texttt{gap\_percentage} & Gap de otimalidade (SCIP) \\
 \bottomrule
 \end{longtable}
+
+%==============================================================================
+\section{Regras de Negócio Consolidadas (Código Atual + Histórico)}
+%==============================================================================
+
+Esta seção consolida as regras de negócio em linguagem operacional (autocontida),
+para que a leitura não dependa do código-fonte. O conteúdo vem de duas fontes:
+\begin{itemize}
+    \item \textbf{Fonte da verdade (vigente):} implementação atual no código;
+    \item \textbf{Racional histórico:} commits que explicam por que certas regras
+    foram introduzidas, ajustadas ou descontinuadas.
+\end{itemize}
+
+\subsection{Definições rápidas (para leitura desta seção)}
+
+\begin{itemize}
+    \item \textbf{SKU:} item comercial vendido (produto/embalagem).
+    \item \textbf{Classe:} agrupamento produtivo de SKUs. A capacidade de produção
+    é controlada por classe.
+    \item \textbf{Pedido garantido:} pedido já confirmado comercialmente, com
+    prioridade de atendimento.
+    \item \textbf{Reserva:} volume da classe separado para atender pedidos
+    garantidos antes da otimização.
+    \item \textbf{Excedente:} volume restante da classe após reservas, que pode
+    ser distribuído pelo solver.
+    \item \textbf{\texttt{atender\_pedidos=true}:} ativa a regra de reservar
+    pedidos antes de otimizar.
+    \item \textbf{\texttt{capar\_reserva\_na\_producao=true}:} impede reservar
+    acima da produção da classe. Em termos práticos, a reserva fica limitada ao
+    que a classe realmente produziu no período.
+    \item \textbf{\texttt{quantidade\_alocada}:} volume que o solver distribuiu
+    para o SKU usando o excedente.
+    \item \textbf{\texttt{quantidade\_reservada}:} volume do SKU atendido por
+    pedido garantido (reserva).
+    \item \textbf{\texttt{quantidade\_nao\_atendida\_pedido}:} parte do pedido
+    que não pôde ser atendida no período.
+    \item \textbf{Produção bruta / estorno EAC / produção líquida:}
+    produção bruta é o total produzido; estorno EAC é cancelamento de produção;
+    produção líquida é bruta menos estorno.
+    \item \textbf{Fallback:} regra de preenchimento quando faltam dados
+    (por exemplo, preço, custo, embalagem).
+    \item \textbf{SKU fora da otimização:} SKU com
+    \texttt{quantidade\_alocada} \(\le 0\) no resultado final.
+\end{itemize}
+
+\subsection{Regras vigentes por domínio}
+
+\subsubsection*{1) Elegibilidade de SKU}
+\begin{itemize}
+    \item \textbf{Decisão:} somente SKU ativo, no estabelecimento-alvo e com
+    dados mínimos (classe, embalagem, preço, custo e margem positivos) entra
+    no solver.
+    \item \textbf{Por que foi tomada:} evitar recomendações inviáveis
+    operacionalmente e eliminar distorções de margem causadas por dados
+    incompletos.
+    \item \textbf{Objetivo que visa alcançar:} garantir viabilidade da decisão
+    de alocação e aumentar a confiança no resultado financeiro.
+    \item \textbf{Contrapartida de visibilidade:} SKUs ativos fora da
+    otimização continuam no comparador com \texttt{tipo=cadastro}, para não
+    ``sumirem'' da análise.
+\end{itemize}
+
+\subsubsection*{2) Reserva de pedidos e excedente}
+\begin{itemize}
+    \item \textbf{Decisão:} pedidos confirmados são priorizados antes da
+    otimização quando \texttt{atender\_pedidos=true}.
+    \item \textbf{Por que foi tomada:} proteger compromisso comercial já
+    firmado e impedir que maximização de margem consuma volume destinado a
+    pedidos garantidos.
+    \item \textbf{Objetivo que visa alcançar:} preservar nível de serviço e
+    usar o solver apenas sobre o volume realmente discricionário
+    (excedente da classe).
+    \item \textbf{Regra de implementação:}
+    $E_c=\max(0,P_c-R_c)$, onde:
+    $P_c$ = produção da classe no período;
+    $R_c$ = total reservado para pedidos dessa classe;
+    $E_c$ = volume realmente disponível para otimização.
+    Quando \texttt{capar\_reserva\_na\_producao=true}, o sistema não permite
+    que $R_c$ ultrapasse $P_c$.
+\end{itemize}
+
+\subsubsection*{3) Demanda histórica (D/S/M)}
+\begin{itemize}
+    \item \textbf{Decisão:} limitar alocação por SKU com demanda histórica
+    parametrizável por granularidade (\texttt{D}/\texttt{S}/\texttt{M}) e
+    método (\texttt{media}, \texttt{maximo}, \texttt{percentil}).
+    \item \textbf{Por que foi tomada:} evitar concentração irreal em poucos
+    itens de alta margem sem absorção de mercado.
+    \item \textbf{Objetivo que visa alcançar:} equilibrar ganho econômico com
+    executabilidade comercial (sell-out compatível com histórico).
+    \item \textbf{Regra de ajuste:} expansão/retração por
+    \texttt{fator\_demanda\_maxima}; nomenclatura dos outputs uniformizada para
+    \texttt{maximo} para padronização analítica.
+\end{itemize}
+
+\subsubsection*{4) Fallbacks (preço, custo, embalagem) e origem}
+\begin{itemize}
+    \item \textbf{Decisão:} aplicar fallbacks determinísticos para preço, custo
+    e embalagem, com cadeia explícita e rastreável.
+    \item \textbf{Por que foi tomada:} cobertura de dados nem sempre é completa;
+    excluir todos os casos faltantes derruba cobertura do modelo e gera saída
+    pouco útil para o negócio.
+    \item \textbf{Objetivo que visa alcançar:} aumentar cobertura de SKUs com
+    transparência de qualidade do dado (sem mascarar origem).
+    \item \textbf{Cadeias vigentes:} preço em cascata
+    (\texttt{preco\_direto} $\rightarrow$ \texttt{preco\_por\_item}
+    $\rightarrow$ \texttt{preco\_medio\_classe}
+    $\rightarrow$ \texttt{preco\_medio\_geral}).
+    Custo: custo direto quando disponível; na ausência, custo médio da
+    classe e fallback final parametrizado em \texttt{fallbacks}.
+    Embalagem: extração por regex com fallback para
+    \texttt{embalagens\_override.xlsx}.
+    \item \textbf{Como interpretar:} se um SKU não tem preço/custo direto,
+    ele pode continuar no processo usando a melhor aproximação disponível;
+    a coluna de origem mostra exatamente qual aproximação foi usada.
+    \item \textbf{Evidência de rastreabilidade:} colunas
+    \texttt{origem\_preco}, \texttt{origem\_custo},
+    \texttt{origem\_embalagem}.
+\end{itemize}
+
+\subsubsection*{5) Regras de comparador/PBI}
+\begin{itemize}
+    \item \textbf{Decisão:} outputs de comparador e PBI devem explicar ``quanto
+    foi alocado'', ``quanto foi reservado'' e ``quanto ficou não atendido'',
+    além da origem de cada número.
+    \item \textbf{Por que foi tomada:} havia ambiguidade de leitura
+    (\texttt{misto}, diferença sobre produção incorreta, reserva confundida com
+    alocação), dificultando governança do resultado.
+    \item \textbf{Objetivo que visa alcançar:} permitir auditoria ponta a ponta
+    para negócio e BI, sem depender de interpretação implícita.
+    \item \textbf{Regras-chave:}
+    \texttt{quantidade\_nao\_atendida\_pedido} exposta em comparador/PBI;
+    produção em três visões (bruta, estorno EAC, líquida);
+    \texttt{diferenca\_aloc\_menos\_prod} sobre produção líquida;
+    \texttt{tipo} explícito (\texttt{otimizacao\_e\_reserva}, etc.).
+    \item \textbf{Como interpretar o tipo composto:}
+    \texttt{otimizacao\_e\_reserva} significa que o SKU aparece simultaneamente
+    com volume alocado pelo solver e volume reservado para pedido.
+\end{itemize}
+
+\subsubsection*{6) Regras de exclusão (\texttt{skus\_fora\_otimizacao})}
+\begin{itemize}
+    \item \textbf{Decisão:} classificar ``fora da otimização'' pelo critério
+    objetivo \texttt{quantidade\_alocada} \(\le 0\), não por rótulos textuais.
+    \item \textbf{Por que foi tomada:} evitar inconsistências em cenários com
+    múltiplos tipos agregados no mesmo SKU.
+    \item \textbf{Objetivo que visa alcançar:} eliminar falso-positivo e
+    transformar exclusão em explicação acionável.
+    \item \textbf{Motivos explícitos vigentes:}
+    \texttt{bloqueado\_por\_regra},
+    \texttt{sem\_producao\_no\_periodo},
+    \texttt{sem\_preco\_e\_sem\_custo},
+    \texttt{limite\_demanda\_historica\_zero},
+    \texttt{priorizacao\_margem\_intraclasse}.
+    \item \textbf{Garantia de consistência:} o relatório evita classificar
+    como ``fora'' itens com alocação
+    positiva.
+\end{itemize}
+
+\subsubsection*{7) Período e nomenclatura}
+\begin{itemize}
+    \item \textbf{Decisão:} padronizar convenções de período e terminologia nos
+    outputs.
+    \item \textbf{Por que foi tomada:} evitar ruído analítico em filtros e
+    joins de BI causados por grafias/formatações diferentes.
+    \item \textbf{Objetivo que visa alcançar:} consistência semântica entre
+    comparador, PBI e validações.
+    \item \textbf{Padrões vigentes:} semanal \texttt{YYYY\_WW}; diário
+    \texttt{YYYY-MM-DD}; mensal \texttt{YYYY-MM}; demanda em \texttt{maximo}.
+\end{itemize}
+
+\subsubsection*{8) Operação e rastreabilidade da execução}
+\begin{itemize}
+    \item \textbf{Decisão:} tornar a execução reproduzível por rodada, com
+    persistência física da base e diretórios padronizados.
+    \item \textbf{Por que foi tomada:} reduzir divergência entre ``o que entrou
+    no solver'' e ``o que saiu nos relatórios'', além de facilitar auditoria.
+    \item \textbf{Objetivo que visa alcançar:} governança operacional e
+    rastreabilidade completa de execução.
+    \item \textbf{Implementação:} pasta por timestamp com sufixo de granularidade
+    (\texttt{\_D}/\texttt{\_S}/\texttt{\_M}), \texttt{base\_otimizacao}
+    em \texttt{parquet/csv/xlsx} (lida pelo otimizador) e diretório estável
+    \texttt{resultados/pbi\_concat}.
+\end{itemize}
+
+\subsection{Matriz decisão $\rightarrow$ objetivo de negócio}
+
+\begin{longtable}{p{3.8cm}p{5.4cm}p{6.0cm}}
+\toprule
+\textbf{Domínio} & \textbf{Decisão adotada} & \textbf{Objetivo de negócio} \\
+\midrule
+\endhead
+Elegibilidade & Filtrar por SKU ativo + estabelecimento + dados mínimos & Evitar recomendação inexequível e proteger credibilidade do resultado \\
+Pedidos & Reservar pedido antes de otimizar excedente & Priorizar nível de serviço e compromisso comercial \\
+Excedente por classe & $E_c=\max(0,P_c-R_c)$ com cap de reserva opcional & Evitar alocação acima da capacidade líquida da classe \\
+Demanda histórica & Limite por \texttt{media/maximo/percentil} e fator & Evitar volume sem respaldo de mercado \\
+Granularidade & Suporte D/S/M na mesma lógica de modelo & Adaptar planejamento ao horizonte operacional real \\
+Fallback de preço & Cascata determinística até média geral & Aumentar cobertura sem perder rastreabilidade \\
+Fallback de custo & Classe e fallback parametrizado em \texttt{config} & Evitar exclusão massiva por ausência pontual de custo \\
+Fallback de embalagem & Regex + \texttt{embalagens\_override.xlsx} & Reduzir ``SEM\_EMBALAGEM'' e ampliar participação elegível \\
+Origem do dado & Propagar \texttt{origem\_preco/custo/embalagem} & Permitir auditoria e leitura de qualidade do dado \\
+Diferença produção/alocação & Calcular diferença sobre produção líquida & Eliminar distorção por não considerar estornos EAC \\
+Déficit de pedido & Expor \texttt{quantidade\_nao\_atendida\_pedido} & Tornar explícito gap de atendimento comercial \\
+Tipo de linha & Substituir \texttt{misto} por tipo composto explícito & Melhorar interpretação por negócio e BI \\
+Fora da otimização & Critério por \texttt{quantidade\_alocada} \(\le 0\) + motivo & Evitar falso-positivo e gerar explicação acionável \\
+Padronização semântica & Uniformizar \texttt{maximo} e período \texttt{YYYY\_WW} & Garantir filtros/joins consistentes no PBI \\
+Reprodutibilidade & Persistir \texttt{base\_otimizacao} física por rodada & Reconstituir exatamente o que alimentou o solver \\
+Operação de saída & Pasta de rodada + \texttt{pbi\_concat} estável & Evitar sobrescrita e simplificar consolidação multi-rodada \\
+\bottomrule
+\end{longtable}
+
 
 %==============================================================================
 \section{Glossário de Símbolos}
@@ -1214,7 +1475,7 @@ definições e unidades quando aplicável.
 $I$ & Conjunto de todos os SKUs \\
 $C$ & Conjunto de classes de produtos \\
 $S$ & Conjunto de períodos temporais na janela histórica \\
-$H$ & SKUs válidos com demanda histórica positiva \\
+$H$ & SKUs válidos na base final do ETL (elegíveis ao solver) \\
 $R$ & SKUs com pedidos reservados \\
 $I_c$ & SKUs pertencentes à classe $c$ \\
 $I_{\text{válido}}$ & SKUs elegíveis para otimização \\
@@ -1228,7 +1489,7 @@ $\mu_i$ & Margem por ovo: $m_i / e_i$ (coeficiente da função objetivo) \\
 $\kappa(i)$ & Classe do SKU $i$ \\
 \midrule
 \multicolumn{2}{l}{\textit{Parâmetros de produção e demanda}} \\[4pt]
-$P_c$ & Produção total da classe $c$ na semana (ovos) \\
+$P_c$ & Produção total da classe $c$ no período de referência (ovos) \\
 $D_i$ & Limite de demanda histórica do SKU $i$ (ovos) \\
 $\alpha$ & Fator de expansão da demanda \\
 $Q_{i,s}$ & Volume faturado do SKU $i$ no período $s$ (ovos) \\

@@ -1,0 +1,855 @@
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[brazil]{babel}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xurl}
+\urlstyle{tt}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric,arrows.meta,positioning,fit,calc}
+
+\geometry{margin=2.5cm}
+
+\title{Manual Didático e Argumentativo\\do Modelo de Otimização de Mix}
+\author{Mantiqueira -- 7D Analytics}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Introdução: por que este modelo existe}
+
+Toda decisão de mix de produção enfrenta um dilema permanente: a empresa precisa
+maximizar margem, mas não pode ignorar restrições físicas, compromissos
+comerciais e a realidade da demanda. Em outras palavras, a melhor decisão
+financeira no papel pode ser impraticável na operação; por outro lado, uma
+decisão puramente operacional pode preservar rotina, mas destruir valor.
+
+Este modelo nasce para resolver esse conflito de forma disciplinada. Seu papel
+não é apenas calcular números, mas transformar uma escolha normalmente subjetiva
+em um processo racional, auditável e repetível. Ao explicitar regras, limites e
+efeitos, o modelo cria um padrão decisório que protege a margem sem romper o
+atendimento e sem mascarar incertezas dos dados.
+
+Este manual foi escrito com esse mesmo princípio: apresentar o modelo de forma
+didática, porém argumentativa. Em vez de listar apenas ``o que fazer'',
+explicamos também \textbf{por que cada decisão existe}, \textbf{o que ela busca
+alcançar} e \textbf{qual risco ela evita}.
+
+\section{Tese central do método}
+
+A tese central do modelo é simples e forte:
+\begin{quote}
+\textbf{A otimização só gera valor de forma sustentável quando combina quatro
+pilares simultaneamente: eficiência econômica, viabilidade operacional,
+coerência comercial e transparência analítica.}
+\end{quote}
+
+Se qualquer pilar for ignorado, surgem distorções:
+\begin{itemize}[leftmargin=1.2cm]
+    \item sem eficiência econômica, há produção mal distribuída e margem perdida;
+    \item sem viabilidade operacional, aparecem recomendações inexequíveis;
+    \item sem coerência comercial, aumenta o risco de alocar volume sem saída;
+    \item sem transparência, o resultado pode até estar correto, mas não é confiável para gestão.
+\end{itemize}
+
+\section{Problema de negócio em linguagem prática}
+
+A capacidade produtiva é dada por classe. A pergunta gerencial não é ``quanto
+produzir'', mas ``\textit{como distribuir o que foi produzido}''. Esse detalhe
+é decisivo: como os SKUs de uma mesma classe têm margens e demandas diferentes,
+a distribuição do volume altera diretamente o resultado financeiro.
+
+Sem método, a distribuição tende a seguir hábito, pressão de curto prazo ou
+repetição histórica sem crítica. Esse padrão geralmente:
+\begin{itemize}[leftmargin=1.2cm]
+    \item subutiliza SKUs mais rentáveis;
+    \item superaloca SKUs com baixa tração;
+    \item mistura reserva de pedido com alocação discricionária;
+    \item dificulta explicar por que um item entrou e outro ficou fora.
+\end{itemize}
+
+O modelo substitui essa dinâmica por uma decisão com critérios explícitos e
+mensuráveis.
+
+\section{Guia rapido (5 minutos)}
+\label{sec:guia-rapido}
+
+Para uso diario de operacao/comercial, este e o roteiro minimo:
+\begin{enumerate}[leftmargin=1.2cm]
+    \item revisar \texttt{config.yaml} (periodo, estabelecimento, granularidade, pedidos; detalhe na Secao~\ref{sec:param-config});
+    \item escolher o fluxo de execucao: \textbf{A} (completo), \textbf{B} (sem preparacao) ou \textbf{C} (parcial). O que cada um faz esta no diagrama da Secao~\ref{sec:casos-execucao}; os comandos exatos estao na Secao~\ref{sec:como-executar};
+    \item rodar pipeline e abrir a pasta da rodada em \texttt{resultados/} (padrao de nome na Secao~\ref{sec:rastreabilidade});
+    \item validar as tres saidas principais listadas na Secao~\ref{sec:leitura-resultados}: \texttt{comparacao\_producao\_alocacao}, \texttt{auditoria\_baseline}, \texttt{skus\_fora\_otimizacao};
+    \item decidir go/no-go com o checklist da Secao~\ref{sec:checklist-executivo}.
+\end{enumerate}
+
+\textbf{Nao fazer (erros comuns):}
+\begin{itemize}[leftmargin=1.2cm]
+    \item alterar \texttt{data\_ref}/\texttt{semana\_ref} e rodar fluxo B sem garantir que os CSVs em \texttt{inputs/} estao no mesmo periodo;
+    \item trocar \texttt{estabelecimentos} sem revisar pedidos/producao para o mesmo escopo;
+    \item interpretar diferenca de alocacao sem separar reserva, producao liquida e itens fora.
+\end{itemize}
+
+\textbf{Glossario operacional curto:}
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{Baseline:} cenario de referencia (sem decisao otimizada), usado para medir ganho;
+    \item \textbf{Comparador:} tabela de confronto producao vs alocacao por SKU;
+    \item \textbf{PBI consolidado:} pacote final para BI, incluindo aba de SKUs fora;
+    \item \textbf{DOW:} distribuicao historica por dia da semana (apenas granularidade semanal).
+\end{itemize}
+
+\section{Conceitos fundamentais (autocontido)}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{5.8cm}>{\raggedright\arraybackslash}p{9.2cm}}
+\toprule
+\textbf{Conceito} & \textbf{Definição operacional} \\
+\midrule
+\endhead
+SKU & Item comercial considerado na decisão (produto/embalagem). \\
+Classe & Grupo produtivo no qual a capacidade é controlada. \\
+Pedido garantido & Pedido confirmado, tratado como prioridade de atendimento. \\
+Reserva & Volume separado para pedido antes da otimização do excedente. \\
+Excedente & Volume restante da classe após reserva; é o volume elegível à otimização. \\
+\url{atender_pedidos} & Parâmetro que liga/desliga a lógica de reserva prévia de pedidos. \\
+\url{capar_reserva_na_producao} & Parâmetro que impede reserva acima da produção da classe no período. \\
+\url{quantidade_alocada} & Volume definido pelo otimizador para o SKU. \\
+\url{quantidade_reservada} & Volume do SKU atendido como compromisso de pedido. \\
+\url{quantidade_nao_atendida_pedido} & Parcela do pedido que não pôde ser atendida no período. \\
+Produção bruta / estorno EAC / produção líquida & Bruta = produzido; estorno EAC = cancelamento; líquida = bruta - estorno. \\
+Fallback & Regra de preenchimento para dados ausentes (preço, custo, embalagem). \\
+\bottomrule
+\end{longtable}
+
+\section{Arquitetura de decisão: do dado à ação}
+
+\subsection{Etapa 1 -- Preparação (ETL)}
+
+O ETL consolida os insumos que sustentam a decisão: produção por classe, custos,
+preços, pedidos, demanda histórica, cadastro de classes e compatibilidade de
+embalagem. Aqui, a principal discussão não é performance, mas confiabilidade.
+
+Argumento central desta etapa: \textbf{não existe boa otimização com base
+mal preparada}. Por isso, o pipeline:
+\begin{itemize}[leftmargin=1.2cm]
+    \item padroniza unidades;
+    \item aplica filtros de elegibilidade;
+    \item trata estorno (EAC) para calcular produção líquida;
+    \item registra origem de preço, custo e embalagem para auditoria.
+\end{itemize}
+
+\subsection{Etapa 2 -- Otimização}
+
+Com os dados prontos, o modelo distribui o excedente por SKU maximizando margem,
+sob restrições de capacidade e, quando configurado, de demanda histórica.
+
+A decisão não é ``livre'': ela é deliberadamente condicionada para impedir
+soluções financeiramente atraentes, mas comercialmente inviáveis.
+
+\subsection{Etapa 3 -- Explicação e governança}
+
+Após resolver, o processo produz relatórios de comparação, auditoria e saída para
+BI. Essa etapa não é acessória. Ela existe porque decisão sem explicação gera
+resistência, retrabalho e baixa adoção.
+
+\section{Fluxogramas: componentes, conversas e casos de execução}
+
+Os diagramas abaixo refletem o encadeamento real do repositório: o shell
+\texttt{executar\_pipeline.sh} dispara a preparação opcional dos CSVs em
+\texttt{inputs/} e sempre encerra com \texttt{main.py}, que lê
+\texttt{config.yaml}, executa ETL, otimização, comparativos e grava tudo em
+\texttt{resultados/<timestamp>\_<D|S|M>/}. Cada script Python de preparação também lê o
+mesmo \texttt{config.yaml}, garantindo período, estabelecimento e caminhos
+alinhados.
+
+\subsection{Visão macro (do parâmetro ao artefato)}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=6mm and 10mm,
+  box/.style={rectangle, draw, rounded corners=2pt, minimum width=3.0cm,
+    minimum height=9mm, align=center, font=\small},
+  io/.style={rectangle, draw, dashed, rounded corners=2pt, minimum width=2.8cm,
+    align=center, font=\footnotesize},
+  decision/.style={diamond, draw, aspect=2.4, inner sep=2pt, align=center, font=\footnotesize},
+  lbl/.style={font=\scriptsize, inner sep=1pt},
+  arrow/.style={-{Stealth[length=2.2mm]}, thick}
+]
+  \node[io] (cfg) {\textbf{config.yaml}\\(dados, modelo, paths)};
+  \node[box, below=of cfg] (venv) {Ambiente\\\texttt{venv} + \texttt{python3}};
+  \node[box, below=of venv] (sh) {\texttt{executar\_pipeline.sh}};
+  \node[decision, below=of sh] (dprep) {Flag\\\texttt{{-}{-}sem-preparacao}?};
+  \node[box, below left=12mm and 4mm of dprep] (prep) {Preparação\\\textbf{passos 1--6}\\(gera/atualiza\\\texttt{inputs/*.csv})};
+  \node[box, below right=12mm and 4mm of dprep] (skip) {Pula passos 1--6\\(mantém CSVs\\atuais)};
+  \node[box, below=22mm of dprep] (main) {\textbf{main.py}\\Fases 1--6\\(ver detalhe)};
+  \node[io, below=of main] (out) {\textbf{resultados/}\\\texttt{<timestamp>/}\\+ \texttt{pbi\_concat/}};
+  \draw[arrow] (cfg) -- (venv);
+  \draw[arrow] (venv) -- (sh);
+  \draw[arrow] (sh) -- (dprep);
+  \draw[arrow] (dprep) -- node[lbl, left, pos=0.35] {Não} (prep);
+  \draw[arrow] (dprep) -- node[lbl, right, pos=0.35] {Sim} (skip);
+  \draw[arrow] (prep) |- ([yshift=-2mm]main.west);
+  \draw[arrow] (skip) |- ([yshift=-2mm]main.east);
+  \draw[arrow] (main) -- (out);
+\end{tikzpicture}
+\caption{Visão macro: o \texttt{config.yaml} parametriza toda a cadeia; o shell
+decide se os insumos em \texttt{inputs/} são regenerados antes do
+\texttt{main.py}.}
+\label{fig:fluxo-macro}
+\end{figure}
+
+\subsection{Detalhe --- preparação de insumos (passos 1--6)}
+
+Cada etapa consome bases brutas indicadas em \texttt{paths.*} e grava um CSV
+(ou planilha intermediária) sob \texttt{inputs/}, que o ETL do \texttt{main.py}
+passa a tratar como contrato de entrada.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=5mm,
+  prepstep/.style={rectangle, draw, rounded corners=2pt, minimum width=6.8cm,
+    minimum height=8mm, align=left, font=\small},
+  arrow/.style={-{Stealth[length=2mm]}, thick}
+]
+  \node[prepstep] (s1) {\textbf{1.} \texttt{extrair\_compatibilidade\_embalagem.py}
+    $\rightarrow$ \texttt{compatibilidade\_sku\_embalagem.csv}};
+  \node[prepstep, below=of s1] (s2) {\textbf{2.} \texttt{extrair\_precos\_embalagem.py}
+    $\rightarrow$ \texttt{precos\_sku\_embalagem.csv}};
+  \node[prepstep, below=of s2] (s3) {\textbf{3.} \texttt{gerar\_custos\_sku.py}
+    $\rightarrow$ \texttt{custos\_sku.csv}};
+  \node[prepstep, below=of s3] (s4) {\textbf{4.} \texttt{gerar\_demanda\_historica.py}
+    $\rightarrow$ \texttt{demanda\_historica.csv}};
+  \node[prepstep, below=of s4] (s5) {\textbf{5.} \texttt{gerar\_pedidos\_clientes.py}
+    $\rightarrow$ \texttt{pedidos\_clientes.csv}};
+  \node[prepstep, below=of s5] (s6) {\textbf{6.} \texttt{gerar\_producao\_classe.py}
+    $\rightarrow$ \texttt{producao\_classe.csv}};
+  \node[prepstep, below=of s6, draw=none, font=\itshape\small] (note)
+    {Demais cadastros (classes, produção bruta, faturamento, etc.)\ permanecem
+    referenciados em \texttt{paths} e são lidos no ETL.};
+  \foreach \a/\b in {s1/s2,s2/s3,s3/s4,s4/s5,s5/s6,s6/note} {
+    \draw[arrow] (\a) -- (\b);
+  }
+\end{tikzpicture}
+\caption{Cadeia fixa de preparação: ordem importa quando um passo depende de
+artefato anterior ou de mesma janela temporal no \texttt{config.yaml}.}
+\label{fig:fluxo-preparacao}
+\end{figure}
+
+\subsection{Detalhe --- \texttt{main.py}: fases internas e dependências}
+
+O orquestrador Python troca dados por meio de objetos e arquivos: o ETL devolve
+\texttt{base\_otimizacao} e séries auxiliares (produção, excedente, pedidos); a
+base é persistida em disco para auditoria; o otimizador consome esses insumos e
+devolve alocação; em seguida entram pós-processamentos, comparativos e saídas.
+A comparação produção\,×\,alocação é invocada por \texttt{subprocess}; o
+consolidado PBI só roda se essa etapa tiver sucesso.
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=4mm and 8mm,
+  ph/.style={rectangle, draw, rounded corners=2pt, minimum height=9mm,
+    align=center, font=\footnotesize, inner sep=3pt},
+  arrow/.style={-{Stealth[length=1.8mm]}, thick}
+]
+  \node[ph] (c) {Carrega\\\texttt{config.yaml}};
+  \node[ph, right=of c] (dir) {Cria\\\texttt{resultados/<ts>/}};
+  \node[ph, right=of dir] (etl) {\textbf{Fase 1}\\ETLPipeline};
+  \node[ph, right=of etl] (base) {Persiste\\\texttt{base\_otimizacao}\\(.parquet/.csv/.xlsx)};
+  \node[ph, below=8mm of etl] (opt) {\textbf{Fase 2}\\Otimizador\\(OR-Tools)};
+  \node[ph, right=of opt] (pos) {Pós:\\reserva + OUTROS};
+  \node[ph, right=of pos] (bl) {\textbf{Fase 3}\\Baseline};
+  \node[ph, below=6mm of pos] (sv) {\textbf{Fase 4}\\\texttt{salvar\_resultados}};
+  \node[ph, left=of sv] (dow) {DOW\\(se gran.\ S)};
+  \node[ph, right=of sv] (cmp) {\textbf{Fase 5}\\\texttt{comparar\_producao\_alocacao}};
+  \node[ph, below=6mm of sv] (pbi) {\textbf{Fase 6}\\\texttt{gerar\_consolidado\_pbi}\\(se Fase 5 OK)};
+  \draw[arrow] (c) -- (dir);
+  \draw[arrow] (dir) -- (etl);
+  \draw[arrow] (etl) -- (base);
+  \draw[arrow] (etl) -- node[right, font=\scriptsize] {\texttt{df\_base}} (opt);
+  \draw[arrow] (opt) -- (pos);
+  \draw[arrow] (pos) -- (bl);
+  \draw[arrow] (pos) -- (sv);
+  \draw[arrow] (bl) |- (sv);
+  \draw[arrow] (sv) -- (dow);
+  \draw[arrow] (sv) -- (cmp);
+  \draw[arrow] (cmp) -- (pbi);
+\end{tikzpicture}%
+}
+\caption{Fluxo interno do \texttt{main.py} (simplificado): ETL alimenta o
+solver; comparativo baseline e gravações seguem o resultado; DOW é condicional à
+granularidade semanal; PBI consolidado depende da comparação produção--alocação.}
+\label{fig:fluxo-main}
+\end{figure}
+
+\subsection{Casos de execução (A, B e parcial C)}
+\label{sec:casos-execucao}
+
+Os três modos abaixo correspondem ao que o manual recomenda operacionalmente.
+O diagrama esquerdo é o fluxo completo; o central preserva edições manuais nos
+CSVs; o direito é para manutenção pontual de uma fonte.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=4mm,
+  casebox/.style={rectangle, draw, rounded corners=3pt, minimum width=4.6cm,
+    text width=4.4cm, align=left, font=\small, inner sep=6pt},
+  title/.style={font=\bfseries\small},
+  arrow/.style={-{Stealth[length=2mm]}, thick}
+]
+  \node[casebox] (a) {\textbf{Fluxo A --- completo}\\[2mm]
+    \texttt{./executar\_pipeline.sh}\\[1mm]
+    {\footnotesize
+    Regenera passos 1--6 a partir das bases brutas e roda
+    \texttt{main.py}. Use quando PRIC, faturamento, produção ou cadastros mudaram.}};
+  \node[casebox, right=8mm of a] (b) {\textbf{Fluxo B --- CSVs editáveis}\\[2mm]
+    \texttt{./executar\_pipeline.sh {-}{-}sem-preparacao}\\[1mm]
+    {\footnotesize
+    Pula 1--6; usa os \texttt{inputs/*.csv} já na pasta (incl.\ ajustes manuais
+    de negócio).}};
+  \node[casebox, right=8mm of b] (c) {\textbf{Fluxo C --- parcial}\\[2mm]
+    {\footnotesize
+    Reexecutar só o(s) gerador(es) afetado(s) (ex.: novo período de pedidos) e,
+    em seguida, \texttt{python3 main.py} ou o shell com
+    \texttt{{-}{-}sem-preparacao}.}};
+  \node[below=3mm of a, font=\footnotesize\itshape] (la) {$\rightarrow$ pasta \texttt{resultados/<ts>/}};
+  \node[below=3mm of b, font=\footnotesize\itshape] (lb) {$\rightarrow$ idem};
+  \node[below=3mm of c, font=\footnotesize\itshape] (lc) {$\rightarrow$ idem};
+\end{tikzpicture}
+\caption{Casos de execução: A regenera tudo; B respeita governança manual nos
+CSVs; C exige disciplina para não misturar períodos inconsistentes entre
+fontes.}
+\label{fig:fluxo-casos}
+\end{figure}
+
+\textbf{Conversas entre componentes (resumo):}
+\begin{itemize}[leftmargin=1.2cm]
+    \item \textbf{config.yaml $\leftrightarrow$ todos os scripts:} período,
+    estabelecimento, \texttt{paths} e regras do \texttt{modelo}; sem alinhamento,
+    ETL e preparação geram insumos de ``mundos'' diferentes.
+    \item \textbf{Preparação $\rightarrow$ ETL:} arquivos em \texttt{inputs/} são
+    a camada que o \texttt{ETLPipeline} espera após a preparação (ou após edição
+    manual no Fluxo B).
+    \item \textbf{ETL $\rightarrow$ Otimizador:} contrato principal é
+    \texttt{base\_otimizacao} + dicionários/séries de produção, excedente e
+    pedidos garantidos.
+    \item \textbf{Otimizador $\rightarrow$ Outputs:} resultado tabular alimenta
+    baseline, arquivos de rodada, comparador externo e (em cadeia) consolidado
+    PBI.
+\end{itemize}
+
+\section{Regras de negócio: decisão, justificativa e objetivo}
+
+\subsection{Elegibilidade de SKU}
+
+\textbf{Decisão adotada:} entram na otimização apenas SKUs ativos, no
+estabelecimento alvo, com classe e embalagem válidas, além de preço, custo e
+margem positivos.
+
+\textbf{Justificativa:} permitir entrada irrestrita parece ampliar cobertura, mas
+na prática contamina o problema com itens inexequíveis e degrada a leitura de
+resultado.
+
+\textbf{Objetivo:} preservar integridade econômica e operacional da recomendação.
+
+\subsection{Pedidos primeiro, otimização depois}
+
+\textbf{Decisão adotada:} com \texttt{atender\_pedidos=true}, pedidos
+confirmados são reservados antes de otimizar.
+
+\textbf{Justificativa:} compromisso comercial já assumido não pode competir em
+pé de igualdade com volume discricionário de margem.
+
+\textbf{Objetivo:} proteger nível de serviço e evitar que ganho financeiro
+teórico comprometa atendimento real.
+
+\textbf{Formulação operacional por classe:}
+\[
+E_c = \max(0, P_c - R_c)
+\]
+em que:
+\begin{itemize}[leftmargin=1.2cm]
+    \item \(P_c\): produção da classe no período;
+    \item \(R_c\): volume reservado para pedidos da classe;
+    \item \(E_c\): excedente disponível para otimização.
+\end{itemize}
+
+Com \texttt{capar\_reserva\_na\_producao=true}, o sistema impede que a reserva
+ultrapasse a produção da classe, reforçando consistência física.
+
+\subsection{Demanda histórica como freio de realismo}
+
+\textbf{Decisão adotada:} o modelo pode limitar alocação por SKU com base
+histórica (\texttt{media}, \texttt{maximo}, \texttt{percentil}) e fator de
+ajuste.
+
+\textbf{Justificativa:} sem esse limite, a otimização pode concentrar volume em
+itens de alta margem sem absorção comercial.
+
+\textbf{Objetivo:} equilibrar rentabilidade e viabilidade de sell-out.
+
+\subsection{Fallbacks com transparência obrigatória}
+
+\textbf{Decisão adotada:} quando faltam dados, o processo usa fallback
+determinístico:
+\begin{itemize}[leftmargin=1.2cm]
+    \item preço: direto \(\rightarrow\) por item \(\rightarrow\) médio de classe \(\rightarrow\) médio geral;
+    \item custo: direto \(\rightarrow\) médio de classe \(\rightarrow\) fallback parametrizado;
+    \item embalagem: regex \(\rightarrow\) \texttt{embalagens\_override.xlsx}.
+\end{itemize}
+
+\textbf{Justificativa:} excluir todos os casos incompletos reduz cobertura e
+limita valor prático.
+
+\textbf{Objetivo:} ampliar aplicabilidade sem perder rastreabilidade.
+
+\textbf{Garantia analítica:} colunas \texttt{origem\_preco},
+\texttt{origem\_custo} e \texttt{origem\_embalagem} tornam explícita a
+proveniência do dado usado.
+
+\subsection{Comparador e PBI para leitura de causa}
+
+\textbf{Decisão adotada:} outputs separam alocação, reserva e não atendimento, e
+mostram produção bruta, estorno EAC e líquida.
+
+\textbf{Justificativa:} quando essas camadas são misturadas, o usuário interpreta
+``erro'' onde existe apenas diferença semântica.
+
+\textbf{Objetivo:} reduzir ruído analítico e permitir leitura causal do resultado.
+
+\subsection{SKUs fora da otimização com motivo explícito}
+
+\textbf{Decisão adotada:} classificar ``fora da otimização'' por critério objetivo
+(\texttt{quantidade\_alocada} \(\le 0\)) e exigir motivo principal.
+
+\textbf{Justificativa:} classificações por rótulo textual geram falso positivo em
+cenários agregados.
+
+\textbf{Objetivo:} transformar exclusão em diagnóstico acionável.
+
+\section{Decisões de modelagem e escolhas de insumos (síntese histórica)}
+
+Esta seção consolida decisões recorrentes observadas no código e no histórico de
+evolução do projeto. A intenção é registrar \textbf{o que foi decidido},
+\textbf{por que foi decidido} e \textbf{qual efeito prático a decisão produz}.
+
+\subsection{Evolução da modelagem (núcleo decisório)}
+
+\textbf{1) Reserva tratada como prioridade estrutural, não como exceção}\\
+Ao longo da evolução, a regra de pedidos migrou de tratamento auxiliar para
+elemento estrutural do modelo. A classe passou a consumir reserva antes da
+otimização do excedente, evitando ganho artificial de margem em cima de volume
+já comprometido.
+
+\textbf{2) Capacidade por classe com semântica física consistente}\\
+As correções sucessivas nas restrições consolidaram a ideia de que a capacidade
+válida para otimizar é a capacidade líquida após reservas. Essa escolha reduz
+situações em que a solução matemática era ótima, mas fisicamente inexequível.
+
+\textbf{3) Demanda histórica como mecanismo de realismo comercial}\\
+A inclusão e refinamento dos métodos de demanda (\texttt{maximo}, \texttt{media},
+\texttt{percentil}, com fator) mostram a decisão de evitar concentração irreal em
+SKUs de alta margem sem respaldo de mercado.
+
+\textbf{4) Baseline como instrumento de comparação justa}\\
+A evolução do comparativo baseline eliminou vieses importantes (como média simples
+indevida ou mistura com linhas de reserva), para que o ganho informado reflita
+realocação de mix e não efeito de metodologia.
+
+\textbf{5) Granularidade D/S/M como decisão operacional}\\
+O suporte a diário, semanal e mensal não é apenas conveniência técnica; é uma
+decisão de aderência ao ciclo real de planejamento. O modelo mantém o mesmo
+núcleo matemático, mudando a referência temporal dos insumos e relatórios.
+
+\subsection{Decisões sobre inputs brutos e derivados}
+
+\textbf{1) Custo bruto (fonte primária)}\\
+O custo é apurado da base bruta de custos PRIC (Parquet), com filtros de
+estabelecimento, período e qualidade mínima de dado, gerando o insumo editável
+\texttt{inputs/custos\_sku.csv}.
+
+\textbf{2) Preço operacional (decisão vigente de negócio)}\\
+Pela regra atualmente adotada no projeto, o preço operacional usado no pipeline
+é reconstruído via processo de extração que hoje está acoplado ao mesmo insumo
+bruto referenciado em \texttt{paths.custos}, gerando
+\texttt{inputs/precos\_sku\_embalagem.csv}.  
+Essa escolha foi mantida para contornar inconsistências identificadas na base de
+faturamento para formação de preço.
+
+\textbf{3) Faturamento bruto permanece crítico para outras frentes}\\
+Mesmo quando não é a base primária de preço operacional, o faturamento bruto
+segue central para:
+\begin{itemize}[leftmargin=1.2cm]
+    \item demanda histórica;
+    \item compatibilidade SKU-embalagem;
+    \item enriquecimento descritivo e rastreabilidade em outputs.
+\end{itemize}
+
+\textbf{4) CSVs derivados como contrato operacional}\\
+A adoção de \texttt{precos\_sku\_embalagem.csv}, \texttt{custos\_sku.csv},
+\texttt{demanda\_historica.csv} e \texttt{pedidos\_clientes.csv} como camada
+editável explicita uma decisão metodológica: separar cálculo bruto de governança
+de negócio, permitindo ajustes controlados sem alterar código.
+
+\subsection{Decisões de transparência e auditoria}
+
+\textbf{1) Rastreabilidade de origem (preço/custo/embalagem)}\\
+A propagação de colunas de origem em toda a cadeia (ETL, resultado, comparador e
+PBI) foi uma decisão para reduzir discussões subjetivas sobre ``de onde veio o
+número''.
+
+\textbf{2) Produção líquida como base canônica de comparação}\\
+A comparação passou a privilegiar produção líquida (bruta - EAC), tornando
+coerente a leitura de diferença entre produção e alocação.
+
+\textbf{3) ``Fora da otimização'' por critério objetivo}\\
+A regra consolidada usa \(\texttt{quantidade\_alocada} \le 0\), com motivo
+explícito. Isso evita falso-positivo causado por rótulos compostos e melhora a
+ação corretiva.
+
+\textbf{4) Saída por rodada e base física persistida}\\
+Salvar cada execução em diretório timestampado e persistir
+\texttt{base\_otimizacao} em \texttt{parquet/csv/xlsx} foi decisão de
+reprodutibilidade: toda conclusão pode ser reconstituída.
+
+\subsection{Leitura executiva das decisões}
+
+Em conjunto, essas decisões apontam um padrão claro:
+\begin{itemize}[leftmargin=1.2cm]
+    \item o projeto prioriza \textbf{consistência operacional} sobre atalho estatístico;
+    \item prioriza \textbf{explicabilidade} sobre ``caixa-preta'' de resultado;
+    \item prioriza \textbf{comparação justa} sobre ganho inflado por metodologia;
+    \item prioriza \textbf{governança de dados} por meio de insumos derivados auditáveis.
+\end{itemize}
+
+\section{Parametrização em \texttt{config.yaml}: negócio e implicações}
+\label{sec:param-config}
+
+O \texttt{config.yaml} é o \textbf{contrato único} entre gestão, dados e código:
+alterá-lo muda o \textit{mundo} em que o modelo decide (período, unidade
+geográfica, prioridade comercial e limites de realismo). Os blocos abaixo
+espelham a estrutura do arquivo; parâmetros puramente numéricos do solver são
+citados de forma resumida ao final.
+
+\subsection{Bloco \texttt{dados} --- janela temporal, unidade e qualidade}
+
+\textbf{Ano/mês e janelas (\texttt{ano\_custo}, \texttt{mes\_custo},
+\texttt{meses\_janela\_custo}, espelhados para preço):} definem o intervalo
+sobre o qual custos, preços médios e (em parte) demanda histórica são
+calculados. \textbf{Implicação:} janela curta reage a mudanças recentes, mas é
+mais ruidosa; janela longa estabiliza números, mas pode ``congelar'' estrutura
+de custo ou preço já superada.
+
+\textbf{Estabelecimentos (\texttt{estab\_custo}, \texttt{estab\_preco},
+\texttt{estabelecimentos}):} amarram custo, preço e filtros de faturamento ao
+mesmo conjunto de unidades. \textbf{Implicação:} trocar estabelecimento sem
+revisar insumos de produção e pedidos pode gerar otimização para um hub que não
+corresponde ao cenário operado.
+
+\textbf{Preço --- outliers (\texttt{remover\_outliers\_preco},
+\texttt{percentil\_inferior\_preco}, \texttt{percentil\_superior\_preco}):}
+recortam caudas extremas antes da média. \textbf{Implicação:} reduz distorção
+por erros ou vendas atípicas; porém percentis muito apertados podem ``achatar''
+realidade de itens estratégicos com poucos lançamentos.
+
+\textbf{Referência de produção (\texttt{semana\_ref} quando
+\texttt{granularidade\_demanda} = S; \texttt{data\_ref} quando D ou M):} fixa o
+período cujo volume produtivo alimenta capacidade por classe. \textbf{Implicação:}
+deve estar alinhado ao planejamento (semana/dia/mês que a gestão trata como
+``a produção a distribuir'').
+
+\textbf{Referência de pedidos (\texttt{pedidos\_semana\_ref},
+\texttt{pedidos\_data\_ref}):} são \textbf{independentes} da referência de
+produção: permitem, por exemplo, produção de uma semana e carteira de pedidos
+de outra. \textbf{Implicação:} útil quando ciclos comercial e fabril não
+coincidem; exige disciplina explícita para não comparar inadvertidamente
+períodos incongruentes na leitura de resultados.
+
+\textbf{Perfil DOW (\texttt{dow\_ano\_ref}, \texttt{dow\_mes\_ref},
+\texttt{dow\_meses\_janela}):} usados na granularidade \textbf{semanal} para
+distribuir demanda histórica pelo dia da semana. \textbf{Implicação:} se
+omitidos, o código recai na janela de custo; ajuste quando o padrão semanal
+relevante for outro (sazonalidade, feriados).
+
+\textbf{Filtros auxiliares (\texttt{sku\_minimo\_transacoes},
+\texttt{tipo\_estoque}):} elevam o piso de evidência estatística e o recorte de
+estoque. \textbf{Implicação:} valores altos de transações mínimas reduzem ruído,
+mas podem excluir SKUs de nicho ainda estratégicos.
+
+\subsection{Bloco \texttt{modelo} --- regras da otimização}
+
+\textbf{Pedidos e excedente (\texttt{atender\_pedidos},
+\texttt{usar\_apenas\_excedente}):} com ambos verdadeiros, reserva-se primeiro o
+comprometido e só o saldo entra no solver. \textbf{Implicação:} aderência a
+nível de serviço; desligar \texttt{atender\_pedidos} transforma o problema em
+``puro mix'' (aceitável só em estudos, não em operação com carteira firme).
+
+\textbf{\texttt{capar\_reserva\_na\_producao}:} impede reserva acima da produção
+da classe. \textbf{Implicação:} coerência física e priorização explícita quando
+há competição entre pedidos dentro da mesma classe (ver formulação na seção de
+regras de negócio).
+
+\textbf{Demanda histórica (\texttt{considerar\_demanda\_historica},
+\texttt{tipo\_calculo\_demanda}, \texttt{fator\_demanda\_maxima},
+\texttt{percentil\_demanda}):} quando ativo, limita quanto cada SKU pode receber
+em função do histórico (\texttt{media}, \texttt{maximo} ou
+\texttt{percentil}), multiplicado pelo fator. \textbf{Implicações:}
+\texttt{maximo} é conservador para sell-out; \texttt{media} permite mais
+flexibilidade; \texttt{percentil} calibra risco (percentil alto = teto mais
+permissivo). O fator \(>1\) amplia deliberadamente o teto (crescimento esperado);
+fator \(=1\) ancora no histórico ``cru''.
+
+\textbf{\texttt{granularidade\_demanda} (S, M, D):} define a periodicidade dos
+insumos e relatórios. \textbf{Implicação:} deve refletir o ritmo de decisão
+(semana operacional vs. fechamento mensal vs. dia); misturar mentalmente
+granularidades na interpretação dos gráficos gera os ``percentuais estranhos''
+mencionados na seção de erros recorrentes.
+
+\textbf{\texttt{tipo\_objetivo}:} \texttt{maximizar\_margem} (padrão) ou
+\texttt{minimizar\_custos}. \textbf{Implicação:} a primeira alinha com rentabilidade
+unitária; a segunda pode fazer sentido em exercícios de eficiência de custo,
+desalinhando a narrativa comercial se usada sem consenso.
+
+\textbf{\texttt{variaveis\_continuas}:} volumes fracionários vs.\ inteiros.
+\textbf{Implicação:} contínuo acelera e suaviza soluções; inteiro aproxima
+unidades físicas (caixas), com custo de tempo de solver maior.
+
+\subsection{Bloco \texttt{negocio}}
+
+\textbf{\texttt{filtrar\_granjas}:} lista de estabelecimentos (identificadores
+como na base) cuja demanda histórica entra no cálculo de limites. \textbf{Implicação:}
+deve ser coerente com a estratégia de mercado (incluir só a rede relevante evita
+que filiais fora do escopo ``puxem'' ou diluam o perfil de demanda).
+
+\subsection{Bloco \texttt{paths} --- onde o pipeline lê e grava}
+
+Cada chave aponta para planilhas/Parquet/CSV de entrada e pastas de saída
+(\texttt{logs\_dir}, \texttt{output\_dir}). \textbf{Implicação:} mudar caminho
+sem atualizar o arquivo físico quebra a rodada; manter \texttt{pedidos},
+\texttt{producao}, \texttt{classes} e derivados (\texttt{precos},
+\texttt{custos}) consistentes com o período configurado em \texttt{dados} é
+requisito de governança, não detalhe técnico.
+
+\subsection{Bloco \texttt{fallbacks}}
+
+Valores usados quando o ETL não encontra custo válido ou precisa de referência
+de embalagem. \textbf{Implicação:} alto uso de fallback nas colunas
+\texttt{origem\_*} sinaliza dado frágil; negócio deve tratar como alerta, não
+como ``preço/custo oficial''.
+
+\subsection{Bloco \texttt{solver} (resumo)}
+
+Limites de tempo (\texttt{time\_limit\_ms}), \texttt{gap\_percentage} e threads
+afetam \textbf{quão longo} e \textbf{quão próximo do ótimo} o programa para.
+\textbf{Implicação} para gestão: em bases muito grandes, relaxar tempo ou aceitar
+gap um pouco maior pode ser preferível a interrupção sem solução utilizável.
+
+\subsection{Síntese: o que revisar antes de cada rodada}
+
+Para decisão de negócio, a ordem prática de revisão é:
+\begin{enumerate}[leftmargin=1.2cm]
+    \item \texttt{dados}: estabelecimento(s), janelas de custo/preço e referências
+    de produção \emph{e} pedidos;
+    \item \texttt{modelo}: tríade pedidos/excedente/cap, demanda histórica + fator,
+    granularidade e objetivo;
+    \item \texttt{negocio.filtrar\_granjas} alinhado ao escopo comercial;
+    \item \texttt{paths} coerentes com os arquivos que a equipe pretende usar.
+\end{enumerate}
+
+\subsection{Matriz parametro -> impacto esperado no output}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{5.2cm}>{\raggedright\arraybackslash}p{5.0cm}>{\raggedright\arraybackslash}p{5.0cm}}
+\toprule
+\textbf{Parametro} & \textbf{Efeito direto} & \textbf{Onde aparece} \\
+\midrule
+\endhead
+\url{modelo.granularidade_demanda} & Troca o recorte temporal (D/S/M) e a referencia de periodo. & Nome da pasta (\texttt{\_D}, \texttt{\_S} ou \texttt{\_M}), comparador, parametros do baseline. \\
+\url{dados.data_ref} / \url{dados.semana_ref} & Define o periodo de producao usado no comparador e rastreabilidade. & \url{comparacao_producao_alocacao}, \url{resumo_por_classe}. \\
+\url{dados.pedidos_data_ref} / \url{dados.pedidos_semana_ref} & Define o periodo da carteira de pedidos (independente da producao). & \url{quantidade_reservada}, \url{quantidade_nao_atendida_pedido}. \\
+\url{modelo.atender_pedidos} & Liga/desliga reserva previa de pedidos. & Resultado completo, comparador, aba de SKUs fora. \\
+\url{modelo.capar_reserva_na_producao} & Impede reservar acima da producao da classe. & Deficit de pedido e priorizacao em reservas. \\
+\url{modelo.considerar_demanda_historica} + \texttt{fator} & Ajusta teto de alocacao por SKU e baseline com cap. & \url{limite_demanda_historica}, \url{volume_baseline}. \\
+\url{dados.estabelecimentos} & Define universo de dados e elegibilidade por estabelecimento. & Todos os outputs + metadados de estabelecimento. \\
+\bottomrule
+\end{longtable}
+
+\section{Como executar: método operacional}
+\label{sec:como-executar}
+
+\subsection{Três fluxos de execução}
+
+\textbf{Fluxo A -- Completo (recomendado quando bases brutas mudam):}
+\begin{verbatim}
+source venv/bin/activate
+./executar_pipeline.sh
+\end{verbatim}
+
+\textbf{Fluxo B -- Preservar CSVs editáveis (quando houve ajuste manual):}
+\begin{verbatim}
+source venv/bin/activate
+./executar_pipeline.sh --sem-preparacao
+\end{verbatim}
+
+\textbf{Fluxo C -- Parcial (quando só uma fonte mudou):}
+reexecute apenas os geradores afetados e, em seguida, rode \texttt{main.py}.
+
+\subsection{Ritual mínimo antes de rodar}
+
+\begin{enumerate}[leftmargin=1.2cm]
+    \item validar período, estabelecimento, referências de produção/pedidos e bloco
+    \texttt{modelo} em \texttt{config.yaml} (ver seção dedicada);
+    \item confirmar se deve preservar ou recalcular CSVs de \texttt{inputs/};
+    \item checar disponibilidade de dados para o período escolhido;
+    \item executar o fluxo adequado (A/B/C);
+    \item revisar outputs na pasta da rodada.
+\end{enumerate}
+
+\section{Leitura dos resultados: como argumentar com segurança}
+\label{sec:leitura-resultados}
+
+\subsection{Resultado detalhado}
+
+O \texttt{resultado\_realocacao\_completo} mostra o ``o que foi decidido'' no
+nível item/embalagem.
+
+\subsection{Ganho versus baseline}
+
+A \texttt{auditoria\_baseline} responde se a realocação efetivamente criou valor,
+comparando o cenário otimizado com o cenário de referência.
+
+\textbf{Leitura obrigatoria das colunas de volume no baseline:}
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{volume\_baseline\_antes\_cap}: volume de referencia sem aplicar limite de demanda;
+    \item \texttt{volume\_baseline}: volume apos cap + redistribuicao;
+    \item \texttt{volume\_redistribuido} \(=\) \texttt{volume\_baseline} \(-\) \texttt{volume\_baseline\_antes\_cap}.
+\end{itemize}
+
+\textbf{Exemplo numerico simples (em ovos):}
+\begin{itemize}[leftmargin=1.2cm]
+    \item SKU A: antes do cap = 10.000, limite = 8.000, depois do cap = 8.000, redistribuido = -2.000;
+    \item SKU B: antes do cap = 6.000, limite = 9.000, recebe parte do excedente, depois = 7.500, redistribuido = +1.500.
+\end{itemize}
+Interprete valores negativos como \textbf{SKU capado} e positivos como \textbf{SKU que recebeu redistribuicao}.
+
+\subsection{Produção versus alocação}
+
+O \texttt{comparacao\_producao\_alocacao} é a principal fonte para discussão com
+operação e comercial. As colunas-chave são:
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{quantidade\_alocada},
+    \item \texttt{quantidade\_reservada},
+    \item \texttt{quantidade\_nao\_atendida\_pedido},
+    \item \texttt{quantidade\_produzida\_bruta},
+    \item \texttt{quantidade\_estorno\_eac},
+    \item \texttt{quantidade\_produzida\_liquida\_modelo}.
+\end{itemize}
+
+\subsection{Fora da otimização}
+
+O \texttt{skus\_fora\_otimizacao} informa quem ficou sem alocação e por qual
+motivo, permitindo ação corretiva dirigida.
+
+\textbf{Dicionario pratico de motivos (mais comuns):}
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{bloqueado\_por\_regra\_tipo\_granel}: SKU fora por regra de tipo no cadastro;
+    \item \texttt{bloqueado\_por\_regra\_tipo\_exportacao}: SKU fora por tipo exportacao;
+    \item \texttt{bloqueado\_por\_regra\_status\_inativo}: SKU nao elegivel no estabelecimento;
+    \item \texttt{bloqueado\_por\_regra\_estab\_fora\_escopo}: item fora dos estabelecimentos configurados;
+    \item \texttt{priorizacao\_margem\_intraclasse}: SKU perdeu volume para outro SKU da mesma classe com margem superior;
+    \item \texttt{sem\_producao\_no\_periodo}: sem producao liquida para alocar no periodo.
+\end{itemize}
+
+\textbf{Acao recomendada por motivo:}
+\begin{itemize}[leftmargin=1.2cm]
+    \item motivos de regra: revisar cadastro/carteira, nao o solver;
+    \item priorizacao de margem: avaliar estrategia comercial da classe;
+    \item sem producao: tratar planejamento/producao, nao parametrizacao de demanda.
+\end{itemize}
+
+\subsection{Consumo analítico}
+
+O \texttt{pbi\_consolidado} organiza dados para BI sem perda de contexto de
+parâmetros e rastreabilidade.
+
+\section{Rastreabilidade e reprodutibilidade}
+\label{sec:rastreabilidade}
+
+Cada execução cria uma pasta própria de rodada:
+\[
+\texttt{resultados/<timestamp\_rodada>\_<D|S|M>/}
+\]
+
+Além disso, a base efetivamente usada na otimização é persistida em:
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{base\_otimizacao\_<timestamp>.parquet}
+    \item \texttt{base\_otimizacao\_<timestamp>.csv}
+    \item \texttt{base\_otimizacao\_<timestamp>.xlsx}
+\end{itemize}
+
+Esse desenho não é detalhe técnico: é a condição para reproduzir uma decisão e
+explicar, de forma verificável, o que entrou no solver.
+
+\section{Erros recorrentes e interpretação correta}
+
+\subsection*{``Não há registros para o período''}
+Normalmente indica incompatibilidade entre período configurado e dados disponíveis
+nos inputs (ou ausência de dados no estabelecimento selecionado).
+
+\subsection*{Percentual de alocação aparentemente alto}
+Costuma ocorrer quando há desalinhamento entre granularidade/periodização dos
+insumos usados no ETL e aqueles usados no comparador.
+
+\subsection*{Muitos SKUs com \texttt{SEM\_EMBALAGEM}}
+Indica baixa captura automática por regex; deve-se complementar
+\texttt{embalagens\_override.xlsx}.
+
+\section{Checklist executivo da rodada}
+\label{sec:checklist-executivo}
+
+\begin{itemize}[leftmargin=1.2cm]
+    \item \texttt{config.yaml}: período, estabelecimento, referências produção/pedidos
+    e regras de demanda/objetivo conferidos;
+    \item pedidos filtrados na granularidade correta;
+    \item produção líquida coerente (bruta - estorno);
+    \item origem de dados visível (preço, custo, embalagem);
+    \item SKUs fora da otimização com motivo explícito;
+    \item ganho versus baseline consistente com limites de demanda.
+\end{itemize}
+
+\textbf{Criterios objetivos de aceite (go/no-go):}
+\begin{itemize}[leftmargin=1.2cm]
+    \item classes com producao liquida relevante devem fechar \texttt{alocacao + reserva} proximo da producao liquida;
+    \item itens com \texttt{fora\_otimizacao\_sem\_motivo\_claro} devem ser excecao e investigados;
+    \item mudanca de periodo/estabelecimento no \texttt{config.yaml} exige coerencia com os CSVs preservados;
+    \item leitura de ganho deve usar baseline apos cap (\texttt{volume\_baseline}), nao apenas baseline antes do cap.
+\end{itemize}
+
+\section{Conclusão}
+
+Este modelo deve ser entendido como um sistema de governança decisória, e não
+apenas como um cálculo de alocação. Ele organiza conflito entre margem,
+capacidade, demanda e atendimento em um processo auditável.
+
+Em termos práticos, seu valor não está apenas em ``quanto alocou'', mas em
+\textbf{por que alocou}, \textbf{o que deixou de alocar}, \textbf{quais limites
+respeitou} e \textbf{qual resultado financeiro produziu frente ao baseline}.
+
+Quando essa lógica é seguida com disciplina de dados e leitura adequada dos
+outputs, a empresa ganha previsibilidade, consistência e qualidade de decisão.
+
+\end{document}
+
+
